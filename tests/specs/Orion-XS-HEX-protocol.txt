@@ -1,0 +1,621 @@
+VE.Direct Protocol
+Orion XS DC-DC battery charger
+Table of Contents
+1     VE.Direct Protocol _______________________________________________________ 3
+    1.1   Get and Set items __________________________________________________________ 5
+    1.2   Asynchronous items _______________________________________________________ 14
+    1.3   Message examples _________________________________________________________ 15
+1 VE.Direct Protocol
+Note that when connecting to the VE.Direct port, the charger always periodically sends TEXT data to
+the serial port. See the "VE.Direct Protocol" document for a detailed description of the contents and
+availability of the information. So, this periodic TEXT data is interleaved with the response of the
+HEX protocol described in this document.
+
+The frame format of the VE.Direct protocol has the following general format:
+: [command] [data][data][…] [check]\n
+Where the colon indicates the start of the frame and the newline is the end of frame. The sum of all
+data bytes and the check must equal 0x55. Since the normal protocol is in text values the frames are
+sent in their hexadecimal ASCII representation, [‘0’ .. ’9’], [‘A’ .. ’F’], must be uppercase. There is no
+need to escape any characters.
+: [command] [dataHighNibble, dataLowNibble][……] [checkHigh, checkLow] \n
+Note: The command is only send as a single nibble. Numbers are sent in Little Endian format. An
+error response with value 0xAAAA is sent on framing errors.
+   Command                   Description
+  0              Enter boot    0x51FA51FA51FA51FA51FA as payload will enable bootloader mode.
+                               Check for presence, the response is an ‘Rsp ping’ containing the value
+  1              Ping (*1)     0xYFFF. Where Y=0b0011 bootloader; Y=0b0111 application; Y=0b1011
+                               tester; Y=0b1111 release candidate
+                 App
+                               Returns the version of the firmware as stored in the header in an ‘Rsp
+  3              version
+                               Done’ message.
+                 (*1)
+                               Returns the Product Id of the firmware as stored in the header in an ‘Rsp
+  4              Product Id
+                               Done’ message.
+  6              Restart       Restarts the device, no response is sent.
+                               Returns a get response with the requested data or error is returned.
+  7              Get           uint16                     the id of the value to get
+                               uint8                      flags, should be set to zero
+                               Returns a set response with the requested data or error is returned.
+                               uint16                     the id of the value to set
+  8              Set
+                               uint8                      flags, should be set to zero
+                               type depends on id         value
+                               Asynchronous data message. Should not be replied.
+                               uint16                     the id of the value being returned
+  A              Async
+                               uint8                      flags, defined below
+                               type depends on id         value
+  2, 5, 9, B-F   reserved
+VE.Direct responses are formatted in the same manner as commands, but use response codes.:
+  Response                  Description
+  1             Done           Successful execution of the received command. Payload depends on
+                               command.
+  2             Checksum       Frame error (payload=0xAAAA)
+                error
+  3             Unknown      Unknown command, data is the unknown command.
+  4             Error        Frame error (payload=0xAAAA), unable to enter bootloader
+                             (payload=0).
+   5            Ping         Payload=0xYFFF. Where Y=0b0011 bootloader; Y=0b0111
+                             application; Y=0b1011 tester; Y=0b1111 release candidate, note
+                             because this product uses 24-bit version encoding there is no version
+                             in the response.
+                             uint16                  id: of the value being returned
+   7            Get          uint8                   flags: defined below
+                             type depends on id      value
+                             uint16                  id of the value which was set
+   8            Set          uint8                   flags: defined below
+                             type depends on id      value
+Note 1: This product has 24-bit firmware version encoding. This has consequences for the “Ping”
+command and the “App version” command compared to older products that use 16-bit firmware
+version encoding. The “App version" command is deprecated and will respond with “Unknown”. The
+ping command will not respond with a version. To get the product firmware version a “Get” command
+must be used on register 0x0102. See also chapter 1.3.
+
+
+The following set / get flags are currently defined (reply):
+  Flag      Name                            Meaning
+  0x01      Unknown Id                      The specified id does not exist
+  0x02      Not supported                   Attempting to write to a read only value
+  0x04      Parameter Error                 The new value is out of range or inconsistent
+
+Product id values
+
+  Id         Name                           Input / Output Voltage      Max current         Remark
+  0xA3F0     Orion XS 12V/12V-50A           7-17V / 10-17V              50A                 -
+  0xA3F1     Orion XS 1400                  9-35V / 10-35V              50A                 -
+1.1 Get and Set items
+Product information registers
+  ID        Description                          Scale      Type       Unit
+  0x0100    Product Id                           -          un32       -
+  0x0102    Firmware version                     -          un32       -
+  0x0104    Group Id                             -          un8        -
+  0x010A    Serial number                        -          string     -
+  0x010B    Model name                           -          string     -
+  0x0140    Capabilities                         -          un32       -
+
+
+Product id (register 0x0100)
+
+Please use the regular hex command :4 to get the product id, this query works on all models and all
+software versions. The product id 2-byte response has incorrect endianness on some builds and
+should be ignored. The product id 4-byte response has consistent endianness, byte 0 = instance
+(0x00), byte 1+2 = product id, byte 3 = reserved (0xFF).
+
+Firmware version (register 0x0102)
+
+ Bytes     Description                          Scale       Type      Unit
+ 0         Identifier (*1)                      -           un8       -
+ 1         Version 0xHHMMLL                     -           un24      -
+Note 1: Currently has value 0x00
+Note 2: vHH.MM, LL == 0xFF means release
+
+
+
+Capabilities1 (register 0x0140) add 2 and 4
+
+  Bit       Description
+  0         Load output present (0=no, 1=yes)
+  1         Rotary encoder present (0=no, 1=yes)
+  2         History support (0=no, 1=yes)
+  3         Batterysafe mode (0=no, 1=yes)
+  4         Adaptive mode (0=no, 1=yes)
+  5         Manual equalise (0=no, 1=yes)
+  6         Automatic equalise (0=no, 1=yes)
+  7         Storage mode (0=no, 1=yes)
+  8         Remote on/off via rx pin (0=no, 1=yes)
+  9         Solar timer/streetlighting (0=no, 1=yes)
+  10        Alternative VE.Direct TX pin function (0=no, 1=yes)
+  11        User defined load switch (0=no, 1=yes)
+  12        Load current in TEXT protocol (0=no, 1=yes)
+  13        Panel current (0=no, 1=yes)
+  14        BMS support (0=no, 1=yes)
+  15        External control support (0=no, 1=yes)
+  16        Synchronized charging support (0=no, 1=yes)
+  17        Alarm relay (0=no, 1=yes)
+  18        Alternative VE.Direct RX pin function (0=no, 1=yes)
+  19        Virtual load output (0=no, 1=yes)
+  20        Virtual relay (0=no, 1=yes)
+  21        Plugin display support (0=no, 1=yes)
+  25        Load Automatic Energy Selector (0=no, 1=yes)
+  26        Battery test (0=no, 1=yes)
+  27        PAYGO support (0=no, 1=yes)
+  28        Hibernate mode (0=no, 1=yes)
+  29        AC power apparent power (0=no, 1=yes)
+  30        PSU function (0=no, 1=yes)
+  31        Needs battery to shutdown (0=no, 1=yes)
+
+Generic device control registers
+
+ ID        Description                         Scale       Type        Unit
+ 0x0200    Device mode                         -           un8         -
+ 0x0201    Device state                        -           un8         -
+ 0x0207    Device off reason                   -           un32        -
+
+
+Device mode values (register 0x0200)
+
+  Mode     Meaning
+  0 or 4   Charger off
+  1 or 3   Charger on
+
+
+Device state values (register 0x0201)
+
+  State    Name                           Meaning
+  0        NOT_CHARGING                   Not charging
+  2        FAULT                          Failure
+  3        BULK                           Full current charge with charge current set-point
+  4        ABSORPTION                     Voltage controlled with absorption voltage set-point
+  5        FLOAT                          Voltage controlled with float voltage set-point
+  6        STORAGE                        Voltage controlled with storage voltage set-point
+  7        MANUAL EQUALISE                Voltage controlled with equalisation voltage set-point
+  11       PSU                            Charger acts as power supply with a voltage set-point
+  245      WAKE-UP                        The device is about to start (signal to external control)
+  246      REPEATED ABSORBTION            The repeated absorption phase is periodically called
+                                          from the storage mode
+  247      AUTO EQUALISE                  Voltage controlled with equalisation voltage set-point
+  248      BATTERY SAFE                   Charge state where absorption voltage is gradually
+                                          increased to prevent gassing
+  250      BLOCKED                        Unit being updated, it is not available at the moment
+  252      EXTERNAL CONTROL               Voltage controlled with remote voltage set-point
+  255      UNAVAILABLE                    No information available
+
+
+Device off reason bit-mask (registers 0x0207)
+  Bit      Meaning
+  0        No input power
+  1        Not applicable
+  2        Soft power switch
+  3        Remote input
+  4        Internal reason
+  5        Pay-as-you-go out of credit
+  6        BMS shutdown
+  7        Engine shutdown detection
+  8        Error
+  9        Not applicable
+
+
+Battery settings registers
+
+WARNING: stored in non-volatile memory. Continuous writing, for example from a control loop, will
+lead to early failure.
+
+  ID        Description                             Scale    Type       Unit
+  0xEDFF    Batterysafe mode                        -        un8        0=off, 1=on
+  0xEDFE    Adaptive mode                           -        un8        0=off, 1=on
+  0xEDFD    Automatic equalisation mode             -        un8        0=off, 1..250
+  0xEDFC    Battery bulk time limit                 0.01     un16       hours
+  0xEDFB    Battery absorption time limit           0.01     un16       hours
+  0xEDF7    Battery absorption voltage              0.01     un16       V
+  0xEDF6    Battery float voltage                   0.01     un16       V
+  0xEDF4    Battery equalisation voltage            0.01     un16       V
+  0xEDF2    Battery temp. compensation              0.01     sn16       mV/K
+  0xEDF1    Battery type                            1        un8        0xFF = user
+  0xEDF0    Battery maximum current                 0.1      un16       A
+  0xEDEF    Battery voltage                         1        un8        V
+  0xEDEC    Battery temperature                     0.01     un16       K, 0xFFFF=N/A
+  0xEDEA    Battery voltage setting                 1        un8        V
+  0xEDE8    BMS present                             -        un8        0=no, 1=yes
+  0xEDE7    Tail current                            0.1      un16
+  0xEDE6    Low temperature charge current          0.1      un16       A, 0xFFFF=use max
+  0xEDE5    Auto equalise stop on voltage           -        un8        0=no, 1=yes
+  0xEDE4    Equalisation current level              1        un8        % (of 0xEDF0)
+  0xEDE3    Equalisation duration                   0.01     un16       hours
+  0xED2E    Re-bulk voltage offset                  0.01     un16       V
+  xEDE0     Battery low temperature level           0.01     sn16       °C
+  0xEDCA    Voltage compensation                    0.01     un16       V
+
+
+Engine shutdown settings
+
+  ID        Description                          Scale      Type       Unit
+  0xEE36    Shutdown voltage                     0.01       un16       V
+  0xEE37    Start voltage                        0.01       un16       V
+  0xEE38    Delayed start voltage                0.01       un16       V
+  0xEE39     Start delay                          1           un32       s
+
+
+Input voltage lockout settings
+
+  ID         Description                          Scale       Type       Unit
+  0x0320     Input voltage lockout                0.1         un16       V
+  0x0321     Input voltage restart                0.1         un16       V
+
+
+Device function (register 0x0206)
+
+  Value                                         Meaning
+  0                                             Charger
+  1                                             PSU
+
+
+Battery type values (register 0xEDF1)
+
+  Value     Name           Meaning
+  1         DEFAULT        LiFEPO4
+  255       USER           User defined
+
+Battery voltage setting values (register 0xEDEF and 0xEDEA)
+
+  Value     Meaning
+  12        12V battery
+  24        24V battery
+  48        48V battery
+
+
+Charger data registers
+
+  ID         Description                              Scale   Type       Unit
+  0xEDBB     Input Voltage                            0.01    un16       V
+  0xEDBD     Input current                            0.1     un16       A
+  0xEDBC     Input power                              0.01    un32       W
+  0xED8D     Output voltage                           0.01    un16       V
+  0xED8F     Output current                           0.1     un16       A
+  0xED8E     Output power                             0.01    un32       W
+  0xD18D     Battery voltage (*1)                     0.001   sn32       V
+  0xEDDB     Charger temperature                      0.01    sn16       °C
+  0xEDEC     Battery temperature (*2)                 0.01    un16       K
+  0xEE12     Estimated battery temperature (*3)       0.01    un16       K
+Note 1: The battery voltage is only set when using Victron smart battery sense otherwise the value will
+be 0x7FFFFFFF
+Note 2: Battery temperature will be 0xFFFF
+Note 3: This will be the charger temperature
+
+Charger error code and warning values (register 0xEDDA)
+
+  Value    E/W   Meaning
+  0              No error
+  Value    E/W    Meaning
+  1        E      Battery temperature too high
+  2        E      Battery voltage too high
+  17       E      Charger temperature too high
+  21       E      Current sense failure
+  26       E      Charger terminal temperature too high
+  28       E      Converter issue
+  33       E      Input voltage too high
+  67       W      BMS connection lost
+  116      E      Calibration data lost
+  117      E      Invalid firmware
+  119      E      Settings lost
+  120      E      Reference voltage failure
+  150      W      Battery temperature too high
+  151      W      Battery temperature too low
+  160      W      Charger overtemperature (derating)
+  161      W      Short circuit detected
+  162      W      Converter issue
+
+
+Restore factory defaults
+
+  ID     Description
+  0x0004 Restore default
+When a write message is addressed to register Id 0x0004, all settings of the device, except for the
+factory calibration data, will be restored to the factory default values. The data part of this message is
+ignored.
+
+
+History data
+
+Historical data is available on all models.
+
+ ID                    Description
+ 0x1030                Clear history
+ 0x106F                Cycle count
+ 0x1099                Cycle sequence number
+ 0x1043                Cumulative user history
+ 0x1042                Cumulative service history
+ 0x1070..0x1098        Cycle history (0x1070=newest, … , 0x1098=oldest)
+Note 1: When reading a daily history register that does not (yet) contain data the response will be an
+empty record with its flag position set to 0x04.
+
+
+Cycle count (register 0x106F)
+
+ Bytes      Description                            Scale       Type       Unit
+ 0          Number of cycle history entries        -           un8        -
+
+
+Cycle sequence number (register 0x1099)
+
+ Bytes      Description                            Scale       Type       Unit
+ 0          Start time current charge cycle        1           un32       s
+Cumulative service history (register 0x1042)
+
+ Bytes      Description                           Scale      Type       Unit
+ 0          Version                               -          un8        -
+ 1          Operation time                        1          un32       s
+ 5          Charged                               0.1        un32       Ah
+ 9          Charge cycles started                 -          un32
+ 13         Charge cycles completed               -          un32
+ 17         Number of power-ups                   -          un32
+ 21         Number of deep discharges             -          un32
+
+
+Cumulative user history (register 0x1043)
+
+ Bytes      Description                           Scale      Type       Unit
+ 0          Version                               -          un8        -
+ 1          Operation time                        1          un32       s
+ 5          Charged                               0.1        un32       Ah
+ 9          Charge cycles started                 -          un32
+ 13         Charge cycles completed               -          un32
+ 17         Number of power-ups                   -          un32
+ 21         Number of deep discharges             -          un32
+
+
+Cycle history (register 0x1070..0x1098)
+
+Register 0x1070 contains the newest cycle history, register 0x1098 contains the oldest cycle history. If
+a value is not available it will contain 0xFFFFFFFF, 0xFFFF, 0xFF for un32, un16, un8 respectively.
+
+ Bytes      Description                           Scale      Type       Unit
+ 0          Version                               -          un8        -
+ 1          Start time                            1          un32       s
+ 5          Time bulk                             1          un32       s
+ 9          Time absorption                       1          un32       s
+ 13         Time re-condition/equalization        1          un32       s
+ 17         Time float                            1          un32       s
+ 21         Time storage                          1          un32       s
+ 25         Ah bulk                               0.1        un32       Ah
+ 29         Ah absorption                         0.1        un32       Ah
+ 33         Ah re-condition/equalization          0.1        un32       Ah
+ 37         Ah float                              0.1        un32       Ah
+ 41         Ah storage                            0.1        un32       Ah
+ 45         Voltage start                         0.01       un16       V
+ 47         Voltage end                           0.01       un16       V
+ 49         Battery type (*1)                     -          un8        -
+ 50         Error (*2)                            -          un8        -
+Note 1: See register 0xEDF1
+Note 2: See register 0xEDDA
+Remote control registers
+
+
+  ID         Description                           Scale       Type       Unit
+  0x2000     Charge algorithm version              -           un8        -
+  0x2001     Charge voltage set-point (*1)         0.01        un16       V
+  0x2002     Battery voltage sense (*2)            0.01        un16       V
+  0x2003     Battery temperature sense (*2)        0.01        sn16       °C
+  0x200A     Battery charge current                0.001       sn32       A
+  0x200C     Device state                          -           un8        -
+  0x200D     Network info                          -           un8        -
+  0x200E     Network mode                          -           un8        -
+  0x200F     Network status register               -           un8        -
+  0x2015     Charge current limit                  0.1         un16       A
+Note 1: The charge voltage set-point can be read from the master unit and written to the slave units so
+the group will behave as one unit. See network mode register 0x200E.
+Note 2: Remote sensor data can be written to a charger; it will adapt its charge profile accordingly.
+Reserved values 0xFFFF (voltage) and 0x7FFF (temperature) can be written to indicate that the data
+is no longer available, so the charger switches back to internal behaviour. These values must be
+written frequently; the timeout is set to 1 minute after which the unit switches back to internal
+behaviour.
+
+
+Network mode bit definitions (register 0x200E)
+
+  Bit    Name                         Description
+  0      Networked                    Visual indication that the unit is controlled remotely
+  1      Slave mode                   Remote control of vset / iset / charge state
+  2      External control mode        Remote control of vset / iset
+  3      BMS controlled               Remote control of vset / iset & bms protection active
+  4      Charge group master          Not used
+  5      Charge instance master       Unit is the charge master
+  6      Standby                      Keep unit in standby
+  7      Reserved
+
+
+  Use cases                   Description
+  Stand-alone                 Set 0x200E to b0000000, default behaviour, charger uses internal
+                              charge profile
+  External control mode       Set 0x200E to b0000101, write to registers 0x2001 and/or 0x2015
+  BMS mode                    Set 0x200E to b0001001, write to registers 0x2001 and/or 0x2015
+
+Networked environment
+
+The only effect of setting bit 0 is that the charger indicates that it operates in a networked
+environment, this is done by blinking a symbol on the LCD display and/or a blinking state led..
+
+External control mode (e.g. ESS or DVCC)
+
+Set the charger in this mode to remotely control the charge voltage and/or current setpoint(s).
+Depending on the content received, if the unit receives a charge voltage set-point it reports
+EXTERNAL CONTROL (252). If the unit only receives a current set-point, it still uses its internal
+charger algorithm and it will keep reporting Bulk, Absorption, etc.
+
+The charger will automatically fall back to stand-alone mode after not receiving data for 1 minute (e.g.
+if the communication cable is removed).
+
+BMS Controlled
+
+Setting the remote BMS mode bit indicates the Solar Charger that it is controlled by a BMS.
+
+These remote control combinations are allowed:
+
+    -   Control only the current limit, the charger uses its own bulk-absorption-float state machine to
+        determine the voltage setpoint.
+    -   Control only the voltage setpoint, the charger estimates the appropriate charge state based
+        on the voltage. The current limit is set to the battery maximum current (0xEDF0).
+    -   Control both the current limit and voltage setpoint.
+
+BMS Protection mechanism:
+
+    -   Setting the Remote BMS mode bit and sending a current limit or voltage setpoint makes the
+        Solar Charger automatically enable the BMS present setting (0xEDE8), and store that to flash.
+    -   The effect of this setting is that the charger will no longer operate in stand-alone mode, it
+        requires communication from the BMS: when no data is received, it stops charging and shows
+        error #67.
+    -   To allow for a `black start`, ie. starting up from an empty battery, in the morning, the charger
+        will charge in "Float" mode for 45 seconds, so the BMS can power-up. When after 45 seconds
+        there is still no data received from the BMS, it will switch off and show error #67.
+
+
+
+Remote sensor data (voltage and/or temperature)
+Write the battery temperature data periodically to register 0x2003 and the battery voltage data to
+register 0x2002. Both have a timeout of 60s, after which the charger will stop using the remote
+information. The voltage information must be within ±5V with respect to the voltage on the charger
+terminals. The charger can adapt its charging voltage up to ±2V to compensate for cable losses.
+
+Network info (register 0x200D)
+
+This register gives an overview of the active network components; it combines the statuses of multiple
+interfaces.
+
+  Bit    Description
+  0      Unit is controlled by a BMS
+  1      Unit voltage set-point is controlled remotely
+  2      Unit operates as charge slave
+  3      Unit operates as charge master
+  4      Unit is using ICHARGE information (battery current estimate)
+  5      Unit is using ISENSE information (actual battery current)
+  6      Unit is using TSENSE information
+  7      Unit is using VSENSE information
+  8      Unit is held in STANDBY while the network initialises
+Network status (register 0x200F)
+
+The low nibble part of this register gives feedback about the charge algorithm, it indicates if the
+charger operates stand-alone or if it is controlled remotely. This register is maintained per interface.
+
+  Value      Description
+  0x00       Unit in slave mode (e.g. BMS or ESS controlled)
+  0x01       Unit is group master
+  0x02       Unit is instance master (e.g. synchronized charging)
+  0x03       Unit is both group and instance master
+  0x04       Unit operates stand-alone (default behaviour)
+
+  Bit       Description
+  4         Unit is using ICHARGE information
+  5         Unit is using ISENSE information
+  6         Unit is using TSENSE information
+  7         Unit is using VSENSE information
+
+
+Link device state (register 0x200C)
+
+  State    Name                         Meaning
+  0        NOT_CHARGING                 Not charging
+  2        FAULT                        Failure
+  3        BULK                         Full current charge with charge current set-point
+  4        ABSORPTION                   Voltage controlled with absorption voltage set-point
+  5        FLOAT                        Voltage controlled with float voltage set-point
+  6        STORAGE (*1)                 Voltage controlled with set-point sent by the master
+  7        MANUAL EQUALISE              Voltage controlled with equalisation voltage set-point
+  11       POWER SUPPLY (*1)            Voltage controlled with set-point sent by the master
+  245      WAKE-UP                      The device is about to start (signal to external control)
+  246      REPEATED                     Voltage controlled with set-point sent by the master
+           ABSORPTION (*1)
+  247      AUTO EQUALISE                Voltage controlled with equalisation voltage set-point
+  248      BATTERY SAFE (*1)            Voltage controlled with set-point sent by the master
+  249      LOAD DETECT (*1)             Voltage controlled with set-point sent by the master
+  252      EXTERNAL CONTROL             Voltage controlled with remote voltage set-point
+           (*1)
+  255      UNAVAILABLE                  No information available
+Note 1: These states are only possible when in slave mode. The voltage set-point will be the one sent
+by the master.
+
+
+Total charge current (register 0x2013)
+
+The estimated battery current: used to check if the tail current condition is met (switch from absorption
+to float). This is determined by to summing up all the known DC battery currents in the system.
+
+
+Charge current limit (register 0x2015)
+
+The charge current limit of the charger. This register could be used to limit/control the charge current
+of a charger on a network. It must be written to the charger regularly (more than once a minute)
+together with register 0x200E (see network mode register 0x200E for more information). Charger
+charge current limit will be the minimum value between register 0x2015 (charge current limit) and
+register 0xEDF0 (maximum battery current setting). When register 0x2015 is not used, charger will
+use the maximum battery current setting (register 0xEFF0) as charge limit.
+
+BLE settings
+
+BLE capabilities (register 0x0150)
+
+ Bytes     Description                          Scale      Type       Unit
+ 0         Capabilities                         -          un32       -
+
+
+  Bit       Meaning
+  0         Has Support for Ve Reg Ble
+  1         Ble Mode Off Is Permanent
+  2         Has Support for Ble Off Recovery Time
+  3         Recovery Time Zero Off Is Permanent
+  4         Has Support for Ve Reg VE-Reg Service Mode
+  5         Has Support for Trends
+  6         Has Support for Advertisement Key
+  7         Has Support for Soc Sync Via Trend
+  8         Has Support for Settings Lock
+  9..31     Not defined
+Note 1: 0 = No, 1 = Yes
+
+BLE mode (register 0x0090)
+
+ Bytes     Description                          Scale      Type       Unit
+ 0         Mode (*1)                            -          un8        -
+Note 1: 0x00 = BLE disabled, 0x01 = BLE enabled
+
+
+
+
+1.2 Asynchronous items
+The charger can send hex messages asynchronously (without prior request). This is done using :A
+messages, the format is identical to a Get response.
+1.3 Message examples
+\n at the end of the message is implied.
+  Ping                                        Set Battery Maximum Current
+  :154                                        Set to 10.0A = 0x0064
+  :5FF7FD2                                    :8F0ED0064000C
+  0x7FFF = Application, no version provided   :8F0ED0064000C
+                                              Acknowledged with the new value returned.
+ Application version (deprecated)
+ :352                                         Set Battery Maximum Current
+ :30300F4                                     Set back to 50.0A again = 0x01F4
+ Unknown command                              :8F0ED00F4017B
+                                              :8F0ED00F4017B
+ Product Id                                   Acknowledged with the new value returned.
+ :451
+ :1F0A3C1                                     Unsupported command
+ 0xA3F0 = Orion XS 12V/12V-50A                :2000152
+                                              :3020050
+ Firmware version                             Unknown response
+ :70201004B
+ :702010000FF120139
+ 0x00 = Identifier                            Invalid frame (checksum wrong)
+ 0x0112FF = v1.12-release                     :452
+                                              :2AAAAFF
+ Restart                                      Checksum fail
+ :64F
+ No response, restarted
+
+ Get Battery Maximum Current                  Asynchronous message
+ :7F0ED0071                                   :A0102000543
+ :7F0ED00F4017C                               The unit reports register 0x0201 (device state)
+ Value = 0x01F4 = 50.0A                       with value 0x05 (float).
+Changes:
+
+16-06-2025
+Initial version derived from BlueSolar HEX protocol - rev 18.docx
+

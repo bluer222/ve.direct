@@ -1,0 +1,895 @@
+       VE.Direct Protocol
+                                                                                                                                                                                                      www.victronenergy.com
+
+
+
+
+                       Table of contents
+                       Introduction ...............................................................................................................................................................................2
+                       Physical interface .....................................................................................................................................................................2
+                       Serial port configuration .......................................................................................................................................................4
+                       Message format ........................................................................................................................................................................5
+                       Data integrity ............................................................................................................................................................................5
+                       Fields.............................................................................................................................................................................................5
+                       Detailed field description .................................................................................................................................................. 10
+                       Implementation guidelines .............................................................................................................................................. 17
+                       Connector types .................................................................................................................................................................... 18
+                       VE.Direct cable ....................................................................................................................................................................... 19
+                       Document history ................................................................................................................................................................. 20
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       Introduction
+                       Victron products which feature the VE.Direct serial communications interface allow simple access to
+                       detailed information of that product. This document describes how to receive and interpret this
+                       information.
+
+                       See our Data communication whitepaper for more information on other protocols and products
+                       available: Whitepaper-Data-communication-with-Victron-Energy-products_EN.pdf.
+
+                       The VE.Direct interface includes two modes: Text-mode and the HEX-mode. The purpose of the
+                       Text-mode is to make retrieving information extremely simple. The product will periodically
+                       transmit all run-time fields. The HEX-mode allows not only to read data but also write data, for
+                       example, change settings.
+
+                       There are two different implementations of the Text-mode and HEX-mode:
+
+                       Older implementations
+                          • On power up, a VE.Direct interface will always be in Text-mode, and continuously transmits
+                               all run-time fields. As soon as it receives a valid HEX-message, it will switch to HEX-mode. It
+                               will stay in HEX-mode as long as HEX-messages are frequently received. After a product has
+                               not received any valid HEX-messages for several seconds, it will switch back to Text-mode
+                               and start to auto transmit the run-time fields periodically again. Some products will send
+                               Asynchronous HEX-messages, starting with “:A” and ending with a newline ‘\n’, on their
+                               own. These messages can interrupt a regular Text-mode frame.
+
+                       Newer implementations
+                          • Always have the Text-mode active, regardless of the HEX-messages.
+
+                       To know more which implementation is applied to your product, please check its specific VE.Direct
+                       protocol document.
+
+                       This document only describes the Text-mode.
+
+                       Make sure to also read our VE.Direct protocol FAQ, and the Open source page on Victron Live which
+                       lists projects from other people using our VE.Direct protocol
+
+                       Physical interface
+                       The VE.Direct interface is accessed via a 4-pin connector. The picture below shows where the
+                       VE.Direct connector is located on a BMV-700.
+
+                                                                                   Pin     Producer           Consumer
+                                                                                    1         GND                GND
+                                                                                    2     VE.Direct-RX       VE.Direct-RX
+                                                                                    3     VE.Direct-TX       VE.Direct-TX
+                                                                                    4       Power +            Power +
+
+
+
+                       Producers are products, such as the BMV battery monitor and the MPPT solar chargers. Consumers
+                       are products reading the data, such as the Color Control GX. When connecting a Producer to a
+                       Consumer, the Producer’s VE.Direct-TX must be connected to Consumer VE.Direct-RX. The same
+                       goes to the Producer VE.Direct-RX, which must be connected to Consumer’s VE.Direct-TX. Note that
+                       the pins on the MPPT can have alternative functions. Its VE.Direct-RX pin can be used to switch the
+                       charger on and off. Its VE.Direct-TX pin can be configured to send a PWM signal, to dim (street-
+                       )lights. For details about the connector type see the information at the end of this document.
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       A VE.Direct to USB interface cable can be purchased from Victron Energy (“VE.Direct to USB”, part
+                       number ASS030530000). This interface cable provides a virtual comport through USB as well as
+                       galvanic isolation.
+
+                       A VE.Direct to RS232 interface cable can also be purchased from Victron Energy (“VE.Direct to RS232
+                       interface”, part number ASS030520500).
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       Serial port configuration
+                         Baud rate:                 19200
+                         Data bits:                 8
+                         Parity:                    None
+                         Stop bits:                 1
+                         Flow control:              None
+
+
+
+
+                       Pins to use when using the VE.Direct to RS232 interface
+                       For the communication use the GND, RX and TX pins: pin 5, 2 and 3 on the DB9 connector.
+
+                       Also the DTR signal (pin 4 on the DB9 connector) and/or the RTS signal (pin 7 on the DB9 connector)
+                       must be driven high to power the isolated side of the interface. How to program the DTR and RTS
+                       differs between used operating systems and hardware.
+
+                       For more details see:
+                       https://www.victronenergy.com/live/vedirect_protocol:faq#q2when_using_the_vedirect_
+                       to_rs232_interface_what_pins_do_i_need
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       Message format
+                       The device transmits blocks of data at 1 second intervals. Each field is sent using the following
+                       format:
+
+                       <Newline><Field-Label><Tab><Field-Value>
+
+                       The identifiers are defined as follows:
+                              Identifier                                           Meaning
+                        <Newline>                A carriage return followed by a line feed (0x0D, 0x0A).
+                        <Field-Label>            An arbitrary length label that identifies the field. Where applicable, this
+                                                 will be the same as the label that is used on the LCD.
+                        <Tab>                    A horizontal tab (0x09).
+                        <Field-Value>            The ASCII formatted value of this field. The number of characters
+                                                 transmitted depends on the magnitude and sign of the value.
+
+
+                       Data integrity
+                       The statistics are grouped in blocks with a checksum appended. The last field in a block will always
+                       be “Checksum”. The value is a single byte, and will not necessarily be a printable ASCII character.
+                       The modulo 256 sum of all bytes in a block will equal 0 if there were no transmission errors. Multiple
+                       blocks are sent containing different fields.
+
+                       For more details see:
+                       https://www.victronenergy.com/live/vedirect_protocol:faq#q8how_do_i_calculate_the_text_check
+                       sum
+
+                       Fields
+                       The values sent over the serial communications interface do not necessarily use the same units as
+                       the values on the LCD.
+
+                       Note: The BMV-60xS does not have a full VE.Direct interface. There is only limited support for the
+                       Text-mode, see Table I. More details can be found in the document BMV-60xS Text Protocol:
+                       http://www.victronenergy.com/upload/documents/BMV-60xS Text Protocol.pdf
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                     The units used by the serial interface are as follows:
+                  Label          Units                               Description                                 BMV          BMV          BMV71x           MPPT 1        Phoenix         Phoenix          Smart
+                                                                                                                 60x          70x         SmartShunt                      Inverter        Charger        BuckBoost
+             V                   mV                       Main or channel 1 (battery) voltage                     •            •               •               •             •                •              •
+             V2                  mV                       Channel 2 (battery) voltage                                                                                                        •2
+             V3                  mV                       Channel 3 (battery) voltage                                                                                                        •2
+             VS                  mV                       Auxiliary (starter) voltage                             •3           •3               •3
+             VM                  mV                       Mid-point voltage of the battery bank                                •4               •4
+             DM                  ‰                        Mid-point deviation of the battery bank                              •4               •4
+             VPV                 mV                       Panel voltage                                                                                         •
+             PPV                 W                        Panel power                                                                                           •
+             I                   mA                       Main or channel 1 battery current                        •            •               •              •5                              •                 •
+             I2                  mA                       Channel 2 battery current                                                                                                           •2
+             I3                  mA                       Channel 3 battery current                                                                                                           •2
+             IL                  mA                       Load current                                                                                         •6
+             LOAD                                         Load output state (ON/OFF)                                                                           •7
+             T                   °C 8                     Battery temperature                                                  •9               •9
+             P                   W                        Instantaneous power                                                   •                •                                                               •
+             CE                  mAh 10,11                Consumed Amp Hours                                       •            •                •
+
+                       1
+                         The VE.Direct protocol is available in the MPPT 70/15 since firmware version v1.09 and up, and only in newer type MPPT 70/15s: the ones with a product id other than 0x300. The first
+                          batches, with PID 0x300, only support fields PID, SER and FW.
+                       2
+                          Available on Phoenix Smart Chargers with triple outputs only
+                       3
+                          Available when the AUX input is configured as Starter Battery
+                       4
+                          Available when the AUX input is configured as Mid Point
+                       5
+                          MPPT 75/15 and 100/15: Since firmware version v1.15 onwards, the current reported under “I” is the battery current. Firmware version v1.14 and before report the current measured at
+                          the output of the converter, without detailing if this current was going to the battery or the loads.
+                       6
+                          Available since version v1.15, and only for models with a load output.
+                       7
+                          Available since version v1.12, and only for models with a load output.
+                       8
+                         When no temperature sensor is connected, “---” will be sent instead of a value.
+                       9
+                          Available when the AUX input is configured as Temperature
+                       10
+                          When the BMV is not synchronised, these statistics have no meaning, so “---” will be sent instead of a value.
+                       11
+                           When configured as DC monitor, “---” will be sent instead of a value.
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                  Label                 Units                                Description                       BMV          BMV          BMV71x        MPPT 1   Phoenix    Phoenix     Smart
+                                                                                                               60x          70x         SmartShunt              Inverter   Charger   BuckBoost
+             SOC                 ‰10,11                   State-of-charge                                       •            •               •
+             TTG                 Minutes10, 11,12         Time-to-go                                            •            •               •
+             Alarm                                        Alarm condition active                                •            •               •
+             Relay                                        Relay state                                           •            •               •          • 13      • 14        •
+             AR                                           Alarm reason                                          •            •               •                      •
+             OR                                           Off reason                                                                                    • 15      • 16                   •
+             H1                  mAh    11
+                                                          Depth of the deepest discharge                         •            •               •
+             H2                  mAh11                    Depth of the last discharge                            •            •               •
+             H3                  mAh11                    Depth of the average discharge                         •            •               •
+             H4                  11
+                                                          Number of charge cycles                                •            •               •
+             H5                  11
+                                                          Number of full discharges                              •            •               •
+             H6                  mAh11                    Cumulative Amp Hours drawn                             •            •               •
+             H7                  mV                       Minimum main (battery) voltage                         •            •               •
+             H8                  mV                       Maximum main (battery) voltage                         •            •               •
+             H9                  Seconds11                Number of seconds since last full charge               •            •               •
+             H10                 11
+                                                          Number of automatic synchronizations                   •            •               •
+             H11                                          Number of low main voltage alarms                      •            •               •
+             H12                                          Number of high main voltage alarms                     •            •               •
+             H13                                          Number of low auxiliary voltage alarms                 •
+             H14                                          Number of high auxiliary voltage alarms                •
+             H15                 mV3                      Minimum auxiliary (battery) voltage                    •            •               •
+             H16                 mV3                      Maximum auxiliary (battery) voltage                    •            •               •
+             H17                 0.01 kWh                 Amount of discharged energy (BMV) /                                 •               •
+                                                          Amount of produced energy (DC monitor)
+
+
+
+                       12
+                          When the battery is not discharging the time- to-go is infinite. This is represented as -1.
+                       13
+                          Available on SmartSolar mppt chargers since firmware version v1.17
+                       14
+                          Available on Smart Phoenix Inverter
+                       15
+                          Available on SmartSolar mppt chargers since firmware version v1.44 (VE.Direct models) and v1.03 (SmartSolar VE.Can models)
+                       16
+                          Available on Phoenix Inverter v1.16
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                  Label                 Units                              Description               BMV   BMV    BMV71x      MPPT 1   Phoenix    Phoenix     Smart
+                                                                                                     60x   70x   SmartShunt            Inverter   Charger   BuckBoost
+             H18                 0.01 kWh                 Amount of charged energy (BMV) /                  •         •
+                                                          Amount of consumed energy (DC monitor)
+             H19                 0.01 kWh                 Yield total (user resettable counter)                                 •
+             H20                 0.01 kWh                 Yield today                                                           •
+             H21                 W                        Maximum power today                                                   •
+             H22                 0.01 kWh                 Yield yesterday                                                       •
+             H23                 W                        Maximum power yesterday                                               •
+             ERR                                          Error code                                                            •                    •          •
+             CS                                           State of operation                                                    •         •          •          •
+             BMV                                          Model description (deprecated)              •     •         •
+             FW                                           Firmware version (16 bit)                   •     •         •         •         •
+             FWE                                          Firmware version (24 bit)                                                                  •          •
+             PID                                          Product ID                                        •         •         •         •          •          •
+             SER#                                         Serial number                                                         •         •          •          •
+             HSDS                                         Day sequence number (0..364)                                         • 17
+             MODE                                         Device mode                                                                     •          •          •
+             AC_OUT_V            0.01 V                   AC output voltage                                                               •
+             AC_OUT_I            0.1 A                    AC output current                                                               •
+             AC_OUT_S            VA                       AC output apparent power                                                       • 18
+             WARN                                         Warning reason                                                                   •
+             MPPT                                         Tracker operation mode                                               • 19
+             MON                                          DC monitor mode                                            • 20
+             DC_IN_V             0.01 V                   DC input voltage                                                                                      •
+             DC_IN_I             0.1 A                    DC input current                                                                                      •
+             DC_IN_P             1W                       DC input power                                                                                        •
+
+
+                       17
+                          Available on BlueSolar mppt chargers since firmware version v1.16
+                       18
+                          Available on Phoenix Inverter (some models) since firmware version v1.16
+                       19
+                          Available on BlueSolar mppt chargers since firmware version v1.37
+                       20
+                          Available since version v4.08
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       Table I Supported Text-mode fields
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       Detailed field description
+                       I
+                       Both for MPPTs and BMVs: when > 0, the battery is being charged, < 0 the battery is being
+                       discharged.
+
+                       Alarm
+                       This shows the buzzer alarm state of the BMV. During normal operation, this will be “OFF”. When a
+                       buzzer alarm occurs the value will change to “ON”.
+
+                       Note: This refers to the value of the alarm condition, and not the buzzer itself. This means that
+                       once a condition has occurred, the value will be “ON” until all alarm conditions have cleared;
+                       regardless of whether or not a button has been pressed to silence the buzzer.
+
+                       Relay
+                       This shows the relay alarm state. The product specific descriptions show the factory default
+                       behaviour.
+
+                       BMV: during normal operation the relay is “OFF”, if a relay alarm occurs the value will change to
+                       “ON”.
+
+                       MPPT chargers: during normal operation the relay is “OFF”, if there is a battery low voltage
+                       condition value will change to “ON”.
+
+                       Phoenix Smart Inverter: during normal operation (inverting) the relay is “ON”.
+
+                       Phoenix Smart Chargers: during normal operation (charging) the relay is “ON”.
+
+                       Note for both Alarm and Relay: BMV-600’s with firmware v2.09 or lower used to send “On” and
+                       “Off” instead of “ON” and “OFF”. It is therefore recommended to use a case-insensitive string
+                       comparison in your implementation, for example stricmp().
+
+                       FW
+                       The firmware version of the device. The version is reported as a whole number, e.g. 208 for firmware
+                       version 2.08.The value C208 means release candidate C for version 2.08.
+                       Note: This field is available in the BMV since version 2.08
+
+                       FWE
+                       The firmware version of the device. The version contains up to 6 digits, 0 padding on the left side is
+                       not mandatory. Examples: 0208FF or 208FF for firmware version 2.08 (last digit FF indicates an
+                       official release), 020801 for firmware version 2.08-beta-01.
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       AR
+                       Alarm reason; this field describes the cause of the alarm. Since multiple alarm conditions can be
+                       present at the same time the values of the separate alarm conditions are added. The value total is
+                       sent in decimal notation.
+                                                                    BMV         Inverter
+                        Low Voltage                           1       •            •
+                        High Voltage                          2       •            •
+                        Low SOC                               4       •
+                        Low Starter Voltage                   8       •
+                        High Starter Voltage                 16       •
+                        Low Temperature                      32       •            •
+                        High Temperature                     64       •            •
+                        Mid Voltage                         128       •
+                        Overload                            256                    •
+                        DC-ripple                           512                    •
+                        Low V AC out                      1024                     •
+                        High V AC out                     2048                     •
+                        Short Circuit                     4096
+                        BMS Lockout                       8192
+                       E.g. a value of 5 would indicate the presence of a low SOC alarm and a low Voltage.
+                       Note: This field is available in the BMV since version 2.08
+
+                       WARN
+                       Warning reason is implemented for inverters only. It provides the cause of a warning. The bit
+                       definition is the same as for AR. More warnings can be active at the same time. Warnings always
+                       represent the current status of the measured parameter (temperature/battery voltage in/VAC-out).
+                       This is different than for alarm reason AR. AR remembers the reason what caused the inverter to
+                       switch off (active protection) until it is switched on again.
+
+                       OR
+                       Off reason, this field described why a unit is switched off.
+                        No input power                                 0x00000001
+                        Switched off (power switch)                    0x00000002
+                        Switched off (device mode register)            0x00000004
+                        Remote input                                   0x00000008
+                        Protection active                              0x00000010
+                        Paygo                                          0x00000020
+                        BMS                                            0x00000040
+                        Engine shutdown detection                      0x00000080
+                        Analysing input voltage                        0x00000100
+
+                       CAP_BLE
+                       Off reason, this field described why a unit is switched off.
+                        BLE supports switching off                    0x00000001
+                        BLE switching off is permanent                0x00000002
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       PID
+                       The product id:
+                        BMV-700                                        0x203
+                        BMV-702                                        0x204
+                        BMV-700H                                       0x205
+                        BlueSolar MPPT 70|15*                          0x0300*
+                        BlueSolar MPPT 75|50*                          0xA040*
+                        BlueSolar MPPT 150|35*                         0xA041*
+                        BlueSolar MPPT 75|15                           0xA042
+                        BlueSolar MPPT 100|15                          0xA043
+                        BlueSolar MPPT 100|30*                         0xA044*
+                        BlueSolar MPPT 100|50*                         0xA045*
+                        BlueSolar MPPT 150|70                          0xA046
+                        BlueSolar MPPT 150|100                         0xA047
+                        BlueSolar MPPT 100|50 rev2                     0xA049
+                        BlueSolar MPPT 100|30 rev2                     0xA04A
+                        BlueSolar MPPT 150|35 rev2                     0xA04B
+                        BlueSolar MPPT 75|10                           0xA04C
+                        BlueSolar MPPT 150|45                          0xA04D
+                        BlueSolar MPPT 150|60                          0xA04E
+                        BlueSolar MPPT 150|85                          0xA04F
+                        SmartSolar MPPT 250|100                        0xA050
+                        SmartSolar MPPT 150|100*                       0xA051*
+                        SmartSolar MPPT 150|85*                        0xA052*
+                        SmartSolar MPPT 75|15                          0xA053
+                        SmartSolar MPPT 75|10                          0xA054
+                        SmartSolar MPPT 100|15                         0xA055
+                        SmartSolar MPPT 100|30                         0xA056
+                        SmartSolar MPPT 100|50                         0xA057
+                        SmartSolar MPPT 150|35                         0xA058
+                        SmartSolar MPPT 150|100 rev2                   0xA059
+                        SmartSolar MPPT 150|85 rev2                    0xA05A
+                        SmartSolar MPPT 250|70                         0xA05B
+                        SmartSolar MPPT 250|85                         0xA05C
+                        SmartSolar MPPT 250|60                         0xA05D
+                        SmartSolar MPPT 250|45                         0xA05E
+                        SmartSolar MPPT 100|20                         0xA05F
+                        SmartSolar MPPT 100|20 48V                     0xA060
+                        SmartSolar MPPT 150|45                         0xA061
+                        SmartSolar MPPT 150|60                         0xA062
+                        SmartSolar MPPT 150|70                         0xA063
+                        SmartSolar MPPT 250|85 rev2                    0xA064
+                        SmartSolar MPPT 250|100 rev2                   0xA065
+                        BlueSolar MPPT 100|20                          0xA066
+                        BlueSolar MPPT 100|20 48V                      0xA067
+                        SmartSolar MPPT 250|60 rev2                    0xA068
+                        SmartSolar MPPT 250|70 rev2                    0xA069
+                        SmartSolar MPPT 150|45 rev2                    0xA06A
+                        SmartSolar MPPT 150|60 rev2                    0xA06B
+                        SmartSolar MPPT 150|70 rev2                    0xA06C
+                        SmartSolar MPPT 150|85 rev3                    0xA06D
+                        SmartSolar MPPT 150|100 rev3                   0xA06E
+                        BlueSolar MPPT 150|45 rev2                     0xA06F
+                        BlueSolar MPPT 150|60 rev2                     0xA070
+                        BlueSolar MPPT 150|70 rev2                     0xA071
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                         BlueSolar MPPT 150/45 rev3                    0xA072
+                         SmartSolar MPPT 150/45 rev3                   0xA073
+                         SmartSolar MPPT 75/10 rev2                    0xA074
+                         SmartSolar MPPT 75/15 rev2                    0xA075
+                         BlueSolar MPPT 100/30 rev3                    0xA076
+                         BlueSolar MPPT 100/50 rev3                    0xA077
+                         BlueSolar MPPT 150/35 rev3                    0xA078
+                         BlueSolar MPPT 75/10 rev2                     0xA079
+                         BlueSolar MPPT 75/15 rev2                     0xA07A
+                         BlueSolar MPPT 100/15 rev2                    0xA07B
+                         BlueSolar MPPT 75/10 rev3                     0xA07C
+                         BlueSolar MPPT 75/15 rev3                     0xA07D
+                         SmartSolar MPPT 100/30 12V                    0xA07E
+                         All-In-1 SmartSolar MPPT 75/15 12V            0xA07F
+                         SmartSolar MPPT 250|60 rev3                   0xA080
+                         SmartSolar MPPT 250|70 rev3                   0xA081
+                         SmartSolar MPPT VE.Can 150/70                 0xA102
+                         SmartSolar MPPT VE.Can 150/45                 0xA103
+                         SmartSolar MPPT VE.Can 150/60                 0xA104
+                         SmartSolar MPPT VE.Can 150/85                 0xA105
+                         SmartSolar MPPT VE.Can 150/100                0xA106
+                         SmartSolar MPPT VE.Can 250/45                 0xA107
+                         SmartSolar MPPT VE.Can 250/60                 0xA108
+                         SmartSolar MPPT VE.Can 250/70                 0xA109
+                         SmartSolar MPPT VE.Can 250/85                 0xA10A
+                         SmartSolar MPPT VE.Can 250/100                0xA10B
+                         SmartSolar MPPT VE.Can 150/70 rev2            0xA10C
+                         SmartSolar MPPT VE.Can 150/85 rev2            0xA10D
+                         SmartSolar MPPT VE.Can 150/100 rev2           0xA10E
+                         BlueSolar MPPT VE.Can 150/100                 0xA10F
+                         BlueSolar MPPT VE.Can 250/70                  0xA112
+                         BlueSolar MPPT VE.Can 250/100                 0xA113
+                         SmartSolar MPPT VE.Can 250/70 rev2            0xA114
+                         SmartSolar MPPT VE.Can 250/100 rev2           0xA115
+                         SmartSolar MPPT VE.Can 250/85 rev2            0xA116
+                         BlueSolar MPPT VE.Can 150/100 rev2            0xA117
+                         Phoenix Inverter 12V 250VA 230V*              0xA201*
+                         Phoenix Inverter 24V 250VA 230V*              0xA202*
+                         Phoenix Inverter 48V 250VA 230V*              0xA204*
+                         Phoenix Inverter 12V 375VA 230V*              0xA211*
+                         Phoenix Inverter 24V 375VA 230V*              0xA212*
+                         Phoenix Inverter 48V 375VA 230V*              0xA214*
+                         Phoenix Inverter 12V 500VA 230V*              0xA221*
+                         Phoenix Inverter 24V 500VA 230V*              0xA222*
+                         Phoenix Inverter 48V 500VA 230V*              0xA224*
+                         Phoenix Inverter 12V 250VA 230V               0xA231
+                         Phoenix Inverter 24V 250VA 230V               0xA232
+                         Phoenix Inverter 48V 250VA 230V               0xA234
+                         Phoenix Inverter 12V 250VA 120V               0xA239
+                         Phoenix Inverter 24V 250VA 120V               0xA23A
+                         Phoenix Inverter 48V 250VA 120V               0xA23C
+                         Phoenix Inverter 12V 375VA 230V               0xA241
+                         Phoenix Inverter 24V 375VA 230V               0xA242
+                         Phoenix Inverter 48V 375VA 230V               0xA244
+                         Phoenix Inverter 12V 375VA 120V               0xA249
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                         Phoenix Inverter 24V 375VA 120V               0xA24A
+                         Phoenix Inverter 48V 375VA 120V               0xA24C
+                         Phoenix Inverter 12V 500VA 230V               0xA251
+                         Phoenix Inverter 24V 500VA 230V               0xA252
+                         Phoenix Inverter 48V 500VA 230V               0xA254
+                         Phoenix Inverter 12V 500VA 120V               0xA259
+                         Phoenix Inverter 24V 500VA 120V               0xA25A
+                         Phoenix Inverter 48V 500VA 120V               0xA25C
+                         Phoenix Inverter 12V 800VA 230V               0xA261
+                         Phoenix Inverter 24V 800VA 230V               0xA262
+                         Phoenix Inverter 48V 800VA 230V               0xA264
+                         Phoenix Inverter 12V 800VA 120V               0xA269
+                         Phoenix Inverter 24V 800VA 120V               0xA26A
+                         Phoenix Inverter 48V 800VA 120V               0xA26C
+                         Phoenix Inverter 12V 1200VA 230V              0xA271
+                         Phoenix Inverter 24V 1200VA 230V              0xA272
+                         Phoenix Inverter 48V 1200VA 230V              0xA274
+                         Phoenix Inverter 12V 1200VA 120V              0xA279
+                         Phoenix Inverter 24V 1200VA 120V              0xA27A
+                         Phoenix Inverter 48V 1200VA 120V              0xA27C
+                         Phoenix Inverter 12V 1600VA 230V              0xA281
+                         Phoenix Inverter 24V 1600VA 230V              0xA282
+                         Phoenix Inverter 48V 1600VA 230V              0xA284
+                         Phoenix Inverter 12V 2000VA 230V              0xA291
+                         Phoenix Inverter 24V 2000VA 230V              0xA292
+                         Phoenix Inverter 48V 2000VA 230V              0xA294
+                         Phoenix Inverter 12V 3000VA 230V              0xA2A1
+                         Phoenix Inverter 24V 3000VA 230V              0xA2A2
+                         Phoenix Inverter 48V 3000VA 230V              0xA2A4
+                         Phoenix Smart IP43 Charger 12|50 (1+1)        0xA340
+                         Phoenix Smart IP43 Charger 12|50 (3)          0xA341
+                         Phoenix Smart IP43 Charger 24|25 (1+1)        0xA342
+                         Phoenix Smart IP43 Charger 24|25 (3)          0xA343
+                         Phoenix Smart IP43 Charger 12|30 (1+1)        0xA344
+                         Phoenix Smart IP43 Charger 12|30 (3)          0xA345
+                         Phoenix Smart IP43 Charger 24|16 (1+1)        0xA346
+                         Phoenix Smart IP43 Charger 24|16 (3)          0xA347
+                         BMV-712 Smart                                 0xA381
+                         BMV-710H Smart                                0xA382
+                         BMV-712 Smart Rev2                            0xA383
+                         SmartShunt 500A/50mV                          0xA389
+                         SmartShunt 1000A/50mV                         0xA38A
+                         SmartShunt 2000A/50mV                         0xA38B
+                         Orion XS 12V/12V-50A                          0xA3F0
+                         Orion XS 1400                                 0xA3F1
+                       *
+                         These models are phased out.
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       CS
+                       The state of operation. See the table below for the possible values.
+                                                                  MPPT      Inverter Charger
+                        Off                                   0      •          •           •
+                        Low power                             1               • (1)
+                        Fault                                 2      •          •           •
+                        Bulk                                  3      •                      •
+                        Absorption                            4      •                      •
+                        Float                                 5      •                      •
+                        Storage                               6                             •
+                        Equalize (manual)                     7      •
+                        Inverting                             9                 •
+                        Power supply                         11                             •
+                        Starting-up                         245      •
+                        Repeated absorption                 246                             •
+                        Auto equalize / Recondition         247      •                      •
+                        BatterySafe                         248                             •
+                        External Control                    252      •
+                           (1) Load search
+
+                       ERR
+                       The error code of the device (relevant when the device is in the fault state). See the table below for
+                       the possible values.
+                        No error                                                            0
+                        Battery voltage too high                                            2
+                        Charger temperature too high                                      17
+                        Charger over current                                              18
+                        Charger current reversed                                          19
+                        Bulk time limit exceeded                                          20
+                        Current sensor issue (sensor bias/sensor broken)                  21
+                        Terminals overheated                                              26
+                        Converter issue (dual converter models only)                      28
+                        Input voltage too high (solar panel)                              33
+                        Input current too high (solar panel)                              34
+                        Input shutdown (due to excessive battery voltage)                 38
+                        Input shutdown (due to current flow during off mode)              39
+                        Lost communication with one of devices                            65
+                        Synchronised charging device configuration issue                  66
+                        BMS connection lost                                               67
+                        Network misconfigured                                             68
+                        Factory calibration data lost                                    116
+                        Invalid/incompatible firmware                                    117
+                        User settings invalid                                            119
+                       Note1: Error 19 can be ignored, this condition regularly occurs during start-up or shutdown of the
+                       MPPT charger. Since version 1.15 this error will no longer be reported.
+                       Note2: Error 21 can be ignored for 5 minutes, this condition regularly occurs during start-up or
+                       shutdown of the MPPT charger. Since version 1.16 this warning will no longer be reported when it is
+                       not persistent.
+
+                       HSDS
+                       Historical data. The day sequence number, a change in this number indicates a new day. This
+                       implies that the historical data has changed. Range 0..364.
+                       Note: The HSDS field is available in the MPPT charger since version v1.16.
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       SER#
+                       The serial number of the device. The notation is LLYYMMSSSSS, where LL=location code,
+                       YYWW=production date stamp (year, week) and SSSSS=unique part of the serial number.
+                       Example: HQ1328Y6TF6
+
+                       BMV (deprecated)
+                       This field contains a textual description of the BMV model, for example 602S or 702. It is deprecated,
+                       refer to the field PID instead.
+
+                       MODE
+                       The possible values for the device mode are listed in this table.
+                                                                                                 Inverter   Charger
+                         VE_REG_MODE_CHARGER                                           1                       •
+                         VE_REG_MODE_INVERTER                                          2             •
+                         VE_REG_MODE_OFF                                               4             •         •
+                         VE_REG_MODE_ECO                                               5             •
+                         VE_REG_MODE_HIBERNATE                                         253         • (1)
+                           (1) Smart only
+
+                       MPPT
+                       The possible values for the tracker operation are listed in this table.
+                        Off                                                            0
+                        Voltage or current limited                                     1
+                        MPP Tracker active                                             2
+
+                       MON
+                       The possible values for DC monitor mode are listed in this table.
+                        Solar charger                                               -9
+                        Wind turbine                                                -8
+                        Shaft generator                                             -7
+                        Alternator                                                  -6
+                        Fuel cell                                                   -5
+                        Water generator                                             -4
+                        DC/DC charger                                               -3
+                        AC charger                                                  -2
+                        Generic source                                              -1
+                        Battery monitor (BMV)                                       0
+                        Generic load                                                1
+                        Electric drive                                              2
+                        Fridge                                                      3
+                        Water pump                                                  4
+                        Bilge pump                                                  5
+                        DC system                                                   6
+                        Inverter                                                    7
+                        Water heater                                                8
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       Implementation guidelines
+                       When implementing a VE.Text parser it is recommended to reserve two buffers. For the field label a
+                       buffer of 9 bytes is needed and for the field value a buffer length of 33 bytes is required. The value
+                       should be parsed as soon as a single field is received and should then be stored in a temporary
+                       record. The maximum number of fields in a block is 22; keep at least 22 temporary records. Once the
+                       complete block is validated by evaluating the checksum, the contents of the temporary records can
+                       be copied to its corresponding final records. If the checksum turned out to be invalid, the temporary
+                       records need to be cleared.
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       Connector types
+                       Below the information about the connector type used for VE.Direct. There are 3 through hole type
+                       connectors and 2 surface mount types available.
+
+                         Brand                                JST
+                         Serie                                PH connector, 4 pin types
+                         Description                          Pitch 2.0mm
+                                                              Available in through hole and smt. Top and side entry models
+                                                              Also a high version of the through hole top entry model is available
+                                                              Most types are available from Farnell.
+                                                              Website information
+                                                              http://www.jst-mfg.com/product/detail_e.php?series=199
+                                                              http://www.jst-mfg.com/product/pdf/eng/ePH.pdf
+
+
+
+
+                                                              Farnell      JST code       Link
+                         Through hole                         code
+                         Pcb part straight                    9492437      B4B-PH-K-      http://nl.farnell.com/jst-japan-solderless-terminals/b4b-
+                                                                           S(LF)(SN)      ph-k-s-lf-sn/header-top-entry-4way-2mm/dp/9492437
+
+                         Pcb part                             9492488      S4B-PH-K-      http://nl.farnell.com/jst-japan-solderless-terminals/s4b-
+                         90degree                                          S (LF)(SN)     ph-k-s-lf-sn/header-side-entry-4way/dp/9492488
+
+
+                         Surface mount
+                         Pcb part straight                    9491929      B4B-PH-        http://nl.farnell.com/jst-japan-solderless-terminals/b4b-
+                                                                           SM4-           ph-sm4-tb-lf-sn/header-top-entry-smd-
+                                                                           TB(LF)(SN)     4way/dp/9491929
+
+
+                         Pcb part 90                          9492631      S4B-PH-        http://nl.farnell.com/jst-japan-solderless-terminals/s4b-
+                         degree smd                                        SM4-           ph-sm4-tb-lf-sn/header-side-entry-smd-
+                                                                           TB(LF)(SN)     4way/dp/9492631
+                         Pcb part straight                     -           BH4B-          http://www.jst-
+                         high type                                         PH(LF)(SN)     mfg.com/product/detail_e.php?series=200
+                                                                                          http://www.jst-mfg.com/product/pdf/eng/ePH-H.pdf
+
+
+
+
+                         TH top entry                         TH side entry             SMT top entry               SMT side entry
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       VE.Direct cable
+
+                       For the VE.Direct cable a molded part was created to make it more durable.
+                       There is a straight and 90 degree angle model. See pictures below.
+
+
+
+
+                         VE.Direct straight cable connector             VE.Direct 90 degree cable connector
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                       Document history
+                         Version          Date                         Changes
+                         1                24 April 2008                Document created.
+                         1.1              05 May 2008                  Added historical information for the starter battery.
+                                                                       Added alarm and relay state information.
+                         1.2              16 May 2008                  Added the part number for the serial to TTL cable.
+                         2.0              16 June 2008                 Added a checksum field to the protocol, and removed the ETX
+                                                                       framing character.
+                         2.1              05 May 2009                  Added details on which RS232 connections must be
+                                                                       implemented by the monitoring application.
+                         2.2              24 June 2009                 Updated to reflect the change in product naming.
+                         2.3              01 December 2009             Added BMV-600S and field BMV, FW and AR
+                         2.4              12 April 2011                Renamed the protocol and document to BMV Text Protocol
+                         2.5              16 October 2012              Added details on On/Off vs ON/OFF for Relay and Alarm state
+                         3.0              31 June 2013                 Document changed to be the VE.Direct specification document
+                         3.1              16 August 2013               Added BMV-70x alarms
+                                                                       Added detailed field description paragraph
+                                                                       Description of release candidates in FW field
+                         3.2              7 February 2014              Removed fields H13 and H14 from BMV-70x
+                         3.3              24 March 2014                Added history fields (HS* and HDn*) for the MPPT chargers.
+                         3.4              22 May 2014                  Updated product id list (PID)
+                         3.5              3 July 2014                  Added error 119 in the error code table (ERR)
+                         3.6              30 July 2014                 Changed HDnYP> HdnY, HdnYC> HDnC, added HSDS
+                         3.7              11 September 2014            Text protocol I=Battery current, CS=Charger state.
+                                                                       Added remark HS*, HDn* are available since v1.15.
+                                                                       Added IL (load current)
+                         3.8              24 September 2014            Updated physical connection section
+                                                                       Removed HDn*, HS* sections, moved to HEX protocol
+                                                                       Updated HSDS description.
+                         3.9              30 September 2014            Reworded some sentences to make them more clear and
+                                                                       changed footnote sign to numbers.
+                                                                       H19..H23 deprecated since v1.16, HSDS will be available since
+                                                                       v1.16
+                         3.10             6 November 2014              ERR section, added note 2 regarding error 21.
+                         3.11             7 November 2014              ERR section, updated note 2 regarding error 21.
+                         3.12             9 December 2014              H19..H23 will remain present
+                         3.13             29 January 2015              Added chapter ‘Implementation guidelines’
+                         3.14             25 March 2015                Fields table: removed deprecated for fields H19..H23
+                         3.15             1 May 2015                   Updated charger error code table (ERR)
+                         3.16             9 July 2015                  Added information about connector types
+                         3.17             20 July 2015                 Updated whitepaper url in the introduction section
+                         3.18             20 August 2015               Added links to open source page and vedirect faq
+                         3.19             25 February 2016             Updated PID section (MPPT models)
+                                                                       Relay field now also available in SmartSolar models
+                         3.20             14 March 2016                Updated with Phoenix Inverter textmode fields
+                         3.21             1 April 2016                 Mention Asynchronous HEX-messages.
+                                                                       Added VE.Direct to RS232 interface cable.
+                         3.22             28 September 2016            Swapped RX & TX in the pinout
+                         3.23             2 October 2017               Added pin information for VE.Direct to RS232 interface
+                         3.24             22 March 2018                Added PIDs for 120V + 800VA + 1200VA inverters and new Smart
+                                                                       Solar chargers
+                         3.25             10 September 2018            Added tracker information (MPPT)
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+                         Version          Date                         Changes
+                         3.26             27 November 2018             Added for Smart Phoenix Inverters:
+                                                                           • PIDs for Smart Inverters 1600/2000VA - 230Vac
+                                                                           • Support of hibernate mode
+                                                                           • Relay description
+                                                                           • Label AC_OUT_S
+                                                                           • Label OR (off reason)
+                                                                           • Label CAP_BLE
+                                                                       Added Phoenix Smart Chargers:
+                                                                           • Labels V2,V3,I2,I3 and FWE
+                                                                           • Added FWE description
+                                                                       Added SmartSolar MPPT VE.Can product ids.
+                                                                       Update descriptions of CS, MODE and ERR fields.
+                         3.27             11 September 2019            Update Supported Text-mode fields table:
+                                                                           • OR filed was added to the SmartSolar since firmware
+                                                                               version v1.44 (VE.Direct chargers) and v1.03 (SmartSolar
+                                                                               MPPT VE.Can chargers)
+                         3.28             26 February 2020             Added new PIDs for SmartSolars and BlueSolars
+                                                                           • From 0xA066 to 0xA071
+                                                                           • From 0xA10B to 0xA116
+                                                                       Changed maximum number of fields in a block, on the text
+                                                                       protocol, from 18 to 22.
+                         3.29             20 July 2020                 Add FAQ URL to chapter “Data integrity”
+                         3.30             01 February 2021             Update introduction explaining new behaviour of Text-mode on
+                                                                       newer implementations.
+                         3.31             04 March 2021                Update Physical interface description text.
+                         3.32             30 June 2021                 Added label MON
+                                                                       Added new PIDs for BMV-71x and SmartShunt
+                         3.33             06 June 2023                 Added new PIDs for MPPT chargers (from 0xA072 to 0xA07F and
+                                                                       0xA117)
+                                                                       Added new text fields intended for any DC input information:
+                                                                           • DC_IN_V
+                                                                           • DC_IN_I
+                                                                           • DC_IN_P
+                                                                       Added new Smart BuckBoost:
+                                                                           • Added to the PID list (0xA3F0)
+                                                                           • Added to the Fields table
+                                                                           • Fields used: PID, FEW, SER#, V, I, P, DC_IN_V, DC_IN_I,
+                                                                               DC_IN_P, CS, OR, ERR.
+                         3.34             14 April 2025                Added new PIDs for MPPT chargers (0xA080 and 0xA081)
+                                                                       Change Smart BuckBoost name to Orion XS (PID 0xA3F0)
+                                                                       Added new Orion XS 1400 (PID 0xA3F1)
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com
+www.victronenergy.com
+

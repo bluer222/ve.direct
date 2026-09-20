@@ -1,0 +1,91 @@
+"""Async VE.Direct client (Text + HEX)."""
+from .device import AsyncVEDirect, decode_hex_value, encode_hex_value
+from .exceptions import (
+    AmbiguousRegisterError,
+    ChecksumError,
+    FrameError,
+    RegisterError,
+    TimeoutError,
+    TransportError,
+    VeDirectError,
+)
+from .hex import (
+    BOOT_MAGIC,
+    CMD_APP_VERSION,
+    CMD_ASYNC,
+    CMD_BOOT,
+    CMD_CHECKSUM_ERROR,
+    CMD_DONE,
+    CMD_ERROR,
+    CMD_GET,
+    CMD_PING,
+    CMD_PRODUCT_ID,
+    CMD_RESTART,
+    CMD_SET,
+    CMD_UNKNOWN,
+    HexFrame,
+    build_app_version,
+    build_boot,
+    build_get,
+    build_ping,
+    build_product_id,
+    build_restart,
+    build_set,
+    decode_app_version,
+    decode_app_version_24,
+    decode_line,
+    decode_ping_version,
+    encode_frame,
+)
+from .registers import (
+    EXPERIMENTAL_MULTI_RS_REGISTERS,
+    REGISTERS,
+    decode_bat_type,
+    decode_value,
+    encode_value,
+    for_flavor,
+    lookup,
+)
+from .tables import (
+    AR_MAP,
+    CAP_BLE_MAP,
+    CS_MAP,
+    ERR_MAP,
+    LABEL_INFO,
+    MODE_MAP,
+    MON_MAP,
+    MPPT_MAP,
+    OR_MAP,
+    PID_MAP,
+    decode_ar,
+    decode_cap_ble,
+    decode_or,
+    pid_name,
+)
+from .text import Frame, TextParser, TypedValue, verify_block_checksum
+from .transport import SimulatedTransport, make_text_block
+
+__all__ = [
+    "AsyncVEDirect",
+    "TextParser", "Frame", "TypedValue", "verify_block_checksum",
+    "HexFrame", "decode_line", "encode_frame", "decode_app_version",
+    "decode_app_version_24",
+    "decode_ping_version",
+    "build_get", "build_set", "build_ping",
+    "build_app_version", "build_product_id", "build_restart", "build_boot",
+    "decode_hex_value", "encode_hex_value",
+    "REGISTERS", "EXPERIMENTAL_MULTI_RS_REGISTERS",
+    "lookup", "decode_value", "encode_value", "for_flavor",
+    "decode_bat_type",
+    "LABEL_INFO", "CS_MAP", "ERR_MAP", "AR_MAP", "OR_MAP", "MODE_MAP",
+    "MPPT_MAP", "MON_MAP", "PID_MAP", "CAP_BLE_MAP",
+    "pid_name", "decode_ar", "decode_or", "decode_cap_ble",
+    "SimulatedTransport", "make_text_block",
+    "CMD_BOOT", "CMD_DONE", "CMD_CHECKSUM_ERROR", "CMD_APP_VERSION", "CMD_UNKNOWN",
+    "CMD_PRODUCT_ID", "CMD_ERROR", "CMD_PING", "CMD_RESTART",
+    "CMD_GET", "CMD_SET", "CMD_ASYNC", "BOOT_MAGIC",
+    "VeDirectError", "ChecksumError", "FrameError",
+    "TimeoutError", "RegisterError", "AmbiguousRegisterError", "TransportError",
+]
+
+__version__ = "0.1.0"

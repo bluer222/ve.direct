@@ -1,0 +1,397 @@
+ BMV700 Series Hex protocol
+                                                                                   www.victronenergy.com
+ Rev 7
+
+
+
+
+                                                                      BMV700 Series
+
+                                                                        Hex Protocol
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | Fax: +31 (0)36 535 97 40
+E-mail: sales@victronenergy.com | www.victronenergy.com
+   Table of Contents
+   1      VE.Direct Protocol _______________________________________________________ 3
+       Get and Set items _______________________________________________________________ 5
+       Examples_____________________________________________________________________ 10
+   2      Text Protocol __________________________________________________________ 11
+   Revision Log ______________________________________________________________ 12
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | Fax: +31 (0)36 535 97 40
+E-mail: sales@victronenergy.com | www.victronenergy.com
+1 VE.Direct Protocol
+The frame format of the VE.Direct protocol has the following general format:
+
+: [command] [data][data][…] [check]\n
+
+Where the colon indicates the start of the frame and the newline is the end of frame. The sum of all
+data bytes and the check must equal 0x55. Since the normal protocol is in text values the frames are
+sent in their hexadecimal ASCII representation, [‘0’ .. ’9’], [‘A’ .. ’F’], must be uppercase. There is no
+need to escape any characters.
+
+: [command] [dataHighNibble, dataLowNibble][……] [checkHigh, checkLow] \n
+
+Note: The command is only send as a single nibble. Numbers are sent in Little Endian format. An
+error response with value 0xAAAA is sent on framing errors.
+   Command                   Description
+                               Check for presence, the response is an ‘Rsp ping’ containing version and
+  1              Ping
+                               firmware type. See the response ping message.
+                 App           Returns the version of the firmware as stored in the header in an ‘Rsp
+  3
+                 version       Done’ message.
+                               The Product Id version will be returned by an ‘Rsp Done’ message. The
+                               returned value is the Product Id from the application header if present. If
+                               no application is present, the value from the product info is returned. This
+                               value is 0xFFFF if no valid application has ever been booted.
+
+                               BMV600S = 0x0200
+  4              Product Id
+                               BMV602S = 0x0201
+                               BMV600HS = 0x0202
+                               BMV700 = 0x0203
+                               BMV702 = 0x0204
+                               BMV700H = 0x0205
+                               BMV712 = 0xA381
+  6              Restart       Restarts the device, no response is sent.
+                               Returns a get response with the requested data or error is returned.
+  7              Get           uint16                     the id of the value to get
+                               uint8                      flags, should be set to zero
+                               Returns a set response with the requested data or error is returned.
+                               uint16                     the id of the value to set
+  8              Set
+                               uint8                      flags, should be set to zero
+                               type depends on id         value
+                               Asynchronous data message. Should not be replied.
+                               uint16                     the id of the value being returned
+  A              Async
+                               uint8                      flags, defined below
+                               type depends on id         value
+  0, 2, 5, 9,
+                 reserved
+  B-F
+VE.Direct responses are formatted in the same manner as commands, but use response codes.:
+  Response                  Description
+  1             Done           Successful execution of the received command. Payload depends on
+                               command.
+  3             Unknown        Unknown command, data is the unknown command.
+  5             Ping           The version number is directly interpreted from the hex representation,
+                               e.g. 0x0101 is version 1.01. The two most significant bits indicate the
+                               firmware type:
+                               b00: bootloader
+                               b01: application
+                               b10: tester
+                               b11: release candidate
+                               In case of release candidate the lowest two bits of the highest nibble
+                               together with type indicate the release candidate number. E.g. 0xD101
+                               represents release candidate D of version 1.01.
+                               Note that there can only be 4 release candidates per version.
+                               uint16                   id: of the value being returned
+  7             Get            uint8                   flags: defined below
+                               type depends on id      value
+                               uint16                  id of the value which was set
+  8             Set            uint8                   flags: defined below
+                               type depends on id      value
+
+The following set / get flags are currently defined (reply):
+  Flag      Name                            Meaning
+  0x01      Unknown Id                      The specified id does not exist
+  0x02      Not supported                   Attempting to write to a read only value
+  0x04      Parameter Error                 The new value is out of range or inconsistent
+Get and Set items
+Product information registers
+
+The BMV contains both hard-coded and configurable product information. For registers which can be written to, this is indicated.
+
+ ID             Description                                                               Display           Type          Unit
+ 0x0100         Product Id (read-only)                                                    -                 Un32          -
+ 0x0101         Product revision (read-only) (*)                                          -                 Un24          -
+ 0x010A         Serial number (read-only)                                                 -                 String32      -
+ 0x010B         Model name (read-only)                                                    -                 String32      -
+ 0x010C         Description (*)                                                           -                 String20      -
+ 0x0120         Device uptime (read-only)                                                 -                 Un32          seconds
+ 0x0150         Bluetooth capabilities (*)                                                -                 Un32          -
+
+Note 1: items marked with (*) are available on BMV712 only
+Note 2: type String32 is a max number. The length can be 32 or less, in which case it must be zero-ended.
+Note 3: type String20 is a max number. The length can be 20 or less, in which case it must be zero-ended.
+
+
+Bluetooth capabilities (register 0x0150)
+ Bit           Name                                                      Meaning
+ 0              HAS_SUPPORT_FOR_BLE_MODE                                 Indicates whether BLE module actually supports
+                                                                         VE_REG_BLE_MODE functionality.
+ 1              BLE_MODE_OFF_IS_PERMANENT                                Indicates whether disabling Bluetooth can be reverted by any means
+                                                                         – which is not the case for the BMV, since it has a display.
+ 2..31          -                                                        Reserved for future use.
+
+Note 1: available for BMV-712 since version v4.01
+Monitor related registers
+
+ ID            Description                                      Display   Type   Unit
+ 0xED8D        Main Voltage                                     MAIN      Sn16   0.01 V
+ 0xED7D        Aux (starter) Voltage (1)                        AUX       Sn16   0.01 V
+ 0xED8F        Current                                          -         Sn16   0.1 A
+ 0xED8C        Current (2, 3)                                   -         Sn32   0.001A
+ 0xED8E        Power                                            -         Sn16   W
+ 0xEEFF        Consumed Ah                                      -         Sn32   0.1 Ah
+ 0x0FFF        SOC                                              -         Un16   0.01 %
+ 0x0FFE        TTG                                              -         Un16   minutes
+ 0xEDEC        Temperature (1)                                  -         Un16   0.01 K
+ 0x0382        Mid-point voltage (1)                            MID       Un16   0.01 V
+ 0x0383        Mid-point voltage deviation (1)                  MID       Sn16   0.1 %
+ 0xEEB6        Synchronization state                            SOC       Un8    -
+
+
+Note 1: only available on BMV-702 and BMV-712
+Note 2: available for BMV-712 since version v4.01
+Note 3: available for BMV-70x since version v3.09
+
+
+
+Historic data registers
+
+ ID             Description                                     Display   Type   Unit
+ 0x0300         Depth of the deepest discharge                  A         Sn32   0.1 Ah
+ 0x0301         Depth of the last discharge                     B         Sn32   0.1 Ah
+ 0x0302         Depth of the average discharge                  C         Sn32   0.1 Ah
+ 0x0303         Number of cycles                                D         Un32
+ 0x0304         Number of full discharges                       E         Un32
+ 0x0305         Cumulative Amp Hours                            F         Sn32   0.1 Ah
+ 0x0306         Minimum Voltage                                 G         Sn32   0.01 V
+ 0x0307         Maximum Voltage                                 H         Sn32   0.01 V
+ 0x0308         Seconds since full charge                       I         Un32   seconds
+ 0x0309         Number of automatic synchronizations            J         Un32
+ 0x030A         Number of Low Voltage Alarms                    L         Un32
+ 0x030B         Number of High Voltage Alarms                   M         Un32
+ 0x030E         Minimum Starter Voltage (1)                     P         Sn32   0.01 V
+ 0x030F         Maximum Starter Voltage (1)                     Q         Sn32   0.01 V
+ 0x0310         Amount of discharged energy / produced energy   R         Un32   0.01 kWh
+ 0x0311         Amount of charged energy / consumed energy      S         Un32   0.01 kWh
+
+Note 1: only available on BMV-702 and BMV-712
+Monitor settings registers
+
+ ID         Description                           Display   Type           Range            Default   Step     Unit
+ Battery settings
+ 0x1000     Battery Capacity                        01      Un16          1..9999            200       1        Ah
+ 0x1001     Charged Voltage                         02      Un16           0..95             13.2     0.1        V
+ 0x1002     Tail Current                            03      Un16          0.5..10             4       0.1       %
+ 0x1003     Charged Detection Time                  04      Un16           1..50              3        1       min.
+ 0x1004     Charge Efficiency                       06      Un16           50..99             90       1        %
+ 0x1005     Peukert Coefficient                     05      Un16           1..1.5            1.25     0.01       -
+ 0x1006     Current Threshold                       07      Un16            0..2             0.1      0.01       A
+ 0x1007     TTG Delta T                             08      Un16           0..12              3        1       min.
+ 0x1008     Discharge Floor (Relay Low Soc Set)     16      Un16           0..99              50      0.1       %
+ 0x1009     Relay Low Soc Clear                     17      Un16           0..99              90      0.1       %
+ 0x1034     User Current Zero (read only)            -      Sn16       -32768..32767          0        1     ADC count
+
+ Alarm settings
+ 0xEEFC     Alarm Buzzer                            32      Un8        0..1 (OFF, ON)         1        1        -
+ 0x0320     Alarm Low Voltage                       35      Un16            0..95             0       0.1       V
+ 0x0321     Alarm Low Voltage Clear                 36      Un16            0..95             0       0.1       V
+ 0x0322     Alarm High Voltage                      37      Un16            0..95             0       0.1       V
+ 0x0323     Alarm High Voltage Clear                38      Un16            0..95             0       0.1       V
+ 0x0324     Alarm Low Starter (1)                   39      Un16            0..95             0       0.1       V
+ 0x0325     Alarm Low Starter Clear (1)             40      Un16            0..95             0       0.1       V
+ 0x0326     Alarm High Starter (1)                  41      Un16            0..95             0       0.1       V
+ 0x0327     Alarm High Starter Clear (1)            42      Un16            0..95             0       0.1       V
+ 0x0328     Alarm Low SOC                           33      Un16            0..99             0       0.1       %
+ 0x0329     Alarm Low SOC Clear                     34      Un16            0..99             0       0.1       %
+ 0x032A     Alarm Low Temperature (1)               45      Un16    0=disabled; 174..372      0       0.01      K
+ 0x032B     Alarm Low Temperature Clear (1)         46      Un16    0=disabled; 174..372      0       0.01      K
+ 0x032C     Alarm High Temperature (1)              43      Un16    0=disabled; 174..372      0       0.01      K
+ 0x032D     Alarm High Temperature Clear (1)        44      Un16    0=disabled; 174..372      0       0.01      K
+ 0x0331     Alarm Mid Voltage *                     47      Un16            0..99             0       0.1       %
+ 0x0332     Alarm Mid Voltage Clear *               48      Un16            0..99             0       0.1       %
+ 0x031F     Alarm Acknowledge                        -      -                 -               -         -       -
+
+ Relay settings
+ 0x034F      Relay Mode                             11      Un8    0..2 (DFLT, CHRG, REM)     0        1        -
+ 0x034D      Relay Invert                           12      Un8         0..1 (OFF, ON)        0        1        -
+ 0x034E      Relay State/Control                    13      Un8       0..1 (OPEN, CLSD)       0        1        -
+ 0x100a      Relay Minimal Enable Time              14      Un16            0..500            0        1       min
+ 0x100b      Relay Disable Time                     15      Un16            0..500            0        1       min
+ 0x0350      Relay Low Voltage                      18      Un16             0..95            0       0.1       V
+ 0x0351      Relay Low Voltage Clear                19      Un16             0..95            0       0.1       V
+ 0x0352      Relay High Voltage                     20      Un16             0..95            0       0.1       V
+ 0x0353      Relay High Voltage Clear               21      Un16             0..95            0       0.1       V
+ 0x0354      Relay Low Starter (1)                  22      Un16             0..95            0       0.1       V
+ 0x0355      Relay Low Starter Clear (1)            23      Un16             0..95            0       0.1       V
+ 0x0356      Relay High Starter (1)                 24      Un16             0..95            0       0.1       V
+ 0x0357      Relay High Starter Clear (1)           25      Un16             0..95            0       0.1       V
+ 0x035A      Relay Low Temperature (1)              26      Un16    0=disabled; 174..372      0       0.01      K
+ 0x035B      Relay Low Temperature Clear (1)        27      Un16    0=disabled; 174..372      0       0.01      K
+ 0x035C      Relay High Temperature (1)             28      Un16    0=disabled; 174..372      0       0.01      K
+ 0x035D      Relay High Temperature Clear (1)       29      Un16    0=disabled; 174..372      0       0.01      K
+ 0x0361      Relay Mid Voltage (1)                  30      Un16             0..99            0       0.1       %
+ 0x0362      Relay Mid Voltage Clear (1)            31      Un16             0..99            0       0.1       %
+
+ Display settings
+ 0xEEFE     Backlight Intensity                     49      Un8              0..9             5        1         -
+ 0x0400     Backlight Always On                     50      Un8        0..1 (OFF, ON)         0        1         -
+ 0xEEF5     Scroll Speed                            51      Un8              1..5             3        1         -
+ ID         Description                             Display   Type                 Range             Default        Step           Unit
+ 0xEEE0     Show Voltage                              52      Un8              0..1 (OFF, ON)          1              1             -
+ 0xEEE1     Show Auxiliary Voltage (1)                58      Un8              0..1 (OFF, ON)          1              1             -
+ 0xEEE2     Show Mid Voltage (1)                      60      Un8              0..1 (OFF, ON)          1              1             -
+ 0xEEE3     Show Current                              53      Un8              0..1 (OFF, ON)          1              1             -
+ 0xEEE4     Show Consumed AH                          55      Un8              0..1 (OFF, ON)          1              1             -
+ 0xEEE5     Show SOC                                  56      Un8              0..1 (OFF, ON)          1              1             -
+ 0xEEE6     Show TTG                                  57      Un8              0..1 (OFF, ON)          1              1             -
+ 0xEEE7     Show Temperature (1)                      59      Un8              0..1 (OFF, ON)          1              1             -
+ 0xEEE8     Show Power                                54      Un8              0..1 (OFF, ON)          1              1             -
+
+ Commands
+ 0x1029  Zero Current (write only)                    09      -                      -                  -             -              -
+ 0x102c  Synchronize (write only)                     10      -                      -                  -             -              -
+ 0x0004  Restore Defaults (write only)                62      -                      -                  -             -              -
+ 0x1030  Clear History (write only)                   63      -                      -                  -             -              -
+
+ Miscellaneous
+ 0xEEF9    SW Version (read only)                     61      Un16          0x0000..0xFFFF              -             -        HEX (AA.BB)
+ 0xEEF6    Setup Lock                                 64      Un8            0..1 (OFF, ON)            0              1             -
+ 0xEEFB    Shunt Amps                                 65      Un16               1..9999              500             1             A
+ 0xEEFA    Shunt Volts                                66      Un16             0.001..0.1             0.05          0.001           V
+ 0xEEF7    Temperature Unit (1)                       67      Un8          0..1 (CELC, FAHR)           0              1             -
+ 0xEEF4    Temperature coefficient (1)                68      Un16                0..20                0             0.1        %CAP/°C
+ 0xEEF8    Auxiliary Input (1)                        69      Un8      0..2 (START, MID, TEMP)         0              1             -
+ 0x0FFD    Start synchronized (2,3)                   70      Un8            0..1 (OFF, ON)            1              1             -
+ 0xEC41    Settings changed timestamp (2)              -      Un32           0..0xFFFFFFFF         0xFFFFFFFF         -         seconds
+ 0x0090    Bluetooth mode (2)                         71      Un8            0..1 (OFF, ON)            1              1             -
+ 0xEEB8    DC Monitor mode (4)                        72      Sn16                 -9..8               0              1             -
+
+Note 1: only available on BMV-702 and BMV-712
+Note 2: available for BMV-712 since version v4.01
+Note 3: available for BMV-70x since version v3.09
+Note 4: available for BMV-712 since version v4.07
+
+
+Settings changed (register 0xEC41)
+ Value                  Name                    Meaning
+ 0                      Local change            One or more settings have been modified through the BMV display’s settings menu
+ 1..0xFFFFFFFE          Timestamp               One or more settings have been modified by the VictronConnect app. Timestamp represents
+                                                number of seconds since epoch: 1-1-1970 0:0:0.
+ 0xFFFF FFFF            Invalid                 Reflects that no settings have ever been modified since production or since this register was
+                                                first introduced upon a firmware update.
+
+
+
+Bluetooth mode (register 0x0090)
+ Value                 Name                     Meaning
+ 0                      OFF                     Bluetooth interface disabled
+ 1                      ON                      Bluetooth interface enabled
+ 2..7                   -                       Reserved for future use
+
+
+
+DC Monitor mode (register 0xEEB8)
+ Value                 Meaning
+ -9                     Solar charger
+ -8                     Wind turbine
+ -7                     Shaft generator
+ -6                     Alternator
+ -5                     Fuel cell
+ -4                     Water generator
+ -3                     DC/DC charger
+ -2                     AC charger
+ -1                      Generic source
+ 0                       Battery monitor
+ 1                       Generic load
+ 2                       Electric drive
+ 3                       Fridge
+ 4                       Water pump
+ 5                       Bilge pump
+ 6                       DC system
+ 7                       Inverter
+ 8                       Water heater
+
+Note 1: In the future, more device types might be added. They will be allocated such that devices mainly used for producing DC energy will
+get a negative number and devices that will mainly consume DC energy will get a positive number.
+Note 2: When the shunt is installed properly and the connected device is producing DC energy, the communicated current and power will
+be negative and positive when the connected device consuming DC energy.
+Examples
+\n at the end of the message is implied.
+
+Ping
+:154
+:501440B
+0x4401 = talking to application version 4.01
+
+Application version
+:352
+:101440F
+Like ping, application version 4.01
+
+Product Id
+:451
+:181A330
+0xA381 = BMV712
+
+Restart
+:64F
+No response, restarted
+
+Get Battery Capacity
+:70010003E
+:7001000C80076
+Value = 0x00C8 = 200Ah
+
+Set Battery Capacity
+Set to 500Ah = 0x01F4
+:8001000F40148
+:8001000F40148
+Acknowledged with the new value returned.
+
+Set Battery Capacity to 0Ah
+Set to 0Ah
+:800100000003D
+:8001004010038
+Which flags a parameter error, and the nearest valid value (1Ah)
+
+Get Battery Capacity (again)
+:70010003E
+:7001000F40149
+Still 500Ah
+2 Text Protocol
+When no VE.Direct queries are sent to the device, the charger periodically sends human
+readable (TEXT) data to the serial port. See the "VE.Direct Protocol" document for a detailed
+description of the contents and availability of the information.
+Revision Log
+15-07-2015 – rev 2
+Split into public and private part
+
+28-04-2017 – rev 3
+Revised ‘Monitor settings register’ table:
+ - Synchronized menu item numbers
+ - Added register type column
+ - Clarified register descriptions
+
+13-09-2018 – rev 4
+Replaced device id with product id
+
+02-10-2018 – rev 5
+Revised ‘Monitor settings’ table:
+ - Added newly introduced ‘initial battery state is synchronized’ setting.
+ - Added newly introduced ‘Bluetooth capabilities’ setting
+ - Added newly introduced ‘Bluetooth mode’ setting
+ - Added newly introduced ‘Settings changed’ setting
+ - Added already existing but undocumented settings
+ Updated examples section
+
+23-10-2018 – rev 6
+Renamed BMV70x to BMV700 series
+
+01-07-2021 – rev 7
+Revised ‘Monitor settings register’ table:
+ - Added DC monitor mode
+

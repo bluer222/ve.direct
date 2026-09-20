@@ -1,0 +1,1418 @@
+VE.Direct protocol
+                                                                             www.victronenergy.com
+Rev 18
+
+
+
+
+                                                            VE.Direct Protocol
+                                   BlueSolar and SmartSolar MPPT chargers
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | Fax: +31 (0)36 535 97 40
+E-mail: sales@victronenergy.com | www.victronenergy.com
+   Table of Contents
+   1     VE.Direct Protocol _______________________________________________________ 3
+       1.1      Get and Set items _________________________________________________________ 7
+       1.2      Asynchronous items _____________________________________________________ 27
+       1.3      Message examples _______________________________________________________ 27
+   2     Text Protocol __________________________________________________________ 28
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | Fax: +31 (0)36 535 97 40
+E-mail: sales@victronenergy.com | www.victronenergy.com
+1 VE.Direct Protocol
+The frame format of the VE.Direct protocol has the following general format:
+: [command] [data][data][…] [check]\n
+Where the colon indicates the start of the frame and the newline is the end of frame. The sum of all
+data bytes and the check must equal 0x55. Since the normal protocol is in text values the frames are
+sent in their hexadecimal ASCII representation, [‘0’ .. ’9’], [‘A’ .. ’F’], must be uppercase. There is no
+need to escape any characters.
+: [command] [dataHighNibble, dataLowNibble][……] [checkHigh, checkLow] \n
+Note: The command is only send as a single nibble. Numbers are sent in Little Endian format. An
+error response with value 0xAAAA is sent on framing errors.
+ Command                    Description
+ 0              Enter boot    0x51FA51FA51FA51FA51FA as payload will enable bootloader mode.
+                              Check for presence, the response is an ‘Rsp ping’ containing version and
+ 1              Ping
+                              firmware type. See the response ping message.
+                App           Returns the version of the firmware as stored in the header in an ‘Rsp
+ 3
+                version       Done’ message.
+                              Returns the Product Id of the firmware as stored in the header in an ‘Rsp
+ 4              Product Id
+                              Done’ message.
+ 6              Restart       Restarts the device, no response is sent.
+                              Returns a get response with the requested data or error is returned.
+ 7              Get           uint16                     the id of the value to get
+                              uint8                      flags, should be set to zero
+                              Returns a set response with the requested data or error is returned.
+                              uint16                     the id of the value to set
+ 8              Set
+                              uint8                      flags, should be set to zero
+                              type depends on id         value
+                              Asynchronous data message. Should not be replied.
+                              uint16                     the id of the value being returned
+ A              Async
+                              uint8                      flags, defined below
+                              type depends on id         value
+ 2, 5, 9, B-F   reserved
+VE.Direct responses are formatted in the same manner as commands, but use response codes.:
+ Response                   Description
+ 1            Done           Successful execution of the received command. Payload depends on
+                             command.
+ 3            Unknown        Unknown command, data is the unknown command.
+ 4            Error          Frame error (payload=0xAAAA), unable to enter bootloader (payload=0).
+ 5            Ping           The version number is directly interpreted from the hex representation,
+                             e.g. 0x0101 is version 1.01. The two most significant bits indicate the
+                             firmware type:
+                             b00: bootloader
+                             b01: application
+                             b10: tester
+                             b11: release candidate
+                             In case of release candidate the lowest two bits of the highest nibble
+                             together with type indicate the release candidate number. E.g. 0xD101
+                             represents release candidate D of version 1.01.
+                             Note that there can only be 4 release candidates per version.
+                             uint16                   id: of the value being returned
+ 7            Get            uint8                    flags: defined below
+                             type depends on id       value
+                             uint16                   id of the value which was set
+ 8            Set            uint8                    flags: defined below
+                             type depends on id       value
+
+The following set / get flags are currently defined (reply):
+ Flag      Name                           Meaning
+ 0x01      Unknown Id                     The specified id does not exist
+ 0x02      Not supported                  Attempting to write to a read only value
+ 0x04      Parameter Error                The new value is out of range or inconsistent
+
+Product id values
+
+ Id         Name                                    Charger           Load output         Remark (*1)
+ 0x0300     BlueSolar MPPT 70|15 (*2 *3)            12..24V-15A       15A                 -
+ 0xA040     BlueSolar MPPT 75|50 (*3)               12..24V-50A       -                   pv only
+ 0xA041     BlueSolar MPPT 150|35 (*3)              12..48V-35A       -                   pv only
+ 0xA042     BlueSolar MPPT 75|15                    12..24V-15A       15A                 -
+ 0xA043     BlueSolar MPPT 100|15                   12..24V-15A       15A                 -
+ 0xA044     BlueSolar MPPT 100|30 (*3)              12..24V-30A       -                   pv only
+ 0xA045     BlueSolar MPPT 100|50 (*3)              12..24V-50A       -                   pv only
+ 0xA046     BlueSolar MPPT 150|70                   12..48V-70A       -                   -
+ 0xA047     BlueSolar MPPT 150|100                  12..48V-100A      -                   -
+ 0xA048     BlueSolar MPPT 75|50 rev2 (*3)          12..24V-50A       -                   -
+ 0xA049     BlueSolar MPPT 100|50 rev2              12..24V-50A       -                   -
+ 0xA04A     BlueSolar MPPT 100|30 rev2              12..24V-30A       -                   -
+ 0xA04B     BlueSolar MPPT 150|35 rev2              12..48V-35A       -                   -
+ 0xA04C     BlueSolar MPPT 75|10                    12..24V-10A       10A                 -
+ 0xA04D     BlueSolar MPPT 150|45                   12..48V-45A       -                   -
+ 0xA04E     BlueSolar MPPT 150|60                   12..48V-60A       -                   -
+ 0xA04F     BlueSolar MPPT 150|85                   12..48V-85A       -                   -
+ 0xA050     SmartSolar MPPT 250|100                 12..48V-100A      -                   ble
+ 0xA051     SmartSolar MPPT 150|100 (*3 *4)         12..48V-100A      -                   ble
+ 0xA052     SmartSolar MPPT 150|85 (*3 *4)          12..48V-85A       -                   ble
+ 0xA053     SmartSolar MPPT 75|15                   12..24V-15A       15A                 ble net
+ 0xA054     SmartSolar MPPT 75|10                   12..24V-10A       10A                 ble net
+ 0xA055     SmartSolar MPPT 100|15                  12..24V-15A       15A                 ble net
+ 0xA056     SmartSolar MPPT 100|30                  12..24V-30A       -                   ble net
+ 0xA057     SmartSolar MPPT 100|50                  12..24V-50A       -                   ble net
+Id       Name                             Charger        Load output   Remark (*1)
+0xA058   SmartSolar MPPT 150|35           12..48V-35A    -             ble net
+0xA059   SmartSolar MPPT 150|100 rev2     12..48V-100A   -             ble net
+0xA05A   SmartSolar MPPT 150|85 rev2      12..48V-85A    -             ble net
+0xA05B   SmartSolar MPPT 250|70           12..48V-70A    -             ble net
+0xA05C   SmartSolar MPPT 250|85           12..48V-85A    -             ble
+0xA05D   SmartSolar MPPT 250|60           12..48V-60A    -             ble net
+0xA05E   SmartSolar MPPT 250|45           12..48V-45A    -             ble net
+0xA05F   SmartSolar MPPT 100|20           12..24V-20A    20A           ble net
+0xA060   SmartSolar MPPT 100|20 48V       12..48V-20A    100mA         ble net
+0xA061   SmartSolar MPPT 150|45           12..48V-45A    -             ble net
+0xA062   SmartSolar MPPT 150|60           12..48V-60A    -             ble net
+0xA063   SmartSolar MPPT 150|70           12..48V-70A    -             ble net
+0xA064   SmartSolar MPPT 250|85 rev2      12..48V-85A    -             ble net
+0xA065   SmartSolar MPPT 250|100 rev2     12..48V-100A   -             ble net
+0xA066   BlueSolar MPPT 100|20            12..24V-20A    20A           -
+0xA067   BlueSolar MPPT 100|20 48V        12..48V-20A    100mA         -
+0xA068   SmartSolar MPPT 250|60 rev2      12..48V-60A    -             ble net
+0xA069   SmartSolar MPPT 250|70 rev2      12..48V-70A    -             ble net
+0xA06A   SmartSolar MPPT 150|45 rev2      12..48V-45A    -             ble net
+0xA06B   SmartSolar MPPT 150|60 rev2      12..48V-60A    -             ble net
+0xA06C   SmartSolar MPPT 150|70 rev2      12..48V-70A    -             ble net
+0xA06D   SmartSolar MPPT 150|85 rev2      12..48V-85A    -             ble net
+0xA06E   SmartSolar MPPT 150|100 rev3     12..48V-100A   -             ble net
+0xA06F   BlueSolar MPPT 150|45 rev2       12..48V-45A    -             -
+0xA070   BlueSolar MPPT 150|60 rev2       12..48V-60A    -             -
+0xA071   BlueSolar MPPT 150|70 rev2       12..48V-70A    -             -
+0xA072   BlueSolar MPPT 150|45 rev3       12..48V-45A    -             -
+0xA073   SmartSolar MPPT 150|45 rev3      12..48V-45A    -             ble net
+0xA074   SmartSolar MPPT 75|10 rev2       12..24V-10A    10A           ble net
+0xA075   SmartSolar MPPT 75|15 rev2       12..24V-15A    15A           ble net
+0xA076   BlueSolar MPPT 100|30 rev3       12..24V-30A    -             -
+0xA077   BlueSolar MPPT 100|50 rev3       12..24V-50A    -             -
+0xA078   BlueSolar MPPT 150|35 rev2       12..48V-35A    -             -
+0xA079   BlueSolar MPPT 75|10 rev2        12..24V-10A    10A           -
+0xA07A   BlueSolar MPPT 75|15 rev2        12..24V-15A    15A           -
+0xA07B   BlueSolar MPPT 100|15 rev2       12..24V-15A    15A           -
+0xA07C   BlueSolar MPPT 75/10 rev3        12..24V-10A    10A           -
+0xA07D   BlueSolar MPPT 75/15 rev3        12..24V-15A    15A           -
+0xA07E   SmartSolar Charger MPPT 100/30   12V-30A        -             ble net
+0xA102   SmartSolar MPPT VE.Can 150|70    12..48V-70A    -             ble net
+0xA103   SmartSolar MPPT VE.Can 150|45    12..48V-45A    -             ble net
+0xA104   SmartSolar MPPT VE.Can 150|60    12..48V-60A    -             ble net
+0xA105   SmartSolar MPPT VE.Can 150|85    12..48V-85A    -             ble net
+0xA106   SmartSolar MPPT VE.Can 150|100   12..48V-100A   -             ble net
+0xA107   SmartSolar MPPT VE.Can 250|45    12..48V-45A    -             ble net
+0xA108   SmartSolar MPPT VE.Can 250|60    12..48V-60A    -             ble net
+0xA109   SmartSolar MPPT VE.Can 250|70    12..48V-70A    -             ble net
+0xA10A   SmartSolar MPPT VE.Can 250|85    12..48V-85A    -             ble net
+0xA10B   SmartSolar MPPT VE.Can 250|100   12..48V-100A   -             ble net
+0xA10C   SmartSolar MPPT VE.Can 150|70    12..48V-70A    -             ble net
+         rev2
+0xA10D   SmartSolar MPPT VE.Can 150|85    12..48V-85A    -             ble net
+         rev2
+0xA10E   SmartSolar MPPT VE.Can 150|100   12..48V-100A   -             ble net
+         rev2
+0xA10F   BlueSolar MPPT VE.Can 150|100    12..48V-100A   -             -
+0xA110   SmartSolar MPPT RS 450/100       48V-100A       -             2 trackers
+0xA111   SmartSolar MPPT RS 450/200       48V-200A       -             4 trackers
+0xA112   BlueSolar MPPT VE.Can 250|70     12..48V-70A    -             -
+ Id          Name                                     Charger           Load output Remark (*1)
+ 0xA113      BlueSolar MPPT VE.Can 250|100            12..48V-100A      -                  -
+ 0xA114      SmartSolar MPPT VE.Can 250|70            12..48V-70A       -                  ble net
+             rev2
+  0xA115 SmartSolar MPPT VE.Can 250|100               12..48V-7100A -                      ble net
+             rev2
+  0xA116 SmartSolar MPPT VE.Can 250|85                12..48V-85A       -                  ble net
+             rev2
+  0xA117 BlueSolar MPPT VE.Can 150|100                12..48V-100A      -                  -
+             rev2
+Note 1: "pv only" indicates that the unit is only operational when the solar panel power is present, i.e.
+no communication is possible during the night. "ble" indicates that the unit has an internal Bluetooth
+low-energy module and can be monitored/configured using the VictronConnect app, additionally "net"
+indicates that the model supports Bluetooth VE.Smart Networking (remote sense/synchronized
+charging). "trackers" indicates that the unit has a certain amount of independent MPPT trackers.
+Note 2: There is a discrepancy between the labelling on the housing and the actual product id for the
+70|15 models. A MPPT 70|15 from year/week 1308 or later is fully identical to the MPPT 75|15. This
+means that it is capable of history logging and the street lighting functionality is available for these
+models.
+Note 3: These models are phased out (no longer being made/sold).
+Note 4: Bluetooth communication channel multiplexed with the VE.Direct port. Once the VE.Direct port
+is in use the internal Bluetooth low-energy module cannot be used anymore.
+1.1 Get and Set items
+Product information registers
+ ID        Description                          Scale       Type       Unit
+ 0x0100    Product Id (*1)                      -           un32       -
+ 0x0104    Group Id (*3)                        -           un8        -
+ 0x010A    Serial number (*1)                   -           string     -
+ 0x010B    Model name (*1)                      -           string     -
+ 0x0140    Capabilities (*2)                    -           un32       -
+Note 1: Available since firmware version 1.12 (2-bytes). Since firmware version 1.30 (4-bytes)
+Note 2: Available since firmware version 1.16
+Note 3: Available since firmware version 1.17, used for synchronized charging operation
+
+Product id (register 0x0100)
+
+Please use the regular hex command :4 to get the product id, this query works on all models and all
+software versions. The product id 2-byte response has incorrect endianness on some builds and
+should be ignored. The product id 4-byte response has consistent endianness, byte 0 = instance
+(0x00), byte 1+2 = product id, byte 3 = reserved (0xFF).
+
+Capabilities (register 0x0140)
+
+ Bit       Description
+ 0         Load output present (0=no, 1=yes)
+ 1         Rotary encoder present (0=no, 1=yes)
+ 2         History support (0=no, 1=yes)
+ 3         Batterysafe mode (0=no, 1=yes)
+ 4         Adaptive mode (0=no, 1=yes)
+ 5         Manual equalise (0=no, 1=yes)
+ 6         Automatic equalise (0=no, 1=yes)
+ 7         Storage mode (0=no, 1=yes)
+ 8         Remote on/off via rx pin (0=no, 1=yes)
+ 9         Solar timer/streetlighting (0=no, 1=yes)
+ 10        Alternative VE.Direct TX pin function (0=no, 1=yes)
+ 11        User defined load switch (0=no, 1=yes)
+ 12        Load current in TEXT protocol (0=no, 1=yes)
+ 13        Panel current (0=no, 1=yes)
+ 14        BMS support (0=no, 1=yes)
+ 15        External control support (0=no, 1=yes)
+ 16        Synchronized charging support (0=no, 1=yes)
+ 17        Alarm relay (0=no, 1=yes)
+ 18        Alternative VE.Direct RX pin function (0=no, 1=yes)
+ 19        Virtual load output (0=no, 1=yes)
+ 20        Virtual relay (0=no, 1=yes)
+ 21        Plugin display support (0=no, 1=yes)
+ 25        Load Automatic Energy Selector (0=no, 1=yes)
+ 26        Battery test (0=no, 1=yes)
+ 27        PAYGO support (0=no, 1=yes)
+Generic device control registers
+
+ID        Description                          Scale       Type       Unit
+0x0200    Device mode                          -           un8        -
+0x0201    Device state                         -           un8        -
+0x0202    Remote control used                  -           un32       -
+0x0205    Device off reason (*1)               -           un8        -
+0x0207    Device off reason (*2)               -           un32       -
+Note 1: firmware versions 1.29 up to 1.43. Available on SmartSolar models.
+Note 2: firmware version 1.44. Available on SmartSolar and MPPT RS models only.
+
+Device mode values (register 0x0200)
+
+  Mode       Meaning
+  0 or 4     Charger off (*2)
+  1          Charger on
+Note 1: The charger will only respond to on/off commands when the remote on/off bit is set in the
+remote control mask (see register 0x0202).
+Note 2: Firmware version 1.16 and lower report the "Charger off" state as 0, firmware version 1.17 and
+higher report the "Charger off" state as 4. All firmware versions will accept both 0 and 4 as a "Charger
+off" command. Furthermore firmware 1.16 and lower report the actual operation state of the unit (is
+actually charging or not). Firmware version 1.17 will report the condition of the soft on/off switch. To
+find out if the unit is operational or not check register 0x0201.
+
+Device state values (register 0x0201)
+
+ State     Name                         Meaning
+ 0         NOT_CHARGING                 Not charging
+ 2         FAULT                        Failure
+ 3         BULK                         Full current charge with charge current set-point
+ 4         ABSORPTION                   Voltage controlled with absorption voltage set-point
+ 5         FLOAT                        Voltage controlled with float voltage set-point
+ 6         STORAGE                      Voltage controlled with storage voltage set-point
+ 7         MANUAL EQUALISE              Voltage controlled with equalisation voltage set-point
+ 245       WAKE-UP                      The device is about to start (signal to external control)
+ 247       AUTO EQUALISE                Voltage controlled with equalisation voltage set-point
+ 250       BLOCKED                      Unit being updated, it is not available at the moment
+ 252       EXTERNAL CONTROL             Voltage controlled with remote voltage set-point
+ 255       UNAVAILABLE                  No information available
+Note 1: batterysafe mode will be reported as state 3 (bulk), see register 0xEDD4 to determine if
+batterysafe mode is active, available until firmware version 1.13.
+Note 2: automatic equalisation mode: firmware version 1.39 and lower report state 4 (absorption), see
+register 0xEDD4 to determine if automatic equalisation mode is active. Firmware version 1.42 and
+higher report state 247.
+Note 3: manual equalisation mode reports as state 7. It can be started using the plug-in display (setup
+menu item 10) for models that support this, the MPPT control (setup menu item 25) or by using the
+VictronConnect app.
+
+Remote control used bit-mask (register 0x0202)
+
+ Bit       Meaning
+ 0         Reserved
+ 1         Enable remote ON/OFF control
+ Bit        Meaning
+ 2..31      Reserved
+Note 1: The mask value 0x00000002 needs to be sent at least once after power-up of the charger in
+order to enable remote ON/OFF control (when using register 0x0200).
+Note 2: Bits can only be set to '1' in this register. The bits will only be cleared when the unit restarts.
+Setting reserved bits is allowed but has no effect.
+Note 3: In firmware version 1.42 and up bit 1 is set by default, so the device mode command can be
+used directly.
+
+Device off reason bit-mask (registers 0x0205,0x0207)
+
+ Bit       Meaning
+ 0         No input power (solar panels)
+ 1         Physical power switch (MPPT RS models only)
+ 2         Soft power switch (device mode or pluggable display)
+ 3         Remote input (either via VE.Direct RX pin alternate function or dedicated
+           remote input)
+ 4         Internal reason
+ 5         Pay-as-you-go out of credit
+ 6         BMS shutdown
+ 7..8      Reserved
+ 9         Battery temperature too low (charging not allowed)
+Only available on SmartSolar models.
+
+Battery settings registers
+
+WARNING: stored in non-volatile memory. Continuous writing, for example from a control loop, will
+lead to early failure.
+
+ ID         Description                                 Scale     Type       Unit
+ 0xEDFF     Batterysafe mode (*1,*9)                    -         un8        0=off, 1=on
+ 0xEDFE     Adaptive mode (*10)                         -         un8        0=off, 1=on
+ 0xEDFD     Automatic equalisation mode (*2)            -         un8        0=off, 1..250
+ 0xEDFC     Battery bulk time limit (*9)                0.01      un16       hours
+ 0xEDFB     Battery absorption time limit               0.01      un16       hours
+ 0xEDF7     Battery absorption voltage (*5)             0.01      un16       V
+ 0xEDF6     Battery float voltage (*5)                  0.01      un16       V
+ 0xEDF4     Battery equalisation voltage (*3,*5)        0.01      un16       V
+ 0xEDF2     Battery temp. compensation (*5)             0.01      sn16       mV/K
+ 0xEDF1     Battery type                                1         un8        0xFF = user
+ 0xEDF0     Battery maximum current                     0.1       un16       A
+ 0xEDEF     Battery voltage (*4)                        1         un8        V
+ 0xEDEC     Battery temperature (*8)                    0.01      un16       K, 0xFFFF=N/A
+ 0xEDEA     Battery voltage setting (*4, *7)            1         un8        V
+ 0xEDE8     BMS present (*6)                            -         un8        0=no, 1=yes
+ 0xEDE7     Tail current (*10)                          0.1       un16
+ 0xEDE6     Low temperature charge current (*8)         0.1       un16       A, 0xFFFF=use max
+ 0xEDE5     Auto equalise stop on voltage (*10)         -         un8        0=no, 1=yes
+ 0xEDE4     Equalisation current level (*10)            1         un8        % (of 0xEDF0)
+ 0xEDE3     Equalisation duration (*10)                 0.01      un16       hours
+ 0xED2E     Re-bulk voltage offset (*10)                0.01      un16       V
+ 0xEDE0 Battery low temperature level (*8)             0.01     sn16        °C
+ 0xEDCA Voltage compensation (*10)                     0.01     un16        V
+Note 1: Safe mode has been permanently disabled since firmware version 1.13.
+Note 2: Automatic equalisation mode can be set to the values 0 (=off), 1 (=every day), 2 (=every other
+day) up to 250. Introduced in firmware version 1.16.
+Note 3: Introduced in firmware version 1.16.
+Note 4: 0xEDEF can be written to force the system into a fixed battery voltage setting. Reading
+0xEDEF will always reports the operational voltage. 0xEDEA can be used to check if the battery
+voltage is set to AUTO (0), register 0xEDEA has been added since firmware version 1.12.
+Note 5: In order to change these parameters the battery type (register 0xEDF1) must be set to user
+defined (0xFF). The charger checks the validity of these parameters, for a 12V system the voltage
+settings must be between 8V and 17.4V and the temperature compensation must be between -21mV
+and +21mV. If these conditions are not met an error 119 is issued. This error can only be resolved by
+correcting the settings (e.g. reset to factory defaults) followed by a system reset (e.g. power cycle).
+Note 6: Introduced in firmware version 1.17. Set to '1' automatically when a BMS is detected. This
+register can be used to clear the BMS present setting in order to return the unit to stand-alone
+operation.
+Note 7: From firmware version 1.17 the battery voltage setting register (0xEDEA) can be written as
+well, a write to this register has the same effect as writing to the battery voltage register (0xEDEF).
+Note 8: Introduced in firmware version 1.30.
+Note 9: Removed in firmware version 1.42.
+Note 10: Introduced in firmware version 1.42.
+
+Battery type values (register 0xEDF1)
+
+10A/15A/20A Chargers (without rotary switch and load output)
+
+ Value     Name           Meaning
+ 1         TYPE_2         GEL Victron Deep discharge
+ 255       USER           User defined
+
+30A/35A/45A/50A/65A/70A/85A/100A Chargers (with rotary switch)
+
+ Value       Name           Meaning
+ 1           TYPE_1         GEL Victron Long Life (14.1V)
+ 2           TYPE_2         GEL Victron Deep discharge (14.3V)
+ 2           TYPE_3         GEL Victron Deep discharge (14.4V)
+ 3           TYPE_4         AGM Victron Deep discharge (14.7V)
+ 5           TYPE_5         Tubular plate cyclic mode 1 (14.9V)
+ 6           TYPE_6         Tubular plate cyclic mode 2 (15.1V)
+ 7           TYPE_7         Tubular plate cyclic mode 3 (15.3V)
+ 8           TYPE_8         LiFEPO4 (14.2V)
+ 255         USER           User defined
+These chargers have a rotary switch to select the battery type. When the battery type is written it can
+be set to 255 (user) so the battery parameters can be set remotely. Writing a value different from 255
+will revert back to the rotary setting. A read will either return the rotary type or 255 (user). Note that
+the labelling on the housing is numbered from 0..7
+
+MPPT RS Chargers
+
+ Value     Name               Meaning
+ 1         AGM_NORMAL         GEL Victron Deep discharge (57.6V)
+ 2         AGM_HIGH           AGM Victron Deep discharge (58.8V)
+ 3         LITHIUM            LiFePO4 (56.8V) with 2-wire BMS
+ Value    Name               Meaning
+ 255      USER               User defined
+
+
+
+Battery voltage setting values (register 0xEDEF and 0xEDEA)
+
+ Value       Meaning
+ 0           Auto detection at startup
+ 12          12V battery
+ 24          24V battery
+ 36          36V battery
+ 48          48V battery
+Note 1: For auto detection (setting 0) to work properly, the battery must be connected before the solar
+panel is connected. Reading the battery voltage register (0xEDEF) always returns the actual battery
+voltage setting (e.g. if the auto detection is active and the charger detected a 24V battery the read-
+back value will be 24). When this setting is written with a battery voltage (e.g. 12) the auto detection
+mechanism will be disabled. The 10A, 15A, 30A and 50A chargers can operate at 12 or 24V. The
+35A, 45A, 60A, 70A, 85A and 100A chargers can operate at 12, 24, 36 and 48V. Note that 36V will
+never be auto detected, since these voltages overlap with the 24V and 48V battery range. For the
+charger to operate in 36V mode, it must be set to this voltage manually (e.g. by using the
+VictronConnect app).
+Note 2: In firmware 1.26 and higher the automatic voltage detection only takes place at the first
+power-up. Once the voltage is detected the automatic voltage detection will be disabled. A voltage
+detection is considered to be successful when the battery voltage is > 7V at power-up. If the battery
+voltage is absent and only the panels are connected the charger will operate at 12V but auto detection
+remains active.
+Note 3: The MPPT 100|20 48V operates at 48V by default, it will never perform an automatic voltage
+detection, it can be set manually to 12,24 or 36V.
+Note 4: For fixed voltage models this register is read-only.
+
+2-wire BMS input - MPPT RS models only
+
+MPPT RS models only
+ ID         Description                           Scale      Type       Unit
+ 0xD0C0     Remote input mode configuration       -          un8        -
+ 0xD01F     2-wire BMS input states               -          un8        -
+
+Remote input mode configuration values (register 0xD0C0) - MPPT RS models only
+
+  Value     Meaning
+  0         Remote on/off
+  1         2-wire BMS signals
+This determines the function of the REMOTE_L and REMOTE_H pins on the user I/O connector in the
+front panel. It is only writable when a user defined battery type is selected (register 0xEDF1).
+
+2-wire BMS input states (registers 0xD01F) - MPPT RS models only
+
+ Bit      Meaning
+ 0        2-wire BMS input enabled
+ 1        allow to discharge active
+ 2        allow to charge active
+This shows the actual state of the 2-wire BMS input.
+Charger data registers
+
+ ID         Description                          Scale       Type       Unit
+ 0xEDEC     Battery temperature (*7)             0.01        un16       K
+ 0xEDDF     Charger maximum current (*1)         0.1         un16       A
+ 0xEDDD     System yield (*2)                    0.01        un32       kWh
+ 0xEDDC     User yield (resettable) (*2)         0.01        un32       kWh
+ 0xEDDB     Charger internal temperature         0.01        sn16       °C
+ 0xEDDA     Charger error code                   -           un8        -
+ 0xEDD7     Charger current (*3)                 0.1         un16       A
+ 0xEDD5     Charger voltage (*3)                 0.01        un16       V
+ 0xEDD4     Additional charger state info        -           un8        -
+ 0xEDD3     Yield today (*2)                     0.01        (*4)       kWh
+ 0xEDD2     Maximum power today (*2)             1           un16       W
+ 0xEDD1     Yield yesterday (*2)                 0.01        (*4)       kWh
+ 0xEDD0     Maximum power yesterday (*2)         1           un16       W
+ 0xEDCE     Voltage settings range (*5)          -           un16       -
+ 0xEDCD     History version (*1)                 -           un8        -
+ 0xEDCC     Streetlight version (*1)             -           un8        -
+ 0xEDC7     Equalise current maximum (*8)        1           un8        %
+ 0xEDC6     Equalise voltage maximum (*8)        0.01        un16       V
+ 0x2211     Adjustable voltage minimum (*6)      0.01        un16       V
+ 0x2212     Adjustable voltage maximum (*6)      0.01        un16       V
+Note 1: Available in firmware version 1.16 and higher.
+Note 2: Historical data is available on all models except the BlueSolar MPPT 70|15 charger (product id
+0x0300)
+Note 3: The charger voltage is the voltage across the battery terminals of the charger. The charger
+current is the sum of the current flowing to the battery and the load output. To report the battery
+current the load current (0xEDAD) must be subtracted manually.
+Note 4: The type is an un32 up to and including v1.12, in higher versions it is an un16.
+Note 5: The low-byte is the minimum system voltage and the high byte is maximum system voltage
+(both in 1V units). Available in firmware version 1.16 and higher.
+Note 6: Available in firmware version 1.30. These indicate the allowed voltage adjustment range for
+absorption, float and equalisation settings.
+Note 7: Available in firmware version 1.42. This shows the battery temperature if a BMV or a Smart
+Battery Sense is connected via VE.Smart networking.
+Note 8: MPPT RS models only.
+
+Additional charger state info bit-mask (register 0xEDD4)
+
+  Bit      Meaning
+  0        Safe mode active (*1,*3)
+  1        Automatic equalisation active (*2,*3)
+  4        Temperature dimming active
+  6        Input current dimming active
+Note 1: Safe mode has been permanently disabled since firmware version 1.13.
+Note 2: Automatic equalisation is introduced in firmware version 1.16.
+Note 3: Since firmware version 1.42 this information is moved to register 0x0201, these bits are no
+longer used.
+Charger error code values (register 0xEDDA)
+
+ Error     Meaning
+ 0         No error
+ 2         Battery voltage too high
+ 3..5      Battery temperature sensor issue
+ 6..8      Battery voltage sensor issue
+ 14        Battery temperature too low (charging not allowed)
+ 17        Charger internal temperature too high
+ 18        Charger excessive output current
+ 19        Charger current polarity reversed
+ 20        Charger bulk time expired (when 10 hour bulk time protection active)
+ 21        Charger current sensor issue (bias not within expected limits during off state)
+ 22,23     Charger internal temperature sensor issue
+ 26        Charger terminals overheated
+ 27        Charger short-circuit
+ 28        Converter issue (dual converter models, one of the converters is not working)
+ 29        Battery over-charge protection
+ 33        Input voltage too high
+ 34        Input excessive current
+ 38        Input shutdown (due to excessive battery voltage)
+ 39        Input shutdown (current flowing while the converter is switched off)
+ 66        Incompatible device in the network (for synchronized charging)
+ 67        BMS connection lost
+ 68        Network misconfigured (e.g. combining ESS with ve.smart networking)
+ 116       Calibration data lost
+ 117       Incompatible firmware (i.e. not for this model)
+ 119       Settings data invalid / corrupted (use restore to defaults and reset to recover)
+Notes: Error 19 is disabled since firmware version 1.15, it can be safely ignored in older versions.
+Error 21 can occur at start-up/shutdown it can be ignored for 5 minutes, this is resolved in firmware
+version 1.16. Errors 26 and 38 are added in firmware version 1.16. Error 34 is removed in firmware
+version 1.29. Error 116 also occurs if the firmware on a SmartSolar unit is downgraded from v1.40 or
+higher to v1.39 or lower.
+
+DC channel registers - MPPT RS models only
+
+ ID         Description                          Scale      Type       Unit
+ 0xED8B     Battery ripple voltage               0.01       un16       V
+ 0xED8D     Battery voltage (replaces 0xEDD5)    0.01       sn16       V
+ 0xED8F     Battery current (replaces 0xEDD7)    0.1        sn16       A
+Solar panel data registers
+
+ ID         Description                           Scale       Type       Unit
+ 0x0244     Number of MPPT trackers (*4)          -           un8        -
+ 0xEDBF     Panel maximum current (*4)            0.1         un16       A
+ 0xEDBC     Panel power                           0.01        un32       W
+ 0xEDBB     Panel voltage                         0.01        un16       V
+ 0xEDBD     Panel current (*1)                    0.1         un16       A
+ 0xEDB8     Panel maximum voltage (*2)            0.01        un16       V
+ 0xEDB3     Tracker mode (*3)                     -           un8        -
+ 0xEDB2     Panel starting voltage (*4)           0.01        un16       V
+ 0xEDB1     Panel input resistance (*4)           1           un32       Ohm
+Note 1: The panel current is not available in the 10A/15A/20A chargers.
+Note 2: The maximum allowed panel voltage is added in firmware version 1.16.
+Note 3: Added in firmware version 1.42. 0 = off, 1 = voltage/current limited, 2 = MPP tracker.
+Note 4: MPPT RS models only.
+
+Solar panel data individual MPPT trackers registers - MPPT RS models only
+
+The MPPT RS has multiple trackers. You can access the individual tracker information using the
+following registers. The panel power register (0xEDBC) gives the combined power for the entire unit.
+ Description                           Tracker1    Tracker2   Tracker3    Tracker4
+ Panel power (see 0xEDBC)              0xECCC      0xECDC     0xECEC      0xECFC
+ Panel voltage (see 0xEDBB)            0xECCB      0xECDB     0xECEB      0xECFB
+ Panel current (see 0xEDBD)            0xECCD      0xECDD     0xECED      0xECFD
+ Tracker mode (see 0xEDB3)             0xECC3      0xECD3     0xECE3      0xECF3
+Use register 0x0244 to determine how many trackers the connected MPPT RS supports.
+Load output data/settings registers
+These registers are only available on the models that have a load output (10A/15A/20A models).
+
+ ID        Description                            Scale     Type       Unit
+ 0xEDAD    Load current                           0.1       un16       A
+ 0xEDAC    Load offset voltage                    0.01      un8        V
+ 0xEDAB    Load output control                    -         un8        -
+ 0xEDA9    Load output voltage (*1)               0.01      un16       V
+ 0xEDA8    Load output state                      -         un8        -
+ 0xED9D    Load switch high level (*2)            0.01      un16       V
+ 0xED9C    Load switch low level (*2)             0.01      un16       V
+ 0xED91    Load output off reason (*3)            -         un8        -
+ 0xED90    Load AES timer (*4)                    1         un16       minute
+Note 1: The load output voltage is only available on smart solar 10A/15A/20A chargers.
+Note 2: The user defined load switch mode is introduced in firmware version 1.15. Note that this
+function does not work in combination with 24V operation, please use firmware version 1.16 if this
+functionality is required. The user defined load switch is not available on the MPPT 70|15.
+Note 3: Added in firmware version 1.20. Available on SmartSolar models.
+Note 4: Added in firmware version 1.26. Available on SmartSolar models with a load output.
+
+Load output state values (register 0xEDA8)
+
+ State    Name           Meaning
+ 0        OFF            Load output is off
+ 1        ON             Load output is on
+
+Load output control values (register 0xEDAB)
+
+ Value    Name           Meaning
+ 0        OFF            Load output off
+ 1        AUTO           Automatic control / batterylife (default)
+ 2        ALT1           Alternative control 1 (off<11.1V, on>13.1V)
+ 3        ALT2           Alternative control 2 (off<11.8V, on>14.0V)
+ 4        ON             Load output on (use with caution, no discharge guard)
+ 5        USER1          User defined settings 1 (off<Vlow, on>Vhigh) (*2)
+ 6        USER2          User defined settings 2 (off<Vlow<on<Vhigh<off) (*2)
+ 7        AES            Automatic Energy Selector (*3)
+
+ Bit       Description
+ 7         Lighting controller timer (1=active)
+Note 1: Make sure to mask the lower 4 bits when using the load output control values, the upper 4 bits
+are reserved for other purposes.
+Note 2: The user defined settings make use of the load switch high and low level registers. This
+feature is introduced in firmware version 1.15.
+Note 3: The automatic energy selector can be customized by the load switch high (switch on level),
+load switch low level (switch off level) and AES timer (on duration when between the on and off levels)
+registers. This feature is introduced in firmware version 1.26 and is available on SmartSolar models
+with a load output.
+Load output off reason bit-mask (register 0xED91)
+
+ Bit      Meaning
+ 0        Battery low
+ 1        Short circuit
+ 2        Timer program
+ 3        Remote input (VE.Direct RX pin alternate function)
+ 4        Pay-as-you-go out of credit
+ 5        Reserved
+ 6        Reserved
+ 7        Device starting up
+Note: added in firmware version 1.20. Available on SmartSolar models.
+
+
+
+Relay settings registers
+These registers are only available on the models that have a relay output.
+
+ ID        Description                           Scale      Type        Unit
+ 0xEDD9    Relay operation mode                  -          un8         -
+ 0x0350    Relay battery low voltage set         0.01       un16        V
+ 0x0351    Relay battery low voltage clear       0.01       un16        V
+ 0x0352    Relay battery high voltage set        0.01       un16        V
+ 0x0353    Relay battery high voltage clear      0.01       un16        V
+ 0xEDBA    Relay panel high voltage set          0.01       un16        V
+ 0xEDB9    Relay panel high voltage clear        0.01       un16        V
+ 0x100A    Relay minimum enabled time            1          un16        minute
+
+Relay operation modes (register 0xEDD9)
+
+ Value     Description
+ 0         Relay always off
+ 1         Panel voltage high (uses 0xEDBA,0xEDB9)
+ 2         Internal temperature high (> 85°C / 185F)
+ 3         Battery voltage too low (uses 0x0350,0x0351)
+ 4         Equalisation active
+ 5         Error condition present
+ 6         Internal temperature low (< -20°C / -4F)
+ 7         Battery voltage too high (uses 0x0352,0x0353)
+ 8         Charger in float or storage
+ 9         Day detection (panels irradiated)
+ 10        Load control (relay switches according to the load control mode)
+Lighting controller timer
+
+The lighting controller (timer) functionality is available from firmware version 1.15 and higher on the
+10/15/20A models with a load output, except the BlueSolar MPPT 70|15 charger (product id 0x0300).
+ ID              Description                          Scale          Type      Unit
+ 0xEDA0 ...
+                 Timer events 0..5                    -              un32      -
+ 0xEDA5
+ 0xEDA7          Mid-point shift (*1)                 1              sn16      min
+ 0xED9B          Gradual dim speed (*2)               1              un8       s
+ 0xED9A          Panel voltage night (*3)             0.01           un16      V
+ 0xED99          Panel voltage day (*3)               0.01           un16      V
+ 0xED96          Sunset delay (*4)                    1              un16      min
+ 0xED97          Sunrise delay (*4)                   1              un16      min
+ 0xED90          AES Timer                            1              un16      min
+ 0x2030          Solar activity                       -              un8       0=dark, 1=light
+ 0x2031          Time-of-day (*5)                     1              un16      min, 0=mid-night
+Note 1: The mid-point shift can be used to compensate the difference between the solar mid-night
+(halfway between sunset and sunrise) and the actual mid-night (clock wise).
+Note 2: The gradual dimming option can be used to mask differences in day/night detection between
+individual units that are located in each other's proximity. A value of 0 (=default) means that gradual
+dimming is disabled, i.e. immediate response. Another value is interpreted as 1% change per x
+seconds, e.g. when using a value of 9 it takes 15 minutes to dim from 0 to 100%. Introduced in
+firmware version 1.16.
+Note 3: The day/night panel voltage settings can be useful to tweak the behaviour of the system, so it
+matches with the actual panel configuration. The day detection voltage must be higher than the night
+detection voltage level. The lowest detectable voltage is 11.4V. Set this option to 0 to use the built-in
+defaults. Introduced in firmware version 1.16. Since firmware version 1.26 it is possible to use voltage
+settings below 11.4V.
+Note 4: The sunset and sunrise delays can be used to make the system less sensitive for clouds
+passing over the solar panels. Introduced in firmware version 1.26.
+Note 5: The time-of-day can be read to verify the synchronization of the solar clock. It can also be
+written with the current time (the charger will use this time for 5 days before falling back to the solar
+activity). The value is the number of minutes since mid-night. A value of 0xFFFF indicates that the
+time is unknown (e.g. when the charger is not yet synchronized).
+
+Timer events (registers 0xEDA0..0xEDA5)
+
+A timer event consists of a 32-bit word with the following content
+ Bits         Description                         Scale       Type          Unit
+ 0..15        Time offset                         1           sn16          min
+ 16..23       Anchor point                        -           un8           -
+ 24..31       Dim action (0..100)                 1           un8           %
+
+
+Anchor points (bits 16..23 in registers 0xEDA0..0xEDA5)
+
+ Value     Description
+ 1         Sunset
+ 2         Mid-night
+ 3         Sunrise
+Note: The sunset and sunrise moments are absolute; using the mid-night point requires
+synchronization of the charger with the solar activity.
+VE.Direct port functions
+
+ ID         Description                            Scale       Type        Unit
+ 0xED9E     TX Port operation mode                 -           un8         -
+ 0xED98     RX Port operation mode (*1)            -           un8         -
+Note 1: The RX Port operation mode is only available on the 10A/15A/20A models since firmware
+version 1.17.
+
+VE.Direct TX Port operation modes (register 0xED9E)
+
+ Value       Description
+ 0           Normal VE.Direct communication (default)
+ 1           Pulse for every 0.01kWh harvested (100ms low)
+ 2           Lighting control pwm normal (f=160Hz, 0%=0V) (*2)
+ 3           Lighting control pwm inverted (f=160Hz, 0%=5V) (*2)
+ 4           Virtual load output (*3)
+Note 1: Any mode other than 0 effectively disables communication. In these modes the TEXT protocol
+broadcasts will be disabled. When the charger receives a valid HEX frame, it will send a response
+before falling back to mode as defined by this register.
+Note 2: Modes 2 and 3 are only available in combination with the lighting controller timer.
+Note 3: Mode 4 is only available on selected models without a real load output (typically product id
+0xA046 and higher). A VE.Direct TX digital output cable can be used to connect to a Battery Protect
+or DC/DC solid state relay. Available since firmware version 1.17.
+
+VE.Direct RX Port operation modes (register 0xED98)
+
+ Value       Description
+ 0           Remote on/off (*2)
+ 1           Load output configuration (*2)
+ 2           Load output on/off remote control (inverted)
+ 3           Load output on/off remote control (normal) (*1)
+Note 1: Added in firmware version 1.26.
+Note 2: "Load output configuration" is the default behaviour for models with a load output. "Remote
+on/off" is the default behaviour for models without a load output.
+
+
+
+Restore factory defaults
+
+ ID     Description
+ 0x0004 Restore default
+When a write message is addressed to register Id 0x0004, all settings of the device, with the
+exception of the factory calibration data, will be restored to the factory default values. The data part of
+this message is ignored.
+History data
+
+Historical data is available on all models except the BlueSolar MPPT 70|15 charger (product id
+0x0300). The history registers are introduced in firmware version 1.16.
+
+ ID             Description
+ 0x1030         Clear history
+ 0x104F         Total history
+ 0x1050 ...
+                Daily history (0x1050=today, 0x1051=yesterday, ...) (*1)
+ 0x106E
+ 0x10A0 ...
+                Daily MPPT history (0x10A0=today, 0x10A1=yesterday, ...) (*1, *2)
+ 0x10BE
+Note 1: When reading a daily history register that does not (yet) contain data the response will be an
+empty record with its flag position set to 0x04.
+Note 2: Only available on units that have multiple MPPT trackers like the MPPT RS models.
+
+History total record (register 0x104F) - firmware version 1.16 - 19 bytes payload
+
+ Bytes        Description                          Scale       Type        Unit
+ 0            Reserved (=0)                        -           un8         -
+ 1            Error database (=0)                  -           un8         -
+ 2            Error 0 (most recent) (*1)           -           un8         -
+ 3            Error 1 (*1)                         -           un8         -
+ 4            Error 2 (*1)                         -           un8         -
+ 5            Error 3 (oldest) (*1)                -           un8         -
+ 6            Total yield (user resettable)        0.01        un32        kWh
+ 10           Total yield (system)                 0.01        un32        kWh
+ 14           Panel voltage maximum                0.01        un16        V
+ 16           Battery voltage maximum              0.01        un16        V
+ 18           Number of days available (*2)        -           un8         -
+Note 1: For the error meanings see the description of register 0xEDDA.
+Note 2: When the charger starts for the first time or after a history reset the 30 day backlog buffer will
+be empty. This field can be used to know in advance how many days of history are available without
+having to query all the individual daily registers.
+
+History total record (register 0x104F) - firmware version 1.17 and higher - 34 bytes payload
+
+ Bytes        Description                          Scale       Type        Unit
+ 0            Reserved (=1)                        -           un8         -
+ 1..18        See table above (*1)
+ 19           Battery voltage minimum              0.01        un16        V
+ 21           13 reserved bytes (=0xFF)            -           un8         -
+Note 1: Bytes 1 to 18 are identical to firmware 1.16.
+History day record (registers 0x1050..0x106E) - 34 bytes payload
+
+ Bytes     Description                         Scale       Type      Unit
+ 0         Reserved (=0)                       -           un8       -
+ 1         Yield                               0.01        un32      kWh
+ 5         Consumed (*1)                       0.01        un32      kWh
+ 9         Battery voltage maximum             0.01        un16      V
+ 11        Battery voltage minimum             0.01        un16      V
+ 13        Error database (=0)                 -           un8       -
+ 14        Error 0 (most recent) (*2)          -           un8       -
+ 15        Error 1 (*2)                        -           un8       -
+ 16        Error 2 (*2)                        -           un8       -
+ 17        Error 3 (oldest) (*2)               -           un8       -
+ 18        Time bulk                           1           un16      min
+ 20        Time absorption                     1           un16      min
+ 22        Time float                          1           un16      min
+ 24        Power maximum                       1           un32      W
+ 28        Battery current maximum             0.1         un16      A
+ 30        Panel voltage maximum               0.01        un16      V
+ 32        Day sequence number (*3)            -           un16      -
+Note 1: Consumed is not available on models without load output (reads as 0xFFFFFFFF).
+Note 2: For the error meanings see the description of register 0xEDDA.
+Note 3: The sequence number can be used to uniquely identify a day. This number will stay the same
+while data traverses through the 30 day backlog buffer. For each new day added the sequence
+number will be increased by 1, at the count of 365 it will be wrapped to 0.
+
+
+History MPPT day record (registers 0x10A0..0x10BD)
+
+The MPPT RS have multiple trackers. You can access the individual tracker history data using these
+registers. The 'regular' history day records give the combined data for the entire unit.
+ Bytes     Description                          Scale      Type      Unit
+ 0         Reserved (=0)                        -          un8       -
+ 1         Day sequence number                  -          un16      -
+ 3         Energy tracker #1                    0.01       un16      kWh
+ 5         Energy tracker #2                    0.01       un16      kWh
+ 7         Energy tracker #3                    0.01       un16      kWh
+ 9         Energy tracker #4                    0.01       un16      kWh
+ 11        Peak power tracker #1                1          un16      W
+ 13        Peak power tracker #2                1          un16      W
+ 15        Peak power tracker #3                1          un16      W
+ 17        Peak power tracker #4                1          un16      W
+ 19        Voc max tracker #1                   0.01       un16      V
+ 21        Voc max tracker #2                   0.01       un16      V
+ 23        Voc max tracker #3                   0.01       un16      V
+ 25        Voc max tracker #4                   0.01       un16      V
+ 27        9 reserved bytes (=0xFF)             -          un8       -
+Use register 0x0244 to determine how many trackers the connected MPPT RS supports. Fields that
+are not present in the given unit report as 0xFFFF.
+Pluggable display settings
+Only available on models with the pluggable LCD display.
+
+ID       Description                                                    Type
+0x0400   Display backlight mode (0 = keypress, 1 = on, 2 = auto)        un8
+0x0401   Display backlight intensity (0 = always off, 1 = on)           un8
+0x0402   Display scroll text speed (1 = slow, 5 = fast)                 un8
+0x0403   Display setup lock (0 = unlocked, 1 = locked) (*2)             un8
+0x0404   Display temperature unit (0 = Celsius, 1 = Fahrenheit) (*2)    un8
+Note 1: These registers are primarily intended for settings migration to be used by the firmware
+updater.
+Note 2: Since firmware v1.30.
+
+
+Internal display settings
+Only applies to the MPPT RS models.
+
+ID       Description                                                    Type
+0x0401   Display backlight intensity (0 = always off, 1 = on)           un8
+0x0402   Display scroll text speed (1 = slow, 5 = fast)                 un8
+0x0404   Display temperature unit (0 = Celsius, 1 = Fahrenheit)         un8
+0x0406   Display contrast (*1)                                          un8
+0x0408   Display backlight mode (0 = off, 1 = on, 2 = auto)             un8
+Note 1: only for certain models, does not apply to the rectangular LCD display with white characters
+on the dark blue background as this display lacks hardware support for contrast adjustment.
+Remote control registers - firmware v1.29 or higher (v1.02 or higher for VE.Can MPPTs)
+
+Note: the remote control registers were already present since firmware version 1.17 for experimental
+purposes. Remote control is officially supported since firmware version 1.29 (v1.02 for VE.Can
+MPPTs). Synchronized charging is available for firmware version 1.44 or higher (v1.02 or higher for
+VE.Can MPPTs) on SmartSolar chargers with an integrated Bluetooth device that is VE.Smart
+network capable (see the product id table page 5, look for 'ble net').
+
+ ID        Description                           Scale      Type       Unit
+ 0x2000    Charge algorithm version (*1,*8)      -          un8        -
+ 0x2001    Charge voltage set-point (*2)         0.01       un16       V
+ 0x2002    Battery voltage sense (*3)            0.01       un16       V
+ 0x2003    Battery temperature sense (*3)        0.01       sn16       °C
+ 0x2004    Remote command                        -          un8        -
+ 0x2007    Charge state elapsed time (*4, *8)    1          un32       ms
+ 0x2008    Absorption time (*4, *8)              0.01       un16       hours
+ 0x2009    Error code (*8)                       -          un8        -
+ 0x200A    Battery charge current (*8)           0.001      sn32       A
+ 0x200B    Battery idle voltage (*8)             0.01       un16       V
+ 0x200C    Device state (*8)                     -          un8        -
+ 0x200D    Network info (*7)                     -          un8        -
+ 0x200E    Network mode                          -          un8        -
+ 0x200F    Network status register               -          un8        -
+ 0x2013    Total charge current (*8)             0.001      sn32       A
+ 0x2014    Charge current percentage (*5)        1          un8        %
+ 0x2015    Charge current limit (*6)             0.1        un16       A
+ 0x2018    Manual equalisation pending (*8)      -          un8        -
+ 0x2027    Total DC input power (*8)             0.01       un32       W
+Note 1: The charge algorithm version in combination with register 0x0104 is used for identification and
+grouping of chargers specifically intended for synchronized charging.
+Note 2: The charge voltage set-point can be read from the master unit and written to the slave units so
+the group will behave as one unit. See network mode register 0x200E.
+Note 3: Remote sensor data can be written to a charger, it will adapt its charge profile accordingly.
+Reserved values 0xFFFF (voltage) and 0x7FFF (temperature) can be written to indicate that the data
+is no longer available so the charger switches back to internal behaviour. These values must be
+written frequently, the timeout is set to 1 minute after which the unit switches back to internal
+behaviour.
+Note 4: The time data must be copied from the master unit to the slave units. This ensures that the
+slaves have the information required to take over the master role if needed (e.g. when the master is
+switched off).
+Note 5: Deprecated, replaced by 0x2015 (was present in firmware version 1.17 only).
+Note 6: Firmware version 1.19 and higher (v1.02 or higher on VE.Can MPPTs). See network mode
+register 0x200E.
+Note 7: Added in firmware version 1.42 (v1.02 on VE.Can MPPTs).
+Note 8: Implemented in firmware version 1.44 or higher (v1.02 or higher on VE.Can MPPTs) only on
+SmartSolar models that support synchronised charging.
+
+Remote commands (register 0x2004)
+
+ Value     Description
+ 1         Start equalise (*1)
+ Value       Description
+ 2           Stop equalise (*1)
+ 3           Synchronize user interface (*2)
+ 4           Synchronize day event (*3)
+Note 1: Only available on models that support manual equalisation (check register 0x0140).
+Note 2: Synchronize blinking leds / icons (on a display), not used on VE.Direct.
+Note 3: First unit to detect a new day sends this message so all grouped units will update their daily
+history at the same time, not used on VE.Direct.
+
+Network mode bit definitions (register 0x200E)
+
+ Bit    Name                          Description
+ 0      Networked                     Visual indication that the unit is controlled remotely
+ 1      Slave mode                    Remote control of vset / iset / charge state
+ 2      External control mode         Remote control of vset / iset
+ 3      BMS controlled                Remote control of vset / iset & bms protection active
+ 4      Charge group master           Not used
+ 5      Charge instance master        Unit is the charge master
+ 6      Standby                       Keep unit in standby
+ 7      Reserved
+
+
+ Use cases                   Description
+ Stand-alone                 Set 0x200E to b0000000, default behavior, charger uses internal charge
+                             profile
+ Charge master               Set 0x200E to b0100001, charger uses internal charge profile
+ Slave mode                  Set 0x200E to b0000011, write to registers 0x0201 and 0x200x
+ External control mode       Set 0x200E to b0000101, write to registers 0x2001 and/or 0x2015
+ BMS mode                    Set 0x200E to b0001001, write to registers 0x2001 and/or 0x2015
+
+Networked environment
+
+The only effect of setting bit 0 is that the charger indicates that it operates in a networked
+environment, this is done by blinking a symbol on the LCD display and/or a blinking state led..
+
+Slave mode
+
+Use this mode when the charger is to be a slave of another charger. In this mode, provide the
+following values to the charger:
+
+    -   Charge voltage set-point          0x2001
+    -   Charge state (bulk/abs/...)       0x200C
+    -   Charge state elapsed time         0x2007
+    -   Absorption time                   0x2008
+    -   Battery idle voltage              0x200B
+    -   Battery charge current            0x200A
+
+The charger will automatically fall back to stand-alone mode after not receiving voltage data for 1
+minute (e.g. if the communication cable is removed).
+
+External control mode (e.g. ESS or DVCC)
+
+Set the charger in this mode to remotely control the charge voltage and/or current setpoint(s).
+Firmware versions up to and including 1.39: when in this mode, the device state always reports as
+EXTERNAL CONTROL (252). It is not showing Bulk, Absorption or anything else.
+Firmware versions 1.42 and higher: depending on the content received, if the unit receives a charge
+voltage set-point it reports EXTERNAL CONTROL (252). If the unit only receives a current set-point, it
+still uses its internal charger algorithm and it will keep reporting Bulk, Absorption, etc.
+
+The charger will automatically fall back to stand-alone mode after not receiving data for 1 minute (e.g.
+if the communication cable is removed).
+
+BMS Controlled
+
+Setting the remote BMS mode bit indicates the Solar Charger that it is controlled by a BMS.
+
+These remote control combinations are allowed:
+
+    -   Control only the current limit, the charger uses its own bulk-absorption-float state machine to
+        determine the voltage setpoint.
+    -   Control only the voltage setpoint, the charger estimates the appropriate charge state based
+        on the voltage. The current limit is set to the battery maximum current (0xEDF0).
+    -   Control both the current limit and voltage setpoint.
+
+BMS Protection mechanism:
+
+    -   Setting the Remote BMS mode bit and sending a current limit or voltage setpoint makes the
+        Solar Charger automatically enable the BMS present setting (0xEDE8), and store that to flash.
+    -   The effect of this setting is that the charger will no longer operate in stand-alone mode, it
+        requires communication from the BMS: when no data is received, it stops charging and shows
+        error #67.
+    -   To allow for a `black start`, ie. starting up from an empty battery, in the morning, the charger
+        will charge in "Float" mode for 45 seconds, so the BMS can power-up. When after 45 seconds
+        there is still no data received from the BMS, it will switch off and show error #67.
+
+Charge master mode
+When a unit is set to charge instance master mode it will periodically send the registers 0x2001,
+0x2007, 0x2008 and 0x200B using asynchronous hex-messages (:A). These messages must be
+forwarded to the slave chargers. The internal charge profile remains active in the instance master
+mode.
+The group master role is only present for compatibility with the VE.Can chargers. The VE.Direct
+chargers are unable to perform data gathering (i.e. reporting the condition of the complete charger
+group).
+
+Remote sensor data (voltage and/or temperature)
+Write the battery temperature data periodically to register 0x2003 and the battery voltage data to
+register 0x2002. Both have a timeout of 60s, after which the charger will stop using the remote
+information. The voltage information has to be within ±5V with respect to the voltage on the charger
+terminals. The charger can adapt its charging voltage up to ±2V to compensate for cable losses.
+
+Adding nodes to the network
+When a node is about to start it reports state 245 (wake-up) briefly before starting, this is the trigger
+for the network master to determine the role of the new unit. If the network master needs time to
+gather data, it can force the unit into standby by setting bit 6 in register 0x200E. The network master
+can preset link data into the unit before clearing bit 6 and allowing the unit to start-up.
+
+Network info (register 0x200D)
+This register gives an overview of the active network components, it combines the statuses of multiple
+interfaces.
+
+ Bit     Description
+ 0       Unit is controlled by a BMS
+ 1       Unit voltage set-point is controlled remotely
+ 2       Unit operates as charge slave
+ 3       Unit operates as charge master
+ 4       Unit is using ICHARGE information (battery current estimate)
+ 5       Unit is using ISENSE information (actual battery current)
+ 6       Unit is using TSENSE information
+ 7       Unit is using VSENSE information
+ 8       Unit is held in STANDBY while the network initialises
+
+
+Network status (register 0x200F)
+
+The low nibble part of this register gives feedback about the charge algorithm, it indicates if the
+charger operates stand-alone or if it is controlled remotely. This register is maintained per interface.
+
+ Value      Description
+ 0x00       Unit in slave mode (e.g. BMS or ESS controlled)
+ 0x01       Unit is group master
+ 0x02       Unit is instance master (e.g. synchronized charging)
+ 0x03       Unit is both group and instance master
+ 0x04       Unit operates stand-alone (default behavior)
+
+ Bit       Description
+ 4         Unit is using ICHARGE information
+ 5         Unit is using ISENSE information
+ 6         Unit is using TSENSE information
+ 7         Unit is using VSENSE information
+Note: bits 6+7 are added in firmware version 1.26, bits 4+5 in firmware version 1.44.
+
+
+
+Device state (register 0x200C)
+
+ State     Name                          Meaning
+ 0         NOT_CHARGING                  Not charging
+ 2         FAULT                         Failure
+ 3         BULK                          Full current charge with charge current set-point
+ 4         ABSORPTION                    Voltage controlled with absorption voltage set-point
+ 5         FLOAT                         Voltage controlled with float voltage set-point
+ 6         STORAGE (*1)                  Voltage controlled with set-point sent by the master
+ 7         MANUAL EQUALISE               Voltage controlled with equalisation voltage set-point
+ 11        POWER SUPPLY (*1)             Voltage controlled with set-point sent by the master
+ 245       WAKE-UP                       The device is about to start (signal to external control)
+ 246       REPEATED                      Voltage controlled with set-point sent by the master
+           ABSORPTION (*1)
+ 247       AUTO EQUALISE                 Voltage controlled with equalisation voltage set-point
+ 248       BATTERY SAFE (*1)             Voltage controlled with set-point sent by the master
+ 249       LOAD DETECT (*1)              Voltage controlled with set-point sent by the master
+ State    Name                         Meaning
+ 252      EXTERNAL CONTROL             Voltage controlled with remote voltage set-point
+          (*1)
+ 255      UNAVAILABLE                  No information available
+Note 1: These states are only possible when in slave mode. The voltage set-point will be the one sent
+by the master.
+
+Absorption time (register 0x2008)
+
+Firmware versions up to and including 1.39: use the available absorption time (updated when the unit
+starts or when the unit switches from absorption to float).
+Firmware versions 1.42 and higher: use the time spent in absorption (counting up when the unit is in
+absorption), the available absorption time is determined by the user configuration (adaptive mode,
+maximum absorption time). The time spent is reset if the unit is off for more than 1 hour or if the
+configuration is changed (different battery type).
+
+Battery idle voltage (register 0x200B)
+
+The battery voltage measured before the charge process starts, in a networked environment, this
+should only be measured by the first device that is about to start. Units that start later should use the
+information from the first unit.
+
+Battery charge current (register 0x200A)
+
+The actual battery current: used to check if the tail current condition is met (switch from absorption to
+float). This comes from a battery monitor (e.g. BMV).
+
+Total charge current (register 0x2013)
+
+The estimated battery current: used to check if the tail current condition is met (switch from absorption
+to float). This is determined by to summing up all the known DC battery currents in the system.
+
+Error code (register 0x2009)
+
+The network master uses this register to inject an error code into a unit. Example: if the network
+master determines that there is a configuration issue, it can inject error code 66, so the error code will
+be visible on the pluggable display and in VictronConnect.
+
+Total DC input power (register 0x2027)
+
+The total dc input power produced by the synchronized charging system. This is determined by to
+summing up all the known DC input power in the system. The network master needs to take care of
+this, on VE.CAN the MPPT chargers do this themselves, on the ve.direct interface the external
+network master needs to do this by summing up all the individual powers by reading
+VE_REG_DC_INPUT_POWER (0xEDBC) and write the sum to register 0x2027 on all the units. This
+information is used by VictronConnect and/or Venus devices so they can show a power indication in
+the device list.
+
+Charge current limit (register 0x2015)
+
+The charge current limit of the charger. This register could be used to limit/control the charge current
+of a charger on a network. It must be written to the charger regularly (more than once a minute)
+together with register 0x200E (see network mode register 0x200E for more information). Charger
+charge current limit will be the minimum value between register 0x2015 (charge current limit) and
+register 0xEDF0 (maximum battery current setting). When register 0x2015 is not used, charger will
+use the maximum battery current setting (register 0xEFF0) as charge limit.
+1.2 Asynchronous items
+The charger can send hex messages asynchronously (without prior request). This is done using :A
+messages, the format is identical to a Get response. The table below shows the MPPT firmware
+versions and the support of asynchronous messages.
+
+ Firmware            Asynchronous messages
+ 1.15 and lower      Not supported
+ 1.16                Only the history messages for totals and today (0x104F/0x1050) are sent
+                     asynchronously when their contents are changed.
+ 1.17                Like 1.16 the history messages are always sent asynchronously.
+                     Furthermore when hex messages are detected by the charger it will send most
+                     registers asynchronously when their contents change. If no incoming hex
+                     messages are detected for 2 minutes it will cease to send these messages.
+ 1.26                Added the following registers to be transmitted asynchronously:
+                     - register 0xEDD5 (charger output voltage)
+                     - register 0x2030 (solar rtc state)
+                     - register 0x2002 (vsense): transmit 0xFFFF @ timeout
+                     - register 0x2003 (tsense): transmit 0x7FFF @ timeout
+ 1.53                Text messages not suppressed/delayed anymore due to hex requests. Now the
+                     text messages will always be sent every 2 seconds. Furthermore, a response to
+                     a hex message will always wait until the text message finishes to be sent (will
+                     not be interrupted in the middle of it as it was before).
+
+
+
+1.3 Message examples
+\n at the end of the message is implied.
+Ping                                                Set Battery Maximum Current
+:154                                                Set to 10.0A = 0x0064
+:51641F9                                            :8F0ED0064000C
+0x4116 = talking to application version 1.16        :8F0ED0064000C
+                                                    Acknowledged with the new value returned.
+Application version
+:352                                                Unsupported command
+:11641FD                                            :253
+Like ping, application version 1.16                 :3020050
+                                                    Unknown response
+Product Id
+:451                                                Invalid frame (checksum wrong)
+:1000351                                            :452
+0x300 = BlueSolar MPPT 70|15                        :4AAAAFD
+                                                    Error response
+Restart
+:64F                                                Asynchronous message
+No response, restarted                              :A0102000543
+                                                    The unit reports register 0x0201 (device state)
+Get Battery Maximum Current                         with value 0x05 (float).
+:7F0ED0071
+:7F0ED009600DB
+Value = 0x0096 = 15.0A
+2 Text Protocol
+For firmware version v1.52 and below, when no VE.Direct queries are sent to the device, the
+charger periodically sends human readable (TEXT) data to the serial port. For firmware
+versions v1.53 and above, the charger always periodically sends TEXT data to the serial
+port. See the "VE.Direct Protocol" document for a detailed description of the contents and
+availability of the information.
+Changes:
+
+12-09-2012
+Added text protocol description
+
+02-01-2013
+Updated chapter 2.1 (register overview)
+Name change HEX protocol => VE.Direct protocol
+
+04-06-2013
+Updated product id overview (added new types)
+Updated the battery table for the 50A/35A chargers
+
+27-11-2013
+Updated product id overview (added new types)
+Updated description regarding the battery voltages (about 35A charger and register 0xEDEA)
+TEXT protocol part now refers to a separate document
+
+01-08-2014
+Split document into 3 parts: bootloader, private and public protocol parts
+
+22-09-2014
+Added Async message in the hex protocol definition
+Updated document to match with firmware version 1.15 (new load output related features)
+
+24-09-2014
+Updated history section, added descriptions for the history totals and daily records
+
+29-09-2014
+Fixed panel current (wrong register number). Daily history changed yield/consumed un16->un32.
+
+14-10-2014
+vreg 0x0100 (product id): updated comment and set type to un16
+vregs 0xEDD3/0xEDD1 (yield today/yesterday): update types (depends on firmware version)
+
+22-10-2014
+vreg 0xEDDB charger internal temperature
+moved day sequence number from the total record to the day record
+
+23-10-2014
+Updated product id overview (added new type 85A MINI)
+
+7-11-2014
+Updated notes (error 21) in the charger error codes section
+
+13-02-2015
+Updated product id overview (added new types rev2 devices and the 75|10)
+Updated history total record: added number of days field
+
+23-03-2015
+Updated street lighting related registers (gradual dim and panel voltage tweaks)
+Added automatic equalisation registers
+
+14-04-2015
+Added remark: the user defined load switch modes are introduced in firmware version 1.15
+
+21-04-2015
+Product id 0xA047 changed from 85A to 100A charge current
+Added capability query registers (useful for tooling/displays)
+1-05-2015
+Battery settings registers: added note 5 explaining parameter validity checks.
+
+6-05-2015
+Added new mppt types 150/45 and 150/60
+
+20-05-2015
+History total record, added new frame definition to include the minimum battery voltage
+
+29-05-2015
+Register 0x0201 (device state), added notes about the special modes batterysafe and automatic
+equalisation
+Removed product id 0xA048, the MPPT 75/50 is replaced by the MPPT 100/50
+
+12-06-2015
+Updated response code description
+
+08-09-2015
+Product id register (0x0100): added recommendation to use the :4 hex command instead
+Capabilities register (0x0140): added BMS/HUB-1 and synchronized charging definitions
+
+03-11-2015
+Added product id 0xA04F: MPPT 150/85
+
+08-01-2016 – rev 4
+Updated product id table, added new models
+Capabilities register (0x0140): added alarm relay and alternate rx pin definitions
+Added register (0xED98): RX port configuration
+
+26-02-2016
+Update examples (replaced BMV examples)
+Updated description of register 0x0200 and 0x0202
+Timer event description bit order fixed (vregs 0xEDA0..0xEDA5)
+Added virtual load output to register 0xED9E
+Capabilities register (0x0140): added virtual load output and virtual relay
+Added remote control registers section
+Added asynchronous message section
+
+25-03-2016
+Updated description of register 0x0200: v1.17 will report the on/off switch condition
+Added 'error response' description, updated message examples
+Added 10A to the relevant sections that were applicable to the 15A only.
+
+29-03-2016
+Added remark in the battery parameters section: these parameters can only be written when the user
+defined battery type is selected.
+
+08-04-2016 – rev 5
+Change in register (0xEDEA): in firmware v1.17 this register is writeable; a write has the same effect
+as writing to register (0xEDEF).
+
+12-05-2016
+BMS current setting changed from percentage to absolute current value; vreg 0x2014 (firmware
+v1.17) will be replaced by vreg 0x2015 (firmware v1.19).
+
+21-06-2016
+HUB-1 operation: dropped the requirement to set the state remotely in firmware v1.19. Added state
+252 (HUB-1) to vreg 0x0201, this state will be reported when the charger operates in HUB-1 mode.
+22-07-2016
+Updated product id table (added new SmartSolar models)
+
+10-08-2016
+Added register 0x200F (network status)
+
+31-10-2016
+Updated load output section (add load output voltage for the SmartSolar models)
+Updated product id table (added new SmartSolar models)
+
+12-12-2016
+Update load output section (add load output off reason, update in rx operation modes)
+
+15-12-2016
+Updated product id table (added new SmartSolar models)
+
+21-06-2017 – rev 6
+Updated registers 0xEDEF and 0xEDEA: automatic voltage detection mechanism changed
+Updated register 0x0140 (capabilities): added new values 21 and 25
+Add registers 0xED96 and 0xED97 (sunrise/sunset delays)
+Add register 0xED91 (load output off reason)
+Add register 0xED90 (aes timer)
+Updated register 0xEDAB (load output control): added option 7
+Updated register 0xED98 (rx port): added option 3
+Updated register 0x200F (network status): added tsense/vsense feedback
+Updated register 0x0201 (device state): added manual equalisation.
+Updated description of asynchronous items: added changes in firmware version 1.26
+
+30-06-2017
+Updated product id table (added new SmartSolar model 100/20 rev2)
+
+06-12-2017
+Updated section about remote controlling the charger (BMS/ESS)
+Add register 0x0205 (device off reason)
+Updated product id table
+
+19-02-2018 – rev 7
+Update document to match with firmware 1.30
+Rename HUB-1 to ESS
+Updated product id table
+
+13-09-2018
+Replaced device id with product id
+Update description of the product id vreg (0x0100)
+
+11-09-2019
+Update document to match with firmware versions 1.42 and 1.44
+Rename ESS to External control
+Add registers for the charger algorithm (more customization options)
+Add/update registers for the synchronized charger operation
+
+03-10-2019 – rev8
+Add SmartSolar VE.Can models to the product id values table
+Update the remote control registers table (update data formats and add 0x2027)
+Update description of Error code (register 0x2009)
+
+02-12-2019 – rev9
+Add Link Device state (register 0x200C) description
+03-12-2019 – rev10
+Add scale, type and unit for the Adaptive mode register (0xEDFE) on the battery settings registers
+table.
+
+15-06-2020 – rev11
+Fixed standby and instance master bits in network mode use cases .
+
+16-06-2020 – rev12
+Added VE_REG_LINK_BATTERY_IDLE_VOLTAGE (0x200B) and VE_REG_LINK_DEVICE_STATE
+(0x200C) on the list of VREGs that are periodically sent by the charge master.
+
+17-06-2020 – rev13
+Remove VE_REG_LINK_DEVICE_STATE (0x200C) on the list of VREGs that are periodically sent by
+the charge master.
+
+08-10-2020 – rev14
+Update asynchronous items table with the new changes to the text messages done on v1.53 fw.
+
+01-02-2021 – rev15
+Update text protocol short description.
+
+01-03-2021 – rev16
+Fix Load offset voltage (0xEDAC) data type, from un16 to un8.
+Fix Charger maximum current (0xEDDF) data scale, from 0.01 to 0.1.
+
+05-11-2021 – rev17
+Add description to the charge current limit register (0x2015).
+Add warning to the battery settings to inform user that those should not be changed too often.
+Update product id list (add products 0xA066 to 0xA07B and 0xA10C to 0xA117).
+Changed references to “parallel charging” to “synchronized charging”.
+
+15-11-2021 – rev18
+Updated product id table.
+Add MPPT RS specific register information.
+

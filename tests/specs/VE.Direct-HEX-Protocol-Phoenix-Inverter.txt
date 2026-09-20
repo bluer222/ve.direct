@@ -1,0 +1,656 @@
+ VE.Direct protocol
+                                                                                         www.victronenergy.com
+ Rev 5
+
+
+
+
+                                                                      VE.Direct Protocol
+                                                                              Phoenix Inverters
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | Fax: +31 (0)36 535 97 40
+E-mail: sales@victronenergy.com | www.victronenergy.com
+   Table of Contents
+   1      VE.Direct Protocol .............................................................................................................. 3
+                  VE.Direct commands ............................................................................................................ 3
+                  Product ID values .................................................................................................................. 5
+                  Message examples .................................................................................................................. 7
+                  Text Protocol .......................................................................................................................... 7
+   2      Inverter register description ............................................................................................... 8
+                  Saving and Reverting registers............................................................................................. 8
+                  Product information registers .............................................................................................. 9
+                  Generic device status registers ........................................................................................... 10
+                  Generic device control registers ......................................................................................... 12
+                  Inverter operation registers ................................................................................................ 13
+                  User AC-out control registers ............................................................................................ 13
+                  User battery control registers ............................................................................................. 15
+                  Relay control registers ........................................................................................................ 16
+   Revision Log ............................................................................................................................ 17
+
+
+
+
+Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands
+General phone: +31 (0)36 535 97 00 | Fax: +31 (0)36 535 97 40
+E-mail: sales@victronenergy.com | www.victronenergy.com
+1 VE.Direct Protocol
+
+      VE.Direct commands
+The frame format of the VE.Direct protocol has the following general format:
+: [command] [data][data][…] [check]\n
+Where the colon indicates the start of the frame and the newline is the end of frame. The sum of all
+data bytes and the check must equal 0x55. Since the normal protocol is in text values the frames are
+sent in their hexadecimal ASCII representation, [‘0’ .. ’9’], [‘A’ .. ’F’], must be uppercase. There is no
+need to escape any characters.
+: [command] [dataHighNibble, dataLowNibble][……] [checkHigh, checkLow] \n
+Note: The command is only sent as a single nibble. Numbers are sent in Little Endian format. An error
+response with value 0xAAAA is sent on framing errors.
+
+  Command                      Description
+  0              Enter boot    0x51FA51FA51FA51FA51FA as payload will enable bootloader mode.
+                               Check for presence, the response is an ‘Rsp ping’ containing version
+  1              Ping
+                               and firmware type. See the response ping message.
+                 App           Returns the version of the firmware as stored in the header in an ‘Rsp
+  3
+                 version       Done’ message.
+                               Returns the Product Id of the firmware as stored in the header in an
+  4              Product Id
+                               ‘Rsp Done’ message.
+  6              Restart       Restarts the device, no response is sent.
+                               Returns a get response with the requested data or error is returned.
+  7              Get           uint16                     the id of the value to get
+                               uint8                      flags, should be set to zero
+                               Returns a set response with the requested data or error is returned.
+                               uint16                     the id of the value to set
+  8              Set
+                               uint8                      flags, should be set to zero
+                               type depends on id         value
+                               Asynchronous data message. Should not be replied.
+                               uint16                     the id of the value being returned
+  A              Async
+                               uint8                      flags, defined below
+                               type depends on id         value
+  2, 5, 9, B-F   reserved
+
+
+
+
+                                                     3
+VE.Direct responses are formatted in the same manner as commands, but use response codes.:
+  Response                  Description
+  1             Done           Successful execution of the received command. Payload depends on
+                               command.
+  3             Unknown        Unknown command, data is the unknown command.
+  4             Error          Frame error (payload=0xAAAA), unable to enter bootloader
+                               (payload=0).
+  5             Ping           The version number is directly interpreted from the hex representation,
+                               e.g. 0x0101 is version 1.01. The two most significant bits indicate the
+                               firmware type:
+                               b00: bootloader
+                               b01: application
+                               b10: tester
+                               b11: release candidate
+                               In case of release candidate the lowest two bits of the highest nibble
+                               together with type indicate the release candidate number. E.g. 0xD101
+                               represents release candidate D of version 1.01.
+                               Note that there can only be 4 release candidates per version.
+                               uint16                   id: of the value being returned
+  7             Get            uint8                   flags: defined below
+                               type depends on id      value
+                               uint16                  id of the value which was set
+  8             Set            uint8                   flags: defined below
+                               type depends on id      value
+
+The following set / get flags are currently defined (reply):
+  Flag      Name                            Meaning
+  0x01      Unknown Id                      The specified id does not exist
+  0x02      Not supported                   Attempting to write to a read only value
+  0x04      Parameter Error                 The new value is out of range or inconsistent
+
+
+
+
+                                                    4
+      Product ID values
+The product ID (PID) defines whether firmware is compatible with the device.
+Next a list of all VE.Direct and Smart inverters who support the VE.Direct Protocol as described in this
+document.
+
+  Device     Name                                                     Remark
+   A201      Phoenix Inverter 12V 250VA 230Vac                        obsolete (32k)
+   A202      Phoenix Inverter 24V 250VA 230Vac                        obsolete (32k)
+   A204      Phoenix Inverter 48V 250VA 230Vac                        obsolete (32k)
+   A211      Phoenix Inverter 12V 375VA 230Vac                        obsolete (32k)
+   A212      Phoenix Inverter 24V 375VA 230Vac                        obsolete (32k)
+   A214      Phoenix Inverter 48V 375VA 230Vac                        obsolete (32k)
+   A221      Phoenix Inverter 12V 500VA 230Vac                        obsolete (32k)
+   A222      Phoenix Inverter 24V 500VA 230Vac                        obsolete (32k)
+   A224      Phoenix Inverter 48V 500VA 230Vac                        obsolete (32k)
+   A231      Phoenix Inverter 12V 250VA 230Vac 64k
+   A232      Phoenix Inverter 24V 250VA 230Vac 64k
+   A234      Phoenix Inverter 48V 250VA 230Vac 64k
+   A239      Phoenix Inverter 12V 250VA 120Vac 64k
+   A23A      Phoenix Inverter 24V 250VA 120Vac 64k
+   A23C      Phoenix Inverter 48V 250VA 120Vac 64k
+   A241      Phoenix Inverter 12V 375VA 230Vac 64k
+   A242      Phoenix Inverter 24V 375VA 230Vac 64k
+   A244      Phoenix Inverter 48V 375VA 230Vac 64k
+   A249      Phoenix Inverter 12V 375VA 120Vac 64k
+   A24A      Phoenix Inverter 24V 375VA 120Vac 64k
+   A24C      Phoenix Inverter 48V 375VA 120Vac 64k
+   A251      Phoenix Inverter 12V 500VA 230Vac 64k
+   A252      Phoenix Inverter 24V 500VA 230Vac 64k
+   A254      Phoenix Inverter 48V 500VA 230Vac 64k
+   A259      Phoenix Inverter 12V 500VA 120Vac 64k
+   A25A      Phoenix Inverter 24V 500VA 120Vac 64k
+   A25C      Phoenix Inverter 48V 500VA 120Vac 64k
+   A261      Phoenix Inverter 12V 800VA 230Vac 64k
+   A262      Phoenix Inverter 24V 800VA 230Vac 64k
+   A264      Phoenix Inverter 48V 800VA 230Vac 64k
+   A269      Phoenix Inverter 12V 800VA 120Vac 64k
+   A26A      Phoenix Inverter 24V 800VA 120Vac 64k
+   A26C      Phoenix Inverter 48V 800VA 120Vac 64k
+   A271      Phoenix Inverter 12V 1200VA 230Vac 64k
+   A272      Phoenix Inverter 24V 1200VA 230Vac 64k
+   A274      Phoenix Inverter 48V 1200VA 230Vac 64k
+   A279      Phoenix Inverter 12V 1200VA 120Vac 64k
+   A27A      Phoenix Inverter 24V 1200VA 120Vac 64k
+   A27C      Phoenix Inverter 48V 1200VA 120Vac 64k
+   A281      Phoenix Inverter Smart 12V 1600VA 230Vac 64k             Smart, integrated Bluetooth
+   A282      Phoenix Inverter Smart 24V 1600VA 230Vac 64k             Smart, integrated Bluetooth
+   A284      Phoenix Inverter Smart 48V 1600VA 230Vac 64k             Smart, integrated Bluetooth
+   A291      Phoenix Inverter Smart 12V 2000VA 230Vac 64k             Smart, integrated Bluetooth
+   A292      Phoenix Inverter Smart 24V 2000VA 230Vac 64k             Smart, integrated Bluetooth
+   A294      Phoenix Inverter Smart 48V 2000VA 230Vac 64k             Smart, integrated Bluetooth
+
+
+                                                   5
+Device   Name                                           Remark
+ A2A1    Phoenix Inverter Smart 12V 3000VA 230Vac 64k   Smart, integrated Bluetooth
+ A2A2    Phoenix Inverter Smart 24V 3000VA 230Vac 64k   Smart, integrated Bluetooth
+ A2A4    Phoenix Inverter Smart 48V 3000VA 230Vac 64k   Smart, integrated Bluetooth
+ A2B1    Phoenix Inverter Smart 12V 5000VA 230Vac 64k   Smart, integrated Bluetooth
+ A2B2    Phoenix Inverter Smart 24V 5000VA 230Vac 64k   Smart, integrated Bluetooth
+ A2B4    Phoenix Inverter Smart 48V 5000VA 230Vac 64k   Smart, integrated Bluetooth
+ A2E1    Phoenix Inverter 12V 800VA 230Vac 64k HS       redesign (replaces A261)
+ A2E2    Phoenix Inverter 24V 800VA 230Vac 64k HS       redesign (replaces A262)
+ A2E4    Phoenix Inverter 48V 800VA 230Vac 64k HS       redesign (replaces A264)
+ A2E9    Phoenix Inverter 12V 800VA 120Vac 64k HS       redesign (replaces A269)
+ A2EA    Phoenix Inverter 24V 800VA 120Vac 64k HS       redesign (replaces A26A)
+ A2EC    Phoenix Inverter 48V 800VA 120Vac 64k HS       redesign (replaces A26C)
+ A2F1    Phoenix Inverter 12V 1200VA 230Vac 64k HS      redesign (replaces A271)
+ A2F2    Phoenix Inverter 24V 1200VA 230Vac 64k HS      redesign (replaces A272)
+ A2F4    Phoenix Inverter 48V 1200VA 230Vac 64k HS      redesign (replaces A274)
+ A2F9    Phoenix Inverter 12V 1200VA 120Vac 64k HS      redesign (replaces A279)
+ A2FA    Phoenix Inverter 24V 1200VA 120Vac 64k HS      redesign (replaces A27A)
+ A2FC    Phoenix Inverter 48V 1200VA 120Vac 64k HS      redesign (replaces A27C)
+
+
+
+
+                                          6
+      Message examples
+\n at the end of the message is implied.
+  Ping                                                 Set Battery Maximum Current
+  :154                                                 Set to 10.0A = 0x0064
+  :51641F9                                             :8F0ED0064000C
+  0x4116 = talking to application version 1.16         :8F0ED0064000C
+                                                       Acknowledged with the new value returned.
+ Application version
+ :352                                                  Unsupported command
+ :11641FD                                              :253
+ Like ping, application version 1.16                   :3020050
+                                                       Unknown response
+ Product Id
+ :451                                                  Invalid frame (checksum wrong)
+ :1000351                                              :452
+ 0x300 = BlueSolar MPPT 70|15                          :4AAAAFD
+                                                       Error response
+ Restart
+ :64F                                                  Asynchronous message
+ No response, restarted                                :A0102000543
+                                                       The unit reports register 0x0201 (device state)
+ Get Battery Maximum Current                           with value 0x05 (float).
+ :7F0ED0071
+ :7F0ED009600DB
+ Value = 0x0096 = 15.0A
+
+
+
+
+      Text Protocol
+When no VE.Direct queries are sent to the device, the charger periodically sends human readable
+(TEXT) data to the serial port. See the "VE.Direct Protocol" document for a detailed description of the
+contents and availability of the information.
+
+
+
+
+                                                   7
+2 Inverter register description
+The register in this chapter can be accessed for reading and/or writing by using the :Get (read) and
+:Set (write) commands of the VE.Direct Protocol. Whether the connection is established by using the
+actual VE.Direct-USB cable, or via a Bluetooth Dongle makes no difference.
+
+
+
+
+      Saving and Reverting registers
+Registers used for user settings, need to be saved to none-volatile-memory (NVM) when modified.
+Unlike for most Victron products a register with a changed setting is not automatically saved
+
+After changing one or more settings it is required to execute the NvmSave command via
+0xEB99. Until this command is executed the registers will revert to the old (last saved) value after a
+power down cycle or reset.
+
+  ID     Register name                                  R/W   Type       Scale      Unit       Note
+  0xEB99 VE_REG_INV_NVM_COMMAND                         W     un8
+  0x0004 VE_REG_RESTORE_DEFAULT                         W     -
+
+
+
+2.1.1 None-volatile memory command (register 0xEB99)
+
+  Data      Command name             Description
+  0         No command               return value
+  1         NvmSave                  Save current user settings to NVM
+  2         NvmRevert                Cancel modified settings.
+                                     Load most recent saved user settings.
+  3         NvmBackup                Undo last save. Load second last time saved settings.
+                                     After an update of the FW it is possible the backup is not
+                                     available. Then the settings are reverted instead.
+  4         NvmDefault               Load the factory default values.
+                                     Identical to VE_REG_RESTORE_DEFAULT 0x0004
+
+
+
+
+2.1.2 Restore user defaults (register 0x0004)
+
+When a write message is addressed to register Id 0x0004 all user settings of the device are restored
+to the factory default values. Factory calibration data is preserved. The data part of this message is
+not required and ignored.
+
+
+
+
+                                                    8
+      Product information registers
+Read only registers with static information about the device
+  ID        Register name                              R/W      Type     Scale   Unit   Note
+  0x0100    VE_REG_PRODUCT_ID                          R        un32     -       -
+  0x0101    VE_REG_PRODUCT_REVISION                    R        un24     -       -
+            Hardware version
+  0x0102    VE_REG_APP_VER                             R        un32     -       -
+            Software version
+  0x010A    VE_REG_SERIAL_NUMBER                       R        string   -       -
+  0x010B    VE_REG_MODEL_NAME                          R        string   -       -
+  0x2203    VE_REG_AC_OUT_RATED_POWER                  R        sn16     1       VA     1)
+  0x0140    VE_REG_CAPABILITIES1                       R        un32     -       -      2)
+  0x0150    VE_REG_CAPABILITIES_BLE                    R/(W)    un32     -              3)
+  0x2202    VE_REG_AC_OUT_NOM_VOLTAGE                  R        un8      1       V      1)
+  0xEDEF    VE_REG_BAT_VOLTAGE                         R        un8      1       V      1)
+Note 1) Available since version 1.10
+Note 2) Available since version 1.15
+Note 3) Available since version 1.17 for Smart inverters only
+
+
+
+
+2.2.1 Product ID (register 0x0100)
+
+  Struct    Description
+  un8       0
+  un16      ID number of the device (PID)
+  un8       0xFE
+
+
+2.2.2 Product Revision (register 0x0101)
+
+  Struct    Description
+  un8       0
+  un16      HW revision number
+
+
+
+2.2.3 FW application version (register 0x0102)
+
+  Byte      Description
+  0         0
+  1         Minor
+  2         Major, + bits 7 and 6 indicate SW type:
+            00=bootloader
+            01=application (released)
+            02=tester
+            03=release candidate(beta)
+
+
+                                                   9
+2.2.4 Capabilities (register 0x0140)
+  Bit       Description of the option bit                             Small      Small 64k      Smart
+                                                                      32k        <= 1200VA
+                                                                      note1)
+  8         Remote input available                                    1          1              1
+  17        Built in user-relay available and support of registers:   0          0              1
+            VE_REG_RELAY_MODE and
+            VE_REG_RELAY_CONTROL
+  27        OpenPaygo token compatible                                0          version        version
+                                                                                 >=1.17         >=1.17
+  28        Support of device hibernation:                            0          0              1
+            VE_REG_DEVICE_MODE
+              = VE_REG_MODE_HIBERNATE (0xFD)
+  29        Improved load current measurement and support of          0          revision >=    1
+            registers:                                                           7,
+            VE_REG_AC_OUT_APPARENT_POWER and                                     see register
+            VE_REG_AC_LOAD_SENSE_POWER_THRESHOLD                                 0x0101
+            VE_REG_AC_LOAD_SENSE_POWER_CLEAR
+Note 1) Small 32k devices (PID A20x, A21x or A22x ) are obsolete, production stopped in November
+2016
+
+
+
+2.2.5 Capabilities BLE (register 0x0160)
+  Bit       Description of the option bit
+  0         Support Bluetooth transceiver (BLE) On/Off mode
+
+            Is “true” if the integrated BLE is running on Bluetooth-SW version
+            2.17 or higher.
+  1         BLE mode Off is permanent
+
+            Is “false” since the BLE can be enabled via VE.Direct
+Available since version 1.17 for Smart Inverters
+This register should only be accessed for reading. The write property is enabled for internal purposes
+only.
+
+
+
+        Generic device status registers
+Status registers about the current mode of operation of the device
+
+ ID        Register name                         R/W     Type              Scale        Unit        Note
+ 0x0201    VE_REG_DEVICE_STATE                   R       un8               -            -
+ 0x0207    VE_REG_DEVICE_OFF_REASON_2            R       un32              -            -           1)
+ 0x031C    VE_REG_WARNING_REASON                 R       un16              -            -
+ 0x031E    VE_REG_ALARM_REASON                   R       un16              -            -
+Note 1) Since version 1.17. To receive announcements of this register via Bluetooth BLE-SW version
+2.20 or higher is required.
+
+
+
+
+                                                   10
+2.3.1 Device state values (register 0x0201)
+  State     Name                   Meaning
+  0         Off                    Not inverting. When due to a protection the inverter will
+                                   automatically start again when the cause is solved.
+  1         Low Power              Eco load search active
+  2         Fault                  Not inverting due to a fatal active protection. A turn OFF-ON
+                                   cycle is required to enable the device again.
+  9         Inverting              Normal operating
+
+
+
+2.3.2 Device off reasons (register 0x0207)
+Each bit represents an off reason
+  Bit       Meaning (bitN = 1: active, bitN = 0: inactive)
+  0         No input power (will also cause a battery alarm)
+  2         Soft power button or SW controlled (VE.Direct or Bluetooth)
+  3         HW remote input connector
+  4         Internal reason (see alarm reason for more info)
+  5         PayGo, out of credit, need token
+
+
+
+2.3.3 Warning reasons (register 0x031C)
+Each bit represents a warning or alarm reason.
+  Bit       Meaning (bitN = 1: active, bitN = 0: inactive)
+  0         Low battery voltage
+  1         High battery voltage
+  5         Low temperature
+  6         High temperature
+  8         Overload
+  9         Poor DC connection, triggered by battery current ripple or a hot DC terminal 1)
+  10        Low AC-output voltage
+  11        High AC-output voltage
+Note 1: DC terminal temperature measurement only available in the larger models
+
+Note 2: A “High AC-output voltage” alarm occurs when the AC-output of the inverter is connected to
+mains while the inverter is turned on.
+
+
+
+
+2.3.4 Alarm reasons (register 0x031E)
+See §2.3.3 Warning reasons (register 0x031C) . But only the reason that triggered an alarm, causing
+the inverting to switch off to protect itself or the load, is shown.
+
+
+
+
+                                                  11
+      Generic device control registers
+Registers to control the mode of operation of the device
+
+ ID        Register name                           R/W          Type           Scale     Unit        Note
+ 0x0090    VE_REG_BLE_MODE                         R/W          un8            -         -           2)
+ 0x0200    VE_REG_DEVICE_MODE                      R/W          un8            -         -
+ 0xEC41    VE_REG_SETTINGS_CHANGED                 R/W          un32                                 3)
+Note 2) Since version 1.17. Smart-Inverters only, see §2.2.4 Capabilities (register 0x0140).
+
+Note 3) Since version 1.17. Time in Unix-timestamp format. Default = 0xFFFFFFFF. External
+applications can read and write to this register. It is not controlled by and has no effect on the
+operation of the inverter.
+
+
+2.4.1 BLE mode (register 0x0090)
+  State     Name                  Meaning
+  0         BLE-enabled           0 = BLE off, 1 = BLE on
+Since version 1.17, see §2.2.4 Capabilities (register 0x0140)
+
+Set 0 to disable the Bluetooth transceiver (BLE) of the Smart Inverters. When it is disabled it can be
+enabled via VE.Direct only.
+
+
+
+2.4.2 Device mode values (register 0x0200, user setting)
+  Mode      Meaning                            Note
+  2         Inverter On
+  3         Device On (multi compliant)        1)
+  4         Device Off                         VE.Direct is still enabled
+  5         Eco mode
+  0xFD      Hibernate                          VE.Direct is affected 2)
+Note 1) Available since version 1.15
+Multi compliant value 1(Device On), the response value will be 2 (Inverter On)
+
+Note 2) Available since version 1.15, see §2.2.4 Capabilities (register 0x0140). The Hibernate mode
+has impact on the VE.Direct functionality. Communication can only be started when the device sends
+a text frame, at least once per 30 seconds, or after pressing the User-button. As long as a VE.Direct
+message is received every 24 seconds the device will not enter the hibernation mode.(Note that
+communication via Bluetooth is not affected)
+
+
+
+
+                                                    12
+      Inverter operation registers
+Read only registers with measured information about the device
+  ID         Register name                              R/W   Type        Scale       Unit       Note
+  0x1040     VE_REG_HISTORY_TIME                        R     un32        1           s          1)
+  0x1041     VE_REG_HISTORY_ENERGY                      R     un32        0.01        kVAh       1)
+  0x2201     VE_REG_AC_OUT_CURRENT                      R     sn16        0.1         A
+  0x2200     VE_REG_AC_OUT_VOLTAGE                      R     sn16        0.01        V
+  0x2205     VE_REG_AC_OUT_APPARENT_POWER               R     sn32        1           VA         2)
+  0xEB4E     VE_REG_INV_LOOP_GET_IINV                   R     sn16        0.001       A
+  0xED8D     VE_REG_DC_CHANNEL1_VOLTAGE                 R     sn16        0.01        V
+             (battery voltage)
+Note 1) Since version 1.17, lifetime data
+
+Note 2) Since version 1.15, see §2.2.4 Capabilities (register 0x0140)
+
+
+
+
+      User AC-out control registers
+
+  ID        Register name                                        R/W      Type    Scale   Unit
+  0x0230    VE_REG_AC_OUT_VOLTAGE_SETPOINT                       W        un16    0.01    V
+  0x0231    VE_REG_AC_OUT_VOLTAGE_SETPOINT_MIN                   R        un16    0.01    V        1)
+  0x0232    VE_REG_AC_OUT_VOLTAGE_SETPOINT_MAX                   R        un16    0.01    V        1)
+  0x2206    VE_REG_AC_LOAD_SENSE_POWER_THRESHOLD                 W        un16    1       VA       5)
+  0x2207    VE_REG_AC_LOAD_SENSE_POWER_CLEAR                     W        un16    1       VA       5)
+  0xEB03    VE_REG_INV_WAVE_SET50HZ_NOT60HZ                      W        un8
+  0xEB04    VE_REG_INV_OPER_ECO_MODE_INV_MIN                     W        sn16    0.001 A          2)
+  0xEB06    VE_REG_INV_OPER_ECO_MODE_RETRY_TIME                  W        un8     0.25 s           3)
+  0xEB10    VE_REG_INV_OPER_ECO_LOAD_DETECT_PERIODS              W        un8     0.02/ s          4)
+                                                                                  0.016
+Note 1) Limits for user setting VE_REG_AC_OUT_VOLTAGE_SETPOINT. Out of range input levels
+will be clamped to these levels.
+
+Note 2) Eco search mode threshold based on AC-current (only for version 1.00 up to 1.14, see note 5)
+
+Note 3) Interval of the power test bursts when the Eco load search mode is active.
+
+Note 4) Since version 1.17. Duration of a power test burst, when Eco load search mode is active,
+expressed in number of periods of the AC-out frequency (either 50 or 60Hz). For some loads with a
+delayed “turn-on” response, like dimmable LED-lightbulbs, it is required to enlarge the default value in
+order to detect the load.
+
+Note 5) Since version 1.15, see Capabilities in §2.2.4 Capabilities (register 0x0140).
+Eco search mode threshold with hysteresis based on apparent power. Replaces
+VE_REG_INV_OPER_ECO_MODE_INV_MIN. Available in Smart Inverters and in all VE-Direct
+inverters with a product revision >= 7 (see Product Revision (register 0x0101))
+
+
+
+
+                                                   13
+2.6.1 Load sense power hysteresis (register 0x2206 0x2207)
+
+  user setting                                                                        Eco load
+  DEVICE_MODE          Connected load (and no active protections)                     search mode
+  Eco                  Load < VE_REG_AC_LOAD_SENSE_POWER_THRESHOLD                    active
+  Eco                  Load > VE_REG_AC_LOAD_SENSE_POWER_CLEAR                        inactive
+  On                   don't care                                                     inactive
+Note: Typically, set the CLEAR level higher than the search activate THRESHOLD to prevent
+continues switching of the eco load search mode. The required minimal difference is load/inrush-
+current dependent.
+
+2.6.2 AC out frequency (register 0xEB03)
+ State    Name                      Description
+ 0        60Hz                      AC-out frequency is 60Hz
+ 1        50Hz                      AC-out frequency is 50Hz
+Changing this setting is only effective after the NvmSave command is executed, see §2.1
+
+
+
+
+                                                 14
+       User battery control registers
+  ID         Register name                                             R/     Type    Scale    Unit
+                                                                       W
+  0x2210     VE_REG_SHUTDOWN_LOW_VOLTAGE_SET                           W      un16    0.01     V      1)
+  0x0320     VE_REG_ALARM_LOW_VOLTAGE_SET                              W      un16    0.01     V      2)
+  0x0321     VE_REG_ALARM_LOW_VOLTAGE_CLEAR                            W      un16    0.01     V      3)
+  0x2211     VE_REG_VOLTAGE_RANGE_MIN                                  R      un16    0.01     V      4)
+  0x2212     VE_REG_VOLTAGE_RANGE_MAX                                  R      un16    0.01     V      4)
+  0xEBBA     VE_REG_INV_PROT_UBAT_DYN_CUTOFF_ENABLE                    W      un8                     5)
+  0xEBB7     VE_REG_INV_PROT_UBAT_DYN_CUTOFF_FACTOR                    W      un16                    5)
+  0xEBB5     VE_REG_INV_PROT_UBAT_DYN_CUTOFF_FACTOR2000                W      un16                    5)
+  0xEBB3     VE_REG_INV_PROT_UBAT_DYN_CUTOFF_FACTOR250                 W      un16                    5)
+  0xEBB2     VE_REG_INV_PROT_UBAT_DYN_CUTOFF_FACTOR5                   W      un16                    5)
+  0xEBB1     VE_REG_INV_PROT_UBAT_DYN_CUTOFF_VOLTAGE                   R      un16    0.001 V         5)
+Note 1) Low battery voltage shutdown threshold.
+Note 2) Low battery warning threshold, also below this level the inverter will not start-up after a shut-
+down.
+Note 3) Charge detect threshold after a long-term low voltage shut down. If the battery voltage
+exceeds this level the alarm is cleared, and the inverter will restart.
+Note 4) Limits for all battery user threshold settings, e.g. VE_REG_ALARM_LOW_VOLTAGE_SET.
+Out of range input levels will be clamped to these levels.
+Note 5) Since version 1.03.
+
+
+2.7.1 Dynamic cut-off enable (register 0xEBBA)
+  State     Name                    Meaning
+  0         Disabled                Shut down threshold is defined by
+                                    VE_REG_SHUTDOWN_LOW_VOLTAGE_SET
+  1         Enabled                 Shut down threshold is a function of the AC-out current.
+                                    The effective level can be obtained via register
+                                    VE_REG_INV_PROT_UBAT_DYN_CUTOFF_VOLTAGE
+
+The dynamic cut off feature overrules the settings
+VE_REG_SHUTDOWN_LOW_VOLTAGE_SET and
+VE_REG_ALARM_LOW_VOLTAGE_SET.
+The actual shutdown threshold is a function of the load current and can be obtained via register
+VE_REG_INV_PROT_UBAT_DYN_CUTOFF_VOLTAGE
+
+
+
+
+                                                    15
+      Relay control registers
+  ID         Register name                                     R/W       Type    Scale   Unit     Note
+  0x034E     VE_REG_RELAY_CONTROL                              R/W       un8                      1)
+  0x034F     VE_REG_RELAY_MODE                                 W         un8                      1)
+Note 1) Since version 1.15, see §2.2.4 Capabilities (register 0x0140)
+
+
+
+
+2.8.1 Relay mode (register 0x034F) user setting
+  State     Name                   Meaning
+  4         Normal operation       Default, On during normal operation (warnings are ignored)
+  0         Warnings and           Off when a warning or alarm is active (inverter on)
+            alarms
+  5         Battery low            Off when a low battery warning or alarm is active
+  6         External fan           On when the internal fan is on
+  3         Disabled relay         Always Off
+  2         Remote                 Controlled by writing to VE_REG_RELAY_CONTROL (0x034E)
+
+
+
+
+2.8.2 Relay control or status (register 0x034E)
+  State       Name                   Meaning
+  0           Off                    NO = open, NC = closed
+  1           On                     NO = closed, NC = open
+The read response of this register is always is the current status of the relay. Only when the Relay
+mode is “Remote” the relays is controlled by writing 0 or 1 to this register. In other Relay modes
+writing to this register is ignored.
+
+
+
+
+                                                  16
+Revision Log
+
+1) 2018-05-24
+Initial document
+
+2) 2018-9-13
+Replaced "device id" with "product id"
+
+3) 2018-11-22
+Added changes for Smart Inverters supported since FW version 1.15
+
+4) 2019-09-27
+Added instructions on saving settings
+Added 50Hz/60Hz setting
+Added new features since FW version 1.17
+        Support Bluetooth on/off
+        Enhanced ECO load search mode timing
+
+5) 2021-09-06
+Add Product-ID for 5000VA Smart Inverters
+Added description CAPABILITIES1 bit 27
+Fix type of 0xEBBA 'VE_REG_INV_PROT_UBAT_DYN_CUTOFF_ENABLE' is un8
+
+
+
+
+                                               17
+

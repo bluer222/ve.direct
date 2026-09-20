@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ve-direct"
+version = "0.1.0"
+description = "Async Python library for Victron VE.Direct Text + HEX protocols (MPPT/BMV/Inverter/Charger/OrionXS/RS)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "ve.direct contributors" }]
+keywords = ["victron", "vedirect", "ve.direct", "mppt", "bmv", "solar"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator",
+]
+dependencies = []
+
+[project.optional-dependencies]
+serial = ["pyserial>=3.5", "pyserial-asyncio>=0.6"]
+dev = ["pyserial>=3.5", "pyserial-asyncio>=0.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ve_direct = ["py.typed"]
