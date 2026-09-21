@@ -70,12 +70,11 @@ LABEL_INFO: dict[str, dict[str, str | None]] = {
     "AC_OUT_S": {"unit": "VA", "desc": "AC output apparent power"},
     "DC_IN_V": {"unit": "0.01V", "desc": "DC input voltage (BuckBoost/OrionXS)"},
     "DC_IN_I": {"unit": "0.1A", "desc": "DC input current (BuckBoost/OrionXS)"},
-    "DC_IN_P": {"unit": "W", "desc": "DC input power (BuckBoost/OrionXS)"},
+    "DC_IN_P": {"unit": "W", "desc": "DC input power, 1W units per spec (BuckBoost/OrionXS)"},
     "CAP_BLE": {"unit": None, "desc": "BLE off-capability bitmask"},
-    "Checksum": {"unit": None, "desc": "Block checksum (not a measurement)"},
 }
 
-# raw value -> human. CS covers MPPT(0,3-8,245-248,252) + Inverter(9,11) + Charger.
+# raw value -> human. CS values per spec section CS (note: 8 is unused, omitted).
 CS_MAP: dict[int, str] = {
     0: "Off",
     1: "Low power",

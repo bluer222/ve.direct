@@ -3,6 +3,12 @@
 Wire format: ``\\r\\nLABEL\\tVALUE`` lines grouped in blocks, one block/sec,
 terminated by a ``Checksum`` line. A block is valid iff the modulo-256 sum of
 *all* bytes in the block (including newlines and the checksum byte) == 0.
+
+Spec implementation guidelines (p.11): reserve 9 bytes for the field label,
+33 bytes for the field value, max 22 fields/block. This parser is liberal
+(arbitrary label/value lengths) but caps buffered input at 8 KiB for safety;
+see :class:`TextParser` (oversized HEX candidates and Text backlog are
+truncated, never grown unbounded).
 """
 from __future__ import annotations
 
@@ -25,7 +31,11 @@ from .tables import (
     pid_name,
 )
 
-_MISSING = ("---", "")
+_MISSING_DASH = ("---",)
+# Spec defines "---" only for T (fn8) and CE/SOC/TTG (fn10,11), but the parser
+# accepts it liberally for any label (except LOAD/Alarm/Relay). Empty "" is
+# NOT in the spec; treat it as missing only for the spec'd labels above.
+_MISSING_EMPTY_LABELS = frozenset({"T", "CE", "SOC", "TTG"})
 # Victron's FAQ framehandler uppercases labels before matching CHECKSUM.
 _CHECKSUM_TAB = b"checksum\t"
 
@@ -45,7 +55,13 @@ def _find_checksum_tab(buf: bytes | bytearray, start: int = 0) -> int:
 
 
 def _decode_fw(raw: str) -> str | None:
-    """Format Text FW values such as ``208`` and ``C208``."""
+    """Format Text FW values such as ``208`` and ``C208``.
+
+    Note: C208 means "release candidate C for v2.08", rendered as
+    ``v2.08-RCC`` (RC acronym + revision C). This matches the HEX
+    AppVersion decoder (``-RC{letter}``) and is intentional, not a
+    duplicated C.
+    """
     s = raw.strip().upper()
     rc = s[0] if s and s[0].isalpha() else None
     digits = s[1:] if rc else s
@@ -57,7 +73,13 @@ def _decode_fw(raw: str) -> str | None:
 
 def _decode_fwe(raw: str) -> str | None:
     """Format Text FWE ``HHMMLL`` values, where FF denotes release."""
-    s = raw.strip().upper().zfill(6)
+    s_raw = raw.strip().upper()
+    # Spec examples are 0208FF/208FF (5-6 chars) and 020801 (beta). A 2-char
+    # input like "FF" would zfill(6) to "0000FF" -> v0.00; reject
+    # implausibly short values (need >=3 version digits + 2 build digits).
+    if len(s_raw) < 5:
+        return None
+    s = s_raw.zfill(6)
     if len(s) != 6:
         return None
     try:
@@ -97,7 +119,7 @@ class TypedValue:
 
     @property
     def percent(self) -> float | None:
-        if self.label == "SOC" and isinstance(self.value, (int, float)):
+        if self.label in ("SOC", "DM") and isinstance(self.value, (int, float)):
             return self.value / 10
         return None
 
@@ -111,14 +133,18 @@ def _decode_label(label: str, raw: str) -> TypedValue:
     info = LABEL_INFO.get(label, {"unit": None, "desc": f"Unknown label {label}"})
     unit = info["unit"]  # type: ignore[typeddict-item]
     desc = info["desc"]  # type: ignore[typeddict-item]
-    if raw in _MISSING and label not in ("LOAD", "Alarm", "Relay"):
+    if raw in _MISSING_DASH and label not in ("LOAD", "Alarm", "Relay"):
+        return TypedValue(label, raw, None, unit, desc, "No data (---)")
+    if raw == "" and label in _MISSING_EMPTY_LABELS:
         return TypedValue(label, raw, None, unit, desc, "No data (---)")
 
     human: str | None = None
     value: int | float | str | None = raw
     try:
         if label == "PID":
-            value = int(raw, 16) if raw.lower().startswith("0x") else int(raw, 0)
+            # PID is hex per the spec PID list (e.g. 0xA04A). Accept both
+            # "0xA04A" and bare "A04A"; int(x, 16) handles the 0x prefix.
+            value = int(raw.strip(), 16)
             human = pid_name(value)  # type: ignore[arg-type]
         elif label in ("CS", "ERR", "MODE", "MPPT", "MON", "AR", "WARN", "OR",
                        "H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9",
@@ -146,6 +172,9 @@ def _decode_label(label: str, raw: str) -> TypedValue:
                 human = ", ".join(decode_or(value))
             elif label == "CAP_BLE":
                 human = ", ".join(decode_cap_ble(value))
+            elif label == "TTG" and value == -1:
+                # Spec fn12: -1 means infinite (battery not discharging).
+                human = "Infinite (not discharging)"
         elif label == "T":
             value = int(raw)
             human = f"{value} °C"

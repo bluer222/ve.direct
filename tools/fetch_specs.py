@@ -10,6 +10,8 @@ automated schema validation and testing.
 from __future__ import annotations
 
 import argparse
+import datetime
+import email.utils
 import shutil
 import subprocess
 import sys
@@ -67,6 +69,25 @@ def extract_text(pdf_path: Path, txt_path: Path) -> bool:
     return True
 
 
+def remote_last_modified(url: str, timeout: float = 15.0):
+    """Fetch only headers (no download) and return the Last-Modified time.
+
+    Returns None when the server gives no usable header or the request fails.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT}, method="HEAD")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        last_mod = resp.headers.get("Last-Modified")
+    if not last_mod:
+        return None
+    try:
+        dt = email.utils.parsedate_to_datetime(last_mod)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
+
+
 def check_specs(specs_dir: Path) -> bool:
     print(f"Checking specifications in {specs_dir}:")
     all_ok = True
@@ -77,6 +98,38 @@ def check_specs(specs_dir: Path) -> bool:
         else:
             print(f"  [MISSING] {key}.txt - {info['description']}")
             all_ok = False
+
+    # Without `pdftotext` snapshots cannot be re-extracted, so mere
+    # existence/size proves nothing about freshness: compare local mtimes
+    # against the online Last-Modified headers (headers only, stdlib-only).
+    # Unverifiable freshness is a failure, not a silent pass.
+    if shutil.which("pdftotext") is None:
+        print("  WARNING: `pdftotext` not found in PATH; snapshots cannot be re-extracted.")
+        print("  Verifying snapshot freshness against online Last-Modified headers...")
+        for key, info in OFFICIAL_SPECS.items():
+            if not all_ok:
+                break
+            try:
+                remote_dt = remote_last_modified(info["url"])
+            except Exception as e:
+                print(f"  [STALE-UNKNOWN] {key}.txt - cannot verify freshness ({e})")
+                all_ok = False
+                continue
+            if remote_dt is None:
+                print(f"  [STALE-UNKNOWN] {key}.txt - server gave no Last-Modified header; freshness unverifiable")
+                all_ok = False
+                continue
+            local_dt = datetime.datetime.fromtimestamp(
+                (specs_dir / f"{key}.txt").stat().st_mtime, tz=datetime.timezone.utc
+            )
+            if remote_dt > local_dt:
+                print(
+                    f"  [STALE] {key}.txt - online copy newer "
+                    f"(remote {remote_dt:%Y-%m-%d}, local {local_dt:%Y-%m-%d}); re-run without --check"
+                )
+                all_ok = False
+            else:
+                print(f"  [FRESH] {key}.txt - up to date with online copy ({remote_dt:%Y-%m-%d})")
     return all_ok
 
 

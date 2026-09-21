@@ -43,6 +43,74 @@ class TestHex(unittest.TestCase):
             with self.assertRaises(Exception, msg=bad):
                 H.decode_line(bad)
 
+    def test_request_response_names(self):
+        # Nibble 0x3/0x4 double as request/response (BlueSolar §1, Orion §1).
+        self.assertEqual(H.REQUEST_NAMES[0x3], "AppVersion")
+        self.assertEqual(H.RESPONSE_NAMES[0x3], "Unknown")
+        self.assertEqual(H.REQUEST_NAMES[0x4], "ProductId")
+        self.assertEqual(H.RESPONSE_NAMES[0x4], "Error")
+        self.assertEqual(H.command_name(0x3, is_request=True), "AppVersion")
+        self.assertEqual(H.command_name(0x3, is_request=False), "Unknown")
+        f = H.decode_line(H.encode_frame(0x3, b""))
+        self.assertEqual(f.request_name, "AppVersion")
+        self.assertEqual(f.name, "Unknown")
+
+    def test_non_ascii_maps_to_frame_error(self):
+        from ve_direct.exceptions import FrameError
+        with self.assertRaises(FrameError):
+            H.decode_line(b":\xFF\xFE\n")
+        with self.assertRaises(FrameError):
+            H.decode_line(b":7BBED00\xFF\n")
+
+    def test_app_version_ffff_is_bluesolar(self):
+        # 2-byte FFFF must decode as BlueSolar RC, never Orion ping.
+        d = H.decode_app_version(bytes.fromhex("FFFF"))
+        self.assertEqual(d["type"], "release_candidate")
+        self.assertEqual(d["version"], "15.FF-RCF")
+        # Orion ping lives only in decode_ping_version.
+        p = H.decode_ping_version(bytes.fromhex("FF7F"))
+        self.assertIsNone(p["version"])
+        self.assertEqual(p["type"], "application")
+        p2 = H.decode_ping_version(bytes.fromhex("FFFF"))
+        self.assertIsNone(p2["version"])
+        self.assertEqual(p2["type"], "release_candidate")
+        # Release-candidate 0xD101 -> 1.01-RCD (BlueSolar §1 response 5).
+        rc = H.decode_ping_version(bytes.fromhex("01D1"))
+        self.assertEqual(rc["version"], "1.01-RCD")
+        self.assertEqual(rc["type"], "release_candidate")
+
+    def test_app_version_24_undocumented_ll(self):
+        d = H.decode_app_version_24(bytes.fromhex("00030201"))
+        self.assertIsNone(d["version"])
+        self.assertTrue(d["type"].startswith("unknown"))
+        self.assertNotEqual(d["type"], "beta")
+
+    def test_app_version_3byte_unknown(self):
+        d = H.decode_app_version(bytes.fromhex("010203"))
+        self.assertIsNone(d["version"])
+        self.assertEqual(d["type"], "unknown")
+
+    def test_register_id_restricted(self):
+        # Done payload is not a register id (e.g. product-id Done 0x4200).
+        done = H.decode_line(H.encode_frame(H.CMD_DONE, bytes.fromhex("42A0")))
+        self.assertIsNone(done.register_id)
+        ping = H.decode_line(H.encode_frame(H.CMD_PING, bytes.fromhex("FF7F")))
+        self.assertIsNone(ping.register_id)
+        unk = H.decode_line(H.encode_frame(H.CMD_UNKNOWN, b"\x03\x00"))
+        self.assertIsNone(unk.register_id)
+        err = H.decode_line(H.encode_frame(H.CMD_ERROR, bytes.fromhex("AAAA")))
+        self.assertIsNone(err.register_id)
+        get = H.decode_line(H.build_get(0xEDBB))
+        self.assertEqual(get.register_id, 0xEDBB)
+
+    def test_unknown_encoding_doc_typo(self):
+        # Orion-XS §1.3 prints :30300F4 but it fails checksum; :303004F is right.
+        self.assertEqual(H.encode_frame(0x3, b"\x03\x00"), b":303004F\n")
+        bad = H.decode_line(b":30300F4\n")
+        self.assertFalse(bad.valid)
+        good = H.decode_line(b":303004F\n")
+        self.assertTrue(good.valid)
+
 
 if __name__ == "__main__":
     unittest.main()

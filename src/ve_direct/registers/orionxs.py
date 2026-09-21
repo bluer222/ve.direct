@@ -1,3 +1,5 @@
-"""Orion XS / Smart BuckBoost DC-DC: Text labels + HEX flavor (CHG+ANY)."""
-TEXT_LABELS = ["PID", "FW", "SER#", "V", "I", "P", "DC_IN_V", "DC_IN_I",
-               "DC_IN_P", "CS", "OR", "ERR", "MODE"]
+"""Orion XS / Smart BuckBoost DC-DC: HEX flavor (see registers/__init__.py).
+
+NOTE: the former TEXT_LABELS list was dead code (no importer).
+Authoritative Text labels live in ve_direct.tables.LABEL_INFO.
+"""

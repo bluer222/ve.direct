@@ -1,5 +1,6 @@
-"""BMV/SmartShunt battery monitors: Text labels + HEX flavor."""
-TEXT_LABELS = ["PID", "FW", "SER#", "BMV", "V", "VS", "VM", "DM", "I", "P", "CE",
-               "SOC", "TTG", "Alarm", "Relay", "AR",
-               "H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10",
-               "H11", "H12", "H15", "H16", "H17", "H18", "MON"]
+"""BMV/SmartShunt battery monitors: HEX flavor (see registers/__init__.py).
+
+NOTE: the former TEXT_LABELS list was dead code (no importer) and partly
+wrong (it omitted T, which Text 3.34 Table I marks present for BMV-70x).
+Authoritative Text labels live in ve_direct.tables.LABEL_INFO.
+"""

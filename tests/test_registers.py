@@ -85,7 +85,11 @@ class TestRegisters(unittest.TestCase):
 
     def test_bmv71_flavor(self):
         self.assertIn("BMV71", R.lookup("DC_MONITOR_MODE").flavors)
-        self.assertNotIn("DC_MONITOR_MODE", R.for_flavor("BMV"))
+        # BMV-712 v4.07+ monitor register is visible in the BMV view too.
+        self.assertIn("BMV", R.lookup("DC_MONITOR_MODE").flavors)
+        self.assertIn("DC_MONITOR_MODE", R.for_flavor("BMV"))
+        self.assertIn("DC_MONITOR_MODE", R.for_flavor("BMV71"))
+        self.assertEqual(R.lookup(0xEEB8, flavor="BMV").name, "DC_MONITOR_MODE")
 
     def test_ble_mode_is_scalar_enum(self):
         reg = R.lookup("BLE_MODE")
@@ -101,6 +105,180 @@ class TestRegisters(unittest.TestCase):
 
     def test_count(self):
         self.assertGreater(len(R.REGISTERS), 90)
+
+    # --- phantom registers 0x0209/0x020A (absent from all snapshots) ---
+    def test_phantom_registers_removed(self):
+        from ve_direct.exceptions import AmbiguousRegisterError  # noqa: F401
+        self.assertNotIn("INVERTER_DEVICE_STATE", R.REGISTERS)
+        self.assertNotIn("CHARGER_DEVICE_STATE", R.REGISTERS)
+        with self.assertRaises(KeyError):
+            R.lookup(0x0209)
+        with self.assertRaises(KeyError):
+            R.lookup(0x020A)
+        with self.assertRaises(KeyError):
+            R.lookup("INVERTER_DEVICE_STATE")
+        with self.assertRaises(KeyError):
+            R.lookup("CHARGER_DEVICE_STATE")
+
+    # --- BMV relay mode 0x034F: Un8 0..2 (DFLT, CHRG, REM) ---
+    def test_bmv_relay_mode_override(self):
+        bmv = R.lookup(0x034F, flavor="BMV")
+        self.assertEqual(bmv.name, "BMV_RELAY_MODE")
+        self.assertEqual(R.decode_value(bmv, b"\x00"), "default")
+        self.assertEqual(R.decode_value(bmv, b"\x01"), "charger")
+        self.assertEqual(R.decode_value(bmv, b"\x02"), "remote")
+        self.assertEqual(R.decode_value(bmv, b"\x03"), "unknown(3)")
+        self.assertEqual(R.encode_value(bmv, "default"), b"\x00")
+        with self.assertRaises(ValueError):
+            R.encode_value(bmv, "warnings")  # Phoenix-family name rejected
+        with self.assertRaises(ValueError):
+            R.encode_value(bmv, "fan")  # undocumented name rejected
+        # Raw ints pass through unwidened, like every other ENUM register;
+        # decoding them back surfaces unknown(n) instead of a wrong name.
+        # Named lookup with flavor resolves to the BMV override as well.
+        self.assertEqual(R.lookup("RELAY_MODE", flavor="BMV").name, "BMV_RELAY_MODE")
+        # MPPT keeps the shared superset map (unchanged).
+        mppt = R.lookup(0x034F, flavor="MPPT")
+        self.assertEqual(mppt.name, "RELAY_MODE")
+        self.assertEqual(R.decode_value(mppt, b"\x00"), "warnings")
+
+    def test_inv_relay_mode_no_value_1(self):
+        inv = R.lookup(0x034F, flavor="INV")
+        self.assertEqual(inv.name, "INV_RELAY_MODE")
+        self.assertEqual(inv.access, "WRITE_ONLY")
+        self.assertEqual(R.decode_value(inv, b"\x00"), "warnings")
+        self.assertEqual(R.decode_value(inv, b"\x04"), "normal")
+        # Phoenix Rev 5 §2.8.1 defines no value 1.
+        self.assertEqual(R.decode_value(inv, b"\x01"), "unknown(1)")
+        with self.assertRaises(ValueError):
+            R.encode_value(inv, "charger")
+
+    # --- Orion/Inv device state + mode overrides ---
+    def test_orion_device_state_override(self):
+        st = R.lookup(0x0201, flavor="ORION")
+        self.assertEqual(st.name, "ORION_DEVICE_STATE")
+        self.assertEqual(R.decode_value(st, b"\x00"), "not_charging")
+        self.assertEqual(R.decode_value(st, b"\x0b"), "power_supply")
+        self.assertEqual(R.decode_value(st, bytes([245])), "wake_up")
+        self.assertEqual(R.decode_value(st, bytes([255])), "unavailable")
+        self.assertEqual(R.decode_value(st, b"\x03"), "bulk")
+        # Generic map is unchanged for other families.
+        self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), b"\x00"), "off")
+        self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), bytes([245])), "starting_up")
+
+    def test_orion_device_mode_override(self):
+        mo = R.lookup(0x0200, flavor="ORION")
+        self.assertEqual(mo.name, "ORION_DEVICE_MODE")
+        self.assertEqual(R.decode_value(mo, b"\x00"), "off")
+        self.assertEqual(R.decode_value(mo, b"\x04"), "off")
+        self.assertEqual(R.decode_value(mo, b"\x01"), "on")
+        self.assertEqual(R.decode_value(mo, b"\x03"), "on")
+        self.assertEqual(R.encode_value(mo, 0), b"\x00")
+        self.assertEqual(R.encode_value(mo, 4), b"\x04")
+
+    def test_inv_device_state_mode_overrides(self):
+        st = R.lookup(0x0201, flavor="INV")
+        self.assertEqual(st.name, "INV_DEVICE_STATE")
+        self.assertEqual(R.decode_value(st, b"\x09"), "inverting")
+        # Generic charger states never occur on Phoenix (Rev 5 §2.3.1).
+        self.assertEqual(R.decode_value(st, b"\x03"), "unknown(3)")
+        mo = R.lookup(0x0200, flavor="INV")
+        self.assertEqual(mo.name, "INV_DEVICE_MODE")
+        self.assertEqual(R.decode_value(mo, b"\x02"), "inverter_on")
+        self.assertEqual(R.decode_value(mo, b"\x05"), "eco")
+        self.assertEqual(R.decode_value(mo, bytes([0xFD])), "hibernate")
+        self.assertEqual(R.decode_value(mo, b"\x00"), "unknown(0)")
+
+    def test_inv_warning_reason_override(self):
+        w = R.lookup(0x031C, flavor="INV")
+        self.assertEqual(w.name, "INV_WARNING_REASON")
+        self.assertEqual(R.decode_value(w, b"\x01\x00"), ["low_battery_voltage"])
+        # Bits undocumented for Phoenix (Rev 5 §2.3.3) stay bitN.
+        self.assertEqual(R.decode_value(w, b"\x04\x00"), ["bit2"])
+        self.assertEqual(R.decode_value(w, b"\x80\x00"), ["bit7"])
+        a = R.lookup(0x031E, flavor="INV")
+        self.assertEqual(a.name, "INV_ALARM_REASON")
+        # Generic map unchanged.
+        self.assertEqual(R.decode_value(R.lookup("WARNING_REASON"), b"\x04\x00"), ["low_soc"])
+
+    # --- BMV alarm acknowledge is get+set ---
+    def test_bmv_alarm_acknowledge_access(self):
+        reg = R.lookup("BMV_ALARM_ACKNOWLEDGE")
+        self.assertEqual(reg.id, 0x031F)
+        self.assertEqual(reg.access, "READ_WRITE")
+
+    # --- MPPT off-reason bits: 7..8 reserved, 9 battery-temp-low ---
+    def test_mppt_off_reason_bits(self):
+        bits = R.OFF_REASON_MPPT_BITS
+        self.assertNotIn(7, bits)
+        self.assertNotIn(8, bits)
+        self.assertIn(9, bits)
+        reg = R.lookup("DEVICE_OFF_REASON_2", flavor="MPPT")
+        self.assertEqual(R.decode_value(reg, b"\x80\x00\x00\x00"), ["bit7"])
+        self.assertEqual(
+            R.decode_value(reg, b"\x00\x02\x00\x00"), [bits[9]])
+
+    # --- NETWORK_INFO bit 8 (doc lists it under un8: undecodable) ---
+    def test_network_info_bit8_falls_back(self):
+        reg = R.lookup("NETWORK_INFO")
+        self.assertEqual(reg.dtype, "uint8_t")
+        self.assertNotIn(8, R.ENUM_MAPS["NETWORK_INFO"])
+        self.assertEqual(R.decode_value(reg, b"\x01"), ["bms_controlled"])
+        # A hypothetical bit-8 payload still surfaces instead of vanishing.
+        self.assertEqual(
+            R.decode_value(reg, b"\xff"),
+            ["bms_controlled", "vset_remote", "charge_slave", "charge_master",
+             "using_icharge", "using_isense", "using_tsense", "using_vsense"])
+
+    # --- Orion total charge current 0x2013 ---
+    def test_total_charge_current_orion(self):
+        reg = R.lookup(0x2013, flavor="ORION")
+        self.assertEqual(reg.name, "TOTAL_CHARGE_CURRENT")
+        self.assertIn("TOTAL_CHARGE_CURRENT", R.for_flavor("ORION"))
+        self.assertAlmostEqual(
+            R.decode_value(reg, struct.pack("<i", 12345)), 12.345)
+
+    # --- charger error 19 (disabled since fw 1.15, still decodes) ---
+    def test_chr_error_19(self):
+        reg = R.lookup("CHR_ERROR_CODE")
+        self.assertEqual(R.decode_value(reg, b"\x13"), "charger_current_polarity_reversed")
+        self.assertEqual(R.encode_value(reg, "charger_current_polarity_reversed"), b"\x13")
+
+    # --- BMV SW version AA.BB ---
+    def test_bmv_sw_version_aa_bb(self):
+        reg = R.lookup("BMV_SW_VERSION")
+        d = R.decode_value(reg, bytes.fromhex("0704"))
+        self.assertEqual(d["raw"], 0x0407)
+        self.assertEqual(d["version"], "4.07")
+        self.assertEqual(R.encode_value(reg, 0x0407), bytes.fromhex("0704"))
+        self.assertEqual(R.encode_value(reg, {"raw": 0x0407}), bytes.fromhex("0704"))
+        self.assertEqual(R.encode_value(reg, "4.07"), bytes.fromhex("0704"))
+
+    # --- Un8 0..1 (OFF,ON) settings stay BOOLEAN: wire 0/1 round-trip ---
+    def test_boolean_wire_values_roundtrip(self):
+        for name in ["ALARM_BUZZER", "BMV_RELAY_INVERT", "BMV_BACKLIGHT_ALWAYS_ON",
+                     "BMV_SHOW_VOLTAGE", "BMV_SHOW_POWER", "BMV_SETUP_LOCK",
+                     "BMV_START_SYNCHRONIZED", "RELAY_CONTROL", "INV_DYN_CUTOFF_ENABLE"]:
+            with self.subTest(name=name):
+                reg = R.lookup(name)
+                self.assertEqual(reg.cls, "BOOLEAN")
+                self.assertEqual(R.encode_value(reg, 0), b"\x00")
+                self.assertEqual(R.encode_value(reg, 1), b"\x01")
+                self.assertEqual(R.encode_value(reg, False), b"\x00")
+                self.assertEqual(R.encode_value(reg, True), b"\x01")
+                self.assertEqual(R.decode_value(reg, b"\x00"), 0)  # False == 0
+                self.assertEqual(R.decode_value(reg, b"\x01"), 1)  # True == 1
+                self.assertIs(R.decode_value(reg, b"\x00"), False)
+                self.assertIs(R.decode_value(reg, b"\x01"), True)
+
+    # --- doc-aligned access labels (no behavior change) ---
+    def test_doc_aligned_access(self):
+        self.assertEqual(R.lookup("CAPABILITIES_BLE").access, "READ_ONLY")
+        self.assertEqual(R.lookup("VOLTAGE_RANGE_MIN").access, "READ_ONLY")
+        self.assertEqual(R.lookup("VOLTAGE_RANGE_MAX").access, "READ_ONLY")
+
+    def test_bmv_temperature_coefficient_unit(self):
+        self.assertEqual(R.lookup("BMV_TEMPERATURE_COEFFICIENT").unit, "%CAP/degC")
 
 
 if __name__ == "__main__":

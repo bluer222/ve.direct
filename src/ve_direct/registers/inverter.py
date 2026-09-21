@@ -1,3 +1,5 @@
-"""Phoenix/Smart inverters: Text labels + HEX flavor."""
-TEXT_LABELS = ["PID", "FW", "SER#", "V", "I", "AC_OUT_V", "AC_OUT_I", "AC_OUT_S",
-               "CS", "MODE", "WARN", "AR", "ERR", "Relay"]
+"""Phoenix/Smart inverters: HEX flavor (see registers/__init__.py).
+
+NOTE: the former TEXT_LABELS list was dead code (no importer).
+Authoritative Text labels live in ve_direct.tables.LABEL_INFO.
+"""

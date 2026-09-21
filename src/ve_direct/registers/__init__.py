@@ -28,6 +28,24 @@ device-specific scale/name. lookup(name) is exact. Calling lookup(int) on aliase
 raises AmbiguousRegisterError; specify flavor (e.g. flavor="ORION") to disambiguate.
 hex_get_raw()/hex_set_raw() are always unambiguous (raw bytes).
 
+Flavor-specific enum overrides share the wire ID with the generic entry
+but carry the family-documented value names: 0x0200/0x0201 (generic vs
+Orion vs Phoenix DEVICE_MODE/DEVICE_STATE), 0x031C/0x031E (generic vs
+Phoenix WARNING_REASON), 0x034F (MPPT vs BMV vs Phoenix RELAY_MODE).
+A flavor-qualified lookup (or hex_get/hex_set on a flavored device)
+selects the override; unflavored lookup(int) on these IDs raises
+AmbiguousRegisterError.
+
+Flavor policy (deliberately liberal): flavor tags are a superset of the
+strict doc provenance. Registers documented for one family stay visible
+under ANY (or a wider flavor) where another family plausibly shares the
+wire ID — e.g. pluggable-display 0x0400-0x0404 (BlueSolar-HEX: LCD models
+only), per-tracker history 0x10A0-0x10BE (BlueSolar-HEX Note 2: MPPT RS
+only, also listed under MPPT), and generic ANY control/status IDs visible
+in the BMV view although absent from BMV-7xx-HEX. Narrowing them would
+break for_flavor() consumers with no wire-behavior contradiction, so the
+stricter provenance lives in docs/SOURCES.md instead.
+
 Sentinels decoded as None (encode None back to sentinel):
 - BAT_TEMPERATURE 0xEDEC 0xFFFF, TIME_OF_DAY 0x2031 0xFFFF,
   BATTERY_VOLTAGE_SENSE 0x2002 0xFFFF, BATTERY_TEMPERATURE_SENSE 0x2003
@@ -102,7 +120,10 @@ for _reg in [
     _r("MODEL_NAME", 0x010B, "STRING", "CONSTANT"),
     _r("GROUP_ID", 0x0104, "NUMERIC", "READ_ONLY", "uint8_t", "", 1.0, ("ANY",)),
     _r("CAPABILITIES", 0x0140, "BITMASK", "CONSTANT", "uint32_t", flavors=("ANY",), enum="CAPABILITIES"),
-    _r("CAPABILITIES_BLE", 0x0150, "BITMASK", "CONSTANT", "uint32_t", flavors=("ANY",), enum="CAPABILITIES_BLE"),
+    # Doc access is R (Phoenix Rev 5 §2.1 product-info table; BLE row reads
+    # R/(W) "write enabled for internal purposes only"): READ_ONLY, not
+    # CONSTANT. No behavior change — device.py blocks writes to both.
+    _r("CAPABILITIES_BLE", 0x0150, "BITMASK", "READ_ONLY", "uint32_t", flavors=("ANY",), enum="CAPABILITIES_BLE"),
     _r("DEVICE_MODE", 0x0200, "ENUM", "READ_WRITE", flavors=("ANY",), enum="DEVICE_MODE"),
     _r("DEVICE_STATE", 0x0201, "ENUM", "READ_ONLY", flavors=("ANY",), enum="DEVICE_STATE"),
     _r("REMOTE_CONTROL_USED", 0x0202, "BITMASK", "READ_WRITE", "uint32_t", flavors=("ANY",), enum="REMOTE_CONTROL_USED"),
@@ -110,14 +131,18 @@ for _reg in [
     _r("DEVICE_OFF_REASON_2", 0x0207, "BITMASK", "READ_ONLY", "uint32_t", flavors=("MPPT",), enum="OFF_REASON_MPPT"),
     _r("WARNING_REASON", 0x031C, "BITMASK", "READ_ONLY", "uint16_t", flavors=("ANY",), enum="WARNING_REASON"),
     _r("ALARM_REASON", 0x031E, "BITMASK", "READ_ONLY", "uint16_t", flavors=("ANY",), enum="WARNING_REASON"),
+    # Un8 0..1 (OFF,ON)/(OPEN,CLSD) in the docs; BOOLEAN is intentional:
+    # Python bool == 0/1, so wire values round-trip and truthiness is kept.
     _r("RELAY_CONTROL", 0x034E, "BOOLEAN", "READ_WRITE"),
-    _r("RELAY_MODE", 0x034F, "ENUM", "READ_WRITE", flavors=("MPPT", "BMV"), enum="RELAY_MODE"),
+    # MPPT shares the Phoenix-family RELAY_MODE superset map (BlueSolar-HEX
+    # documents no 0x034F of its own); BMV and INV use flavor overrides below.
+    _r("RELAY_MODE", 0x034F, "ENUM", "READ_WRITE", flavors=("MPPT",), enum="RELAY_MODE"),
     _r("RESTORE_DEFAULTS", 0x0004, "VOID", "WRITE_ONLY", flavors=("ANY",)),
     _r("DC_CHANNEL1_VOLTAGE", 0xED8D, "NUMERIC", "READ_ONLY", "int16_t", "V", 0.01, ("BMV", "INV", "MPPT_RS")),
     _r("DC_CHANNEL1_CURRENT", 0xED8F, "NUMERIC", "READ_ONLY", "int16_t", "A", 0.1, ("BMV", "MPPT_RS")),
     _r("BAT_TEMPERATURE", 0xEDEC, "NUMERIC", "READ_ONLY", "uint16_t", "K", 0.01),
     # --- inverter ---
-    _r("INVERTER_DEVICE_STATE", 0x0209, "ENUM", "READ_ONLY", flavors=("INV",), enum="DEVICE_STATE"),
+    # NOTE: no 0x0209 here (phantom register; see charger-section note).
     _r("INV_DEVICE_OFF_REASON", 0x0207, "BITMASK", "READ_ONLY", "uint32_t", flavors=("INV",), enum="OFF_REASON_INV"),
     _r("AC_OUT_VOLTAGE_SETPOINT", 0x0230, "NUMERIC", "WRITE_ONLY", "uint16_t", "V", 0.01, ("INV",)),
     _r("ALARM_LOW_VOLTAGE_SET", 0x0320, "NUMERIC", "WRITE_ONLY", "uint16_t", "V", 0.01, ("INV",)),
@@ -126,10 +151,14 @@ for _reg in [
     _r("AC_OUT_CURRENT", 0x2201, "NUMERIC", "READ_ONLY", "int16_t", "A", 0.1, ("INV",)),
     _r("AC_OUT_APPARENT_POWER", 0x2205, "NUMERIC", "READ_ONLY", "int32_t", "VA", 1.0, ("INV",)),
     _r("SHUTDOWN_LOW_VOLTAGE_SET", 0x2210, "NUMERIC", "WRITE_ONLY", "uint16_t", "V", 0.01, ("INV",)),
-    _r("VOLTAGE_RANGE_MIN", 0x2211, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("INV",)),
-    _r("VOLTAGE_RANGE_MAX", 0x2212, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("INV",)),
+    # Doc access is R (Phoenix Rev 5 §2.7 user battery control table):
+    # READ_ONLY, not CONSTANT. No behavior change (device.py blocks both).
+    _r("VOLTAGE_RANGE_MIN", 0x2211, "NUMERIC", "READ_ONLY", "uint16_t", "V", 0.01, ("INV",)),
+    _r("VOLTAGE_RANGE_MAX", 0x2212, "NUMERIC", "READ_ONLY", "uint16_t", "V", 0.01, ("INV",)),
     # --- charger (battery settings + charger data; MPPT inherits CHG, see for_flavor) ---
-    _r("CHARGER_DEVICE_STATE", 0x020A, "ENUM", "READ_ONLY", flavors=("CHG",), enum="DEVICE_STATE"),
+    # NOTE: no 0x020A here. 0x0209/0x020A appear in neither the Phoenix Rev 5
+    # snapshot nor any other local snapshot (BlueSolar/BMV/Orion/Text); both
+    # were removed as phantom registers.
     _r("DEVICE_FUNCTION", 0x0206, "ENUM", "READ_WRITE", flavors=("CHG",), enum="DEVICE_FUNCTION"),
     _r("BATTERYSAFE_MODE", 0xEDFF, "BOOLEAN", "READ_WRITE", flavors=("CHG",)),
     _r("VOLTAGE_COMPENSATION", 0xEDCA, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("CHG",)),
@@ -156,6 +185,10 @@ for _reg in [
     _r("BAT_TYPE", 0xEDF1, "ENUM", "READ_WRITE", flavors=("CHG",), enum="BAT_TYPE_LARGE"),
     _r("BAT_TEMPERATURE_COMPENSATION", 0xEDF2, "NUMERIC", "READ_WRITE", "int16_t", "mV/K", 0.01, ("CHG",)),
     _r("BAT_EQUALISATION_VOLTAGE", 0xEDF4, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("CHG",)),
+    # Provenance: ABSENT from the BlueSolar-HEX Rev 18 §1.1 battery-settings
+    # table and from every other local snapshot; carried over from the
+    # krahabb upstream baseline as a charger-family setting. Kept (CHG) so
+    # charger consumers do not lose a plausible wire ID — see SOURCES.md.
     _r("BAT_STORAGE_VOLTAGE", 0xEDF5, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("CHG",)),
     _r("BAT_FLOAT_VOLTAGE", 0xEDF6, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("CHG",)),
     _r("BAT_ABSORPTION_VOLTAGE", 0xEDF7, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("CHG",)),
@@ -200,7 +233,7 @@ for _reg in [
     _r("TTG", 0x0FFE, "NUMERIC", "READ_ONLY", "uint16_t", "min", 1.0, ("BMV",)),
     _r("SOC", 0x0FFF, "NUMERIC", "READ_ONLY", "uint16_t", "%", 0.01, ("BMV",)),
     _r("DC_CHANNEL1_POWER", 0xED8E, "NUMERIC", "READ_ONLY", "int16_t", "W", 1.0, ("BMV",)),
-    _r("DC_MONITOR_MODE", 0xEEB8, "ENUM", "READ_WRITE", flavors=("BMV71",), enum="MON"),
+    _r("DC_MONITOR_MODE", 0xEEB8, "ENUM", "READ_WRITE", flavors=("BMV", "BMV71"), enum="MON"),
     _r("ALARM_BUZZER", 0xEEFC, "BOOLEAN", "READ_WRITE", flavors=("BMV",)),
     # --- MPPT_RS / MULTI_RS ---
     _r("MPPT_TRACKERS", 0x0244, "NUMERIC", "CONSTANT", "uint8_t", "", 1.0, ("MPPT_RS",)),
@@ -227,6 +260,9 @@ for _reg in [
     _r("ADJUSTABLE_VOLTAGE_MIN", 0x2211, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("MPPT_RS",)),
     _r("ADJUSTABLE_VOLTAGE_MAX", 0x2212, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("MPPT_RS",)),
     # --- relay / display (ANY: relay/display option per model) ---
+    # Liberal ANY flavoring by design (see module docstring): BlueSolar-HEX
+    # scopes 0x0400-0x0404 to pluggable-LCD models, but narrowing would break
+    # for_flavor() consumers with no wire contradiction.
     _r("RELAY_OPERATION_MODE", 0xEDD9, "ENUM", "READ_WRITE", flavors=("ANY",), enum="RELAY_OPERATION_MODE"),
     _r("RELAY_BAT_LOW_SET", 0x0350, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
     _r("RELAY_BAT_LOW_CLEAR", 0x0351, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
@@ -260,7 +296,7 @@ for _reg in [
     _r("NETWORK_INFO", 0x200D, "BITMASK", "READ_ONLY", "uint8_t", flavors=("MPPT", "MPPT_RS", "ORION"), enum="NETWORK_INFO"),
     _r("NETWORK_MODE", 0x200E, "BITMASK", "READ_WRITE", "uint8_t", flavors=("MPPT", "MPPT_RS", "ORION"), enum="NETWORK_MODE"),
     _r("NETWORK_STATUS", 0x200F, "STRUCT", "READ_ONLY", flavors=("MPPT", "MPPT_RS", "ORION"), enum="NETWORK_STATUS"),
-    _r("TOTAL_CHARGE_CURRENT", 0x2013, "NUMERIC", "READ_WRITE", "int32_t", "A", 0.001, ("MPPT", "MPPT_RS")),
+    _r("TOTAL_CHARGE_CURRENT", 0x2013, "NUMERIC", "READ_WRITE", "int32_t", "A", 0.001, ("MPPT", "MPPT_RS", "ORION")),
     _r("CHARGE_CURRENT_PERCENT", 0x2014, "NUMERIC", "READ_WRITE", "uint8_t", "%", 1.0, ("MPPT", "MPPT_RS")),
     _r("CHARGE_CURRENT_LIMIT", 0x2015, "NUMERIC", "READ_WRITE", "uint16_t", "A", 0.1, ("MPPT", "MPPT_RS", "ORION")),
     _r("MANUAL_EQUALISE_PENDING", 0x2018, "BOOLEAN", "READ_ONLY", flavors=("MPPT", "MPPT_RS")),
@@ -294,6 +330,9 @@ for _i in range(6):
 for _rid in range(0x1050, 0x106F):
     _add(_r(f"DAILY_HISTORY_{_rid - 0x1050}", _rid, "STRUCT", "READ_ONLY", flavors=("MPPT",), enum="HISTORY_DAY"))
 for _rid in range(0x10A0, 0x10BF):
+    # Liberal flavoring by design: BlueSolar-HEX Note 2 restricts these to
+    # multi-tracker units (MPPT RS), but MPPT is included so for_flavor("MPPT")
+    # consumers keep working; see module docstring + SOURCES.md.
     _add(_r(f"MPPT_HISTORY_{_rid - 0x10A0}", _rid, "STRUCT", "READ_ONLY", flavors=("MPPT_RS", "MPPT"), enum="HISTORY_MPPT_DAY"))
 
 # Orion cycle history 0x1070..0x1098 (newest..oldest)
@@ -305,7 +344,7 @@ for _reg in [
     _r("INV_NVM_COMMAND", 0xEB99, "ENUM", "WRITE_ONLY", flavors=("INV",), enum="INV_NVM_COMMAND"),
     _r("PRODUCT_REVISION", 0x0101, "STRUCT", "READ_ONLY", "uint24_t", "", 1.0, ("ANY",), "PRODUCT_REVISION"),
     _r("INV_BAT_VOLTAGE", 0xEDEF, "NUMERIC", "READ_ONLY", "uint8_t", "V", 1.0, ("INV",)),
-    _r("INV_RELAY_MODE", 0x034F, "ENUM", "WRITE_ONLY", flavors=("INV",), enum="RELAY_MODE"),
+    _r("INV_RELAY_MODE", 0x034F, "ENUM", "WRITE_ONLY", flavors=("INV",), enum="RELAY_MODE_INV"),
     _r("AC_OUT_NOM_VOLTAGE", 0x2202, "NUMERIC", "READ_ONLY", "uint8_t", "V", 1.0, ("INV",)),
     _r("AC_OUT_RATED_POWER", 0x2203, "NUMERIC", "READ_ONLY", "int16_t", "VA", 1.0, ("INV",)),
     _r("AC_LOAD_SENSE_POWER_THRESHOLD", 0x2206, "NUMERIC", "WRITE_ONLY", "uint16_t", "VA", 1.0, ("INV",)),
@@ -315,6 +354,9 @@ for _reg in [
     _r("INV_WAVE_SET50HZ_NOT60HZ", 0xEB03, "ENUM", "WRITE_ONLY", flavors=("INV",), enum="INV_AC_FREQUENCY"),
     _r("INV_ECO_MODE_MIN_CURRENT", 0xEB04, "NUMERIC", "WRITE_ONLY", "int16_t", "A", 0.001, ("INV",)),
     _r("INV_ECO_MODE_RETRY_TIME", 0xEB06, "NUMERIC", "WRITE_ONLY", "uint8_t", "s", 0.25, ("INV",)),
+    # Stored as a raw period count (Phoenix Rev 5 §2.6 Note 4: "expressed in
+    # number of periods of the AC-out frequency"); the table's 0.02/0.016
+    # print is the per-period duration in seconds, not a scale factor.
     _r("INV_ECO_LOAD_DETECT_PERIODS", 0xEB10, "NUMERIC", "WRITE_ONLY", "uint8_t", "", 1.0, ("INV",)),
     _r("INV_DYN_CUTOFF_ENABLE", 0xEBBA, "BOOLEAN", "WRITE_ONLY", flavors=("INV",)),
     _r("INV_DYN_CUTOFF_FACTOR", 0xEBB7, "NUMERIC", "WRITE_ONLY", "uint16_t", "", 1.0, ("INV",)),
@@ -329,6 +371,10 @@ for _reg in [
     _add(_reg)
 
 # --- BMV (Official BMV-7xx-HEX-Protocol) ---
+# NOTE on Un8 0..1 (OFF,ON) settings below (buzzer, relay invert, backlight,
+# show-toggles, setup lock, start-synchronized): modeled as BOOLEAN on
+# purpose. Python bool == 0/1, so wire values round-trip exactly and callers
+# keep boolean truthiness; an off/on string enum would make "off" truthy.
 for _reg in [
     _r("BMV_BATTERY_CAPACITY", 0x1000, "NUMERIC", "READ_WRITE", "uint16_t", "Ah", 1.0, ("BMV",)),
     _r("BMV_CHARGED_VOLTAGE", 0x1001, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.1, ("BMV",)),
@@ -376,7 +422,10 @@ for _reg in [
     _r("BMV_ALARM_HIGH_TEMPERATURE_CLEAR", 0x032D, "NUMERIC", "READ_WRITE", "uint16_t", "K", 0.01, ("BMV",)),
     _r("BMV_ALARM_MID_VOLTAGE", 0x0331, "NUMERIC", "READ_WRITE", "uint16_t", "%", 0.1, ("BMV",)),
     _r("BMV_ALARM_MID_VOLTAGE_CLEAR", 0x0332, "NUMERIC", "READ_WRITE", "uint16_t", "%", 0.1, ("BMV",)),
-    _r("BMV_ALARM_ACKNOWLEDGE", 0x031F, "VOID", "WRITE_ONLY", flavors=("BMV",)),
+    # BMV Rev 7 Alarm settings row carries no "(write only)" marker — unlike
+    # 0x1029/0x102C/0x0004/0x1030 — under the "Get and Set items" heading, so
+    # get+set (READ_WRITE), not WRITE_ONLY.
+    _r("BMV_ALARM_ACKNOWLEDGE", 0x031F, "VOID", "READ_WRITE", flavors=("BMV",)),
     _r("BMV_RELAY_INVERT", 0x034D, "BOOLEAN", "READ_WRITE", flavors=("BMV",)),
     _r("BMV_RELAY_LOW_VOLTAGE", 0x0350, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.1, ("BMV",)),
     _r("BMV_RELAY_LOW_VOLTAGE_CLEAR", 0x0351, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.1, ("BMV",)),
@@ -404,12 +453,14 @@ for _reg in [
     _r("BMV_SHOW_TTG", 0xEEE6, "BOOLEAN", "READ_WRITE", flavors=("BMV",)),
     _r("BMV_SHOW_TEMPERATURE", 0xEEE7, "BOOLEAN", "READ_WRITE", flavors=("BMV",)),
     _r("BMV_SHOW_POWER", 0xEEE8, "BOOLEAN", "READ_WRITE", flavors=("BMV",)),
-    _r("BMV_SW_VERSION", 0xEEF9, "NUMERIC", "READ_ONLY", "uint16_t", "", 1.0, ("BMV",)),
+    # BMV Rev 7 Miscellaneous row: Un16 HEX (AA.BB). STRUCT so decode yields
+    # {"raw": int, "version": "AA.BB"} with the raw word still accessible.
+    _r("BMV_SW_VERSION", 0xEEF9, "STRUCT", "READ_ONLY", "uint16_t", "", 1.0, ("BMV",), "BMV_SW_VERSION"),
     _r("BMV_SETUP_LOCK", 0xEEF6, "BOOLEAN", "READ_WRITE", flavors=("BMV",)),
     _r("BMV_SHUNT_AMPS", 0xEEFB, "NUMERIC", "READ_WRITE", "uint16_t", "A", 1.0, ("BMV",)),
     _r("BMV_SHUNT_VOLTS", 0xEEFA, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.001, ("BMV",)),
     _r("BMV_TEMPERATURE_UNIT", 0xEEF7, "ENUM", "READ_WRITE", flavors=("BMV",), enum="BMV_TEMPERATURE_UNIT"),
-    _r("BMV_TEMPERATURE_COEFFICIENT", 0xEEF4, "NUMERIC", "READ_WRITE", "uint16_t", "%CAP/C", 0.1, ("BMV",)),
+    _r("BMV_TEMPERATURE_COEFFICIENT", 0xEEF4, "NUMERIC", "READ_WRITE", "uint16_t", "%CAP/degC", 0.1, ("BMV",)),
     _r("BMV_AUXILIARY_INPUT", 0xEEF8, "ENUM", "READ_WRITE", flavors=("BMV",), enum="BMV_AUXILIARY_INPUT"),
     _r("BMV_START_SYNCHRONIZED", 0x0FFD, "BOOLEAN", "READ_WRITE", flavors=("BMV",)),
     _r("SETTINGS_CHANGED_TIMESTAMP", 0xEC41, "NUMERIC", "READ_WRITE", "uint32_t", "s", 1.0, ("ANY",)),
@@ -439,9 +490,35 @@ _add_alias(_r("ORION_DEVICE_OFF_REASON", 0x0207, "BITMASK", "READ_ONLY", "uint32
 _add_alias(_r("ORION_BAT_TYPE", 0xEDF1, "ENUM", "READ_WRITE", flavors=("ORION",), enum="BAT_TYPE_ORION"))
 _add_alias(_r("MPPT_RS_BAT_TYPE", 0xEDF1, "ENUM", "READ_WRITE", flavors=("MPPT_RS",), enum="BAT_TYPE_RS"))
 
+# --- Flavor-specific enum overrides (same wire ID, family-documented names).
+# A flavor-qualified lookup resolves to these instead of the generic entry,
+# so no other family's decode changes. Unflavored lookup(int) on these IDs
+# raises AmbiguousRegisterError (documented alias pattern).
+# - 0x034F BMV Rev 7 Relay settings: Un8 0..2 (DFLT, CHRG, REM).
+_add_alias(_r("BMV_RELAY_MODE", 0x034F, "ENUM", "READ_WRITE", flavors=("BMV",), enum="RELAY_MODE_BMV"))
+# - 0x0200/0x0201 Orion-XS-HEX: mode 0/4 off, 1/3 on; state NOT_CHARGING,
+#   PSU(11), WAKE-UP(245), UNAVAILABLE(255), ...
+_add_alias(_r("ORION_DEVICE_MODE", 0x0200, "ENUM", "READ_WRITE", flavors=("ORION",), enum="DEVICE_MODE_ORION"))
+_add_alias(_r("ORION_DEVICE_STATE", 0x0201, "ENUM", "READ_ONLY", flavors=("ORION",), enum="DEVICE_STATE_ORION"))
+# - 0x0200/0x0201 Phoenix Rev 5 §2.3.1/§2.4.2: states 0,1,2,9 and modes
+#   2,3,4,5,0xFD only — the generic map's extra values never occur here.
+_add_alias(_r("INV_DEVICE_MODE", 0x0200, "ENUM", "READ_WRITE", flavors=("INV",), enum="DEVICE_MODE_INV"))
+_add_alias(_r("INV_DEVICE_STATE", 0x0201, "ENUM", "READ_ONLY", flavors=("INV",), enum="DEVICE_STATE_INV"))
+# - 0x031C/0x031E Phoenix Rev 5 §2.3.3: bits 0,1,5,6,8,9,10,11 only.
+_add_alias(_r("INV_WARNING_REASON", 0x031C, "BITMASK", "READ_ONLY", "uint16_t", flavors=("INV",), enum="WARNING_REASON_INV"))
+_add_alias(_r("INV_ALARM_REASON", 0x031E, "BITMASK", "READ_ONLY", "uint16_t", flavors=("INV",), enum="WARNING_REASON_INV"))
+
 # --- HEX enums (from ve_reg_enum.h + official docs) ---
 DEVICE_MODE_MAP = {0: "off", 1: "charger_on", 2: "inverter_on", 3: "device_on",
                    4: "device_off", 5: "eco", 0xFD: "hibernate"}
+# Orion-XS-HEX device mode values (register 0x0200): 0/4 Charger off,
+# 1/3 Charger on. Separate map so Orion 3/4 decode as documented instead of
+# the generic "device_on"/"device_off".
+DEVICE_MODE_ORION_MAP = {0: "off", 1: "on", 3: "on", 4: "off"}
+# Phoenix-Inverter-HEX Rev 5 §2.4.2 device mode values: 2,3,4,5,0xFD only
+# (generic values 0/1 never occur on Phoenix and decode unknown here).
+DEVICE_MODE_INV_MAP = {2: "inverter_on", 3: "device_on", 4: "device_off",
+                       5: "eco", 0xFD: "hibernate"}
 DEVICE_FUNCTION_MAP = {0: "charger", 1: "psu"}
 DEVICE_STATE_MAP = {0: "off", 1: "low_power", 2: "fault", 3: "bulk", 4: "absorption",
                     5: "floating", 6: "storage", 7: "equalize_manual", 8: "passthru",
@@ -456,16 +533,32 @@ LINK_DEVICE_STATE_MAP = {0: "not_charging", 2: "fault", 3: "bulk", 4: "absorptio
                          252: "external_control", 255: "unavailable"}
 MPPT_TRACKER_MODE_MAP = {0: "off", 1: "v_i_limited", 2: "mppt"}
 RELAY_MODE_MAP = {0: "warnings", 1: "charger", 2: "remote", 3: "disabled", 4: "normal", 5: "battery_low", 6: "fan"}
+# BMV-7xx-HEX Rev 7 Relay settings: Un8 0..2 (DFLT, CHRG, REM). Separate map
+# so BMV value 0 decodes as documented ("default") instead of the
+# Phoenix-family "warnings", and values 3..6 are rejected on encode.
+RELAY_MODE_BMV_MAP = {0: "default", 1: "charger", 2: "remote"}
+# Phoenix-Inverter-HEX Rev 5 §2.8.1 documents relay values 0,2,3,4,5,6;
+# value 1 has no Phoenix meaning and decodes unknown here.
+RELAY_MODE_INV_MAP = {0: "warnings", 2: "remote", 3: "disabled", 4: "normal",
+                      5: "battery_low", 6: "fan"}
 RELAY_OPERATION_MODE_MAP = {0: "always_off", 1: "panel_high", 2: "temp_high",
                             3: "battery_low", 4: "equalisation_active", 5: "error",
                             6: "temp_low", 7: "battery_high", 8: "float_or_storage",
                             9: "day_detection", 10: "load_control"}
+# Values 0 (auto detect) and 36 defined by BlueSolar-HEX battery-voltage
+# setting table; the Orion-XS-HEX table lists 12/24/48 only, so the shared
+# map stays a superset and Orion devices simply never report 0/36.
 BAT_VOLTAGE_SETTING_MAP = {0: "auto_detect", 12: "v12", 24: "v24", 36: "v36", 48: "v48"}
 CHR_ERROR_CODE_MAP = {0: "no_error", 1: "battery_temperature_high", 2: "battery_voltage_high",
                       3: "remote_temperature_a", 4: "remote_temperature_b", 5: "remote_temperature_c",
                       6: "remote_voltage_a", 7: "remote_voltage_b", 8: "remote_voltage_c",
                       11: "high_ripple", 14: "battery_temperature_low", 17: "charger_temperature_high",
-                      18: "over_current", 20: "bulk_time", 21: "current_sensor",
+                      18: "over_current",
+                      # BlueSolar-HEX charger error table: Error 19 Charger
+                      # current polarity reversed — disabled since fw 1.15
+                      # ("can be safely ignored"), kept so raw 19 decodes.
+                      19: "charger_current_polarity_reversed",
+                      20: "bulk_time", 21: "current_sensor",
                       22: "internal_temperature_a", 23: "internal_temperature_b", 24: "fan",
                       26: "overheated", 27: "short_circuit", 28: "converter_issue", 29: "over_charge",
                       33: "input_voltage", 34: "input_current",
@@ -490,15 +583,36 @@ CHR_ERROR_CODE_MAP = {0: "no_error", 1: "battery_temperature_high", 2: "battery_
                       203: "internal_supply_voltage_a", 205: "internal_supply_voltage_b",
                       212: "internal_supply_voltage_c", 215: "internal_supply_voltage_d",
                       0xFF: "unknown"}
+# Orion-XS-HEX device state values (register 0x0201): 0 NOT_CHARGING,
+# 11 PSU, 245 WAKE-UP, 255 UNAVAILABLE, ... Names follow LINK_DEVICE_STATE.
+DEVICE_STATE_ORION_MAP = {0: "not_charging", 2: "fault", 3: "bulk",
+                          4: "absorption", 5: "float", 6: "storage",
+                          7: "manual_equalise", 11: "power_supply",
+                          245: "wake_up", 246: "repeated_absorption",
+                          247: "auto_equalize", 248: "battery_safe",
+                          250: "blocked", 252: "external_control",
+                          255: "unavailable"}
+# Phoenix-Inverter-HEX Rev 5 §2.3.1 device state values: 0,1,2,9 only
+# (generic charger states like bulk/absorption never occur on Phoenix).
+DEVICE_STATE_INV_MAP = {0: "off", 1: "low_power", 2: "fault", 9: "inverting"}
 WARNING_REASON_BITS = {0: "low_battery_voltage", 1: "high_battery_voltage", 2: "low_soc",
                        3: "low_starter_voltage", 4: "high_starter_voltage", 5: "low_temperature",
                        6: "high_temperature", 7: "mid_battery_voltage", 8: "overload",
                        9: "dc_ripple", 10: "low_ac_out_voltage", 11: "high_ac_out_voltage",
                        12: "short_circuit", 13: "bms_lockout"}
+# Phoenix-Inverter-HEX Rev 5 §2.3.3 warning/alarm bits: 0,1,5,6,8,9,10,11
+# only. Other positions are undocumented for Phoenix and decode as bitN here
+# instead of inheriting MPPT/BMV-family names.
+WARNING_REASON_INV_BITS = {0: "low_battery_voltage", 1: "high_battery_voltage",
+                           5: "low_temperature", 6: "high_temperature",
+                           8: "overload", 9: "dc_ripple",
+                           10: "low_ac_out_voltage", 11: "high_ac_out_voltage"}
 OFF_REASON_MPPT_BITS = {
     0: "no_input_power", 1: "physical_power_switch", 2: "soft_power_switch",
     3: "remote_input", 4: "internal_alarm", 5: "paygo", 6: "bms_shutdown",
-    7: "engine", 9: "battery_temperature",
+    # BlueSolar-HEX §1.1: bits 7..8 Reserved, bit 9 Battery temperature too
+    # low. (No bit 7 "engine" — that name belongs to the Orion map below.)
+    9: "battery_temperature",
 }
 OFF_REASON_ORION_BITS = {
     0: "no_input_power", 2: "soft_power_switch", 3: "remote_input",
@@ -547,7 +661,12 @@ DISPLAY_BACKLIGHT_MODE_RS_MAP = {0: "off", 1: "on", 2: "auto"}
 REMOTE_COMMAND_MAP = {1: "start_equalise", 2: "stop_equalise", 3: "sync_ui", 4: "sync_day"}
 NETWORK_INFO_MAP = {0: "bms_controlled", 1: "vset_remote", 2: "charge_slave",
                     3: "charge_master", 4: "using_icharge", 5: "using_isense",
-                    6: "using_tsense", 7: "using_vsense", 8: "standby"}
+                    6: "using_tsense", 7: "using_vsense"}
+# NOTE: BlueSolar-HEX lists a bit 8 STANDBY for 0x200D while typing the
+# register un8 — self-inconsistent, bit 8 is undecodable on the wire (a Get
+# reply carries 1 byte and decode masks to the dtype width). Dtype stays
+# uint8_t per the doc table (widening would also break the sim's reply
+# width); bit 8 decodes as bit8 via the generic unknown-bit fallback.
 NETWORK_MODE_MAP = {0: "networked", 1: "slave", 2: "external_control", 3: "bms",
                     4: "charge_group_master", 5: "charge_instance_master", 6: "standby"}
 TIMER_ANCHOR_MAP = {1: "sunset", 2: "midnight", 3: "sunrise"}
@@ -560,11 +679,17 @@ BAT_TYPE_ORION_MAP = {1: "lifepo4", 0xFF: "user"}
 
 ENUM_MAPS: dict[str, dict[int, str]] = {
     "DEVICE_MODE": DEVICE_MODE_MAP,
+    "DEVICE_MODE_ORION": DEVICE_MODE_ORION_MAP,
+    "DEVICE_MODE_INV": DEVICE_MODE_INV_MAP,
     "DEVICE_FUNCTION": DEVICE_FUNCTION_MAP,
     "DEVICE_STATE": DEVICE_STATE_MAP,
+    "DEVICE_STATE_ORION": DEVICE_STATE_ORION_MAP,
+    "DEVICE_STATE_INV": DEVICE_STATE_INV_MAP,
     "LINK_DEVICE_STATE": LINK_DEVICE_STATE_MAP,
     "MPPT_TRACKER_MODE": MPPT_TRACKER_MODE_MAP,
     "RELAY_MODE": RELAY_MODE_MAP,
+    "RELAY_MODE_BMV": RELAY_MODE_BMV_MAP,
+    "RELAY_MODE_INV": RELAY_MODE_INV_MAP,
     "RELAY_OPERATION_MODE": RELAY_OPERATION_MODE_MAP,
     "BAT_VOLTAGE_SETTING": BAT_VOLTAGE_SETTING_MAP,
     "CHR_ERROR_CODE": CHR_ERROR_CODE_MAP,
@@ -586,6 +711,7 @@ ENUM_MAPS: dict[str, dict[int, str]] = {
     "OFF_REASON_ORION": OFF_REASON_ORION_BITS,
     "OFF_REASON_INV": OFF_REASON_INV_BITS,
     "WARNING_REASON": WARNING_REASON_BITS,
+    "WARNING_REASON_INV": WARNING_REASON_INV_BITS,
     "TWO_WIRE_BMS": TWO_WIRE_BMS_MAP,
     "REMOTE_CONTROL_USED": REMOTE_CONTROL_USED_MAP,
     "ADDITIONAL_CHARGER_STATE": ADDITIONAL_CHARGER_STATE_MAP,
@@ -968,8 +1094,44 @@ def decode_product_revision(raw: bytes) -> dict:
     }
 
 
+def decode_bmv_sw_version(raw: bytes) -> dict:
+    """BMV 0xEEF9: Un16 HEX (AA.BB) per BMV-7xx-HEX Rev 7 Miscellaneous table.
+
+    High byte AA, low byte BB (minor as hex digits, same convention as
+    decode_app_version): raw 0x0407 -> version "4.07". Raw word kept in
+    "raw" for exact round-trips.
+    """
+    b = bytes(raw)
+    if len(b) < 2:
+        return {"raw": b.hex().upper(), "version": None}
+    v = int.from_bytes(b[:2], "little")
+    return {"raw": v, "version": f"{v >> 8}.{(v & 0xFF):02X}"}
+
+
+def encode_bmv_sw_version(value: dict | bytes | int | str) -> bytes:
+    """Encode BMV SW version: raw int, {"raw": int}, "AA.BB", or raw bytes."""
+    import struct as _s
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value[:2]).ljust(2, b"\x00")
+    if isinstance(value, int):
+        return _s.pack("<H", value & 0xFFFF)
+    if isinstance(value, str):
+        s = value.strip()
+        if "." in s:
+            hi_s, lo_s = s.split(".", 1)
+            return _s.pack("<H", ((int(hi_s, 0) & 0xFF) << 8) | (int(lo_s, 16) & 0xFF))
+        return _s.pack("<H", int(s, 0) & 0xFFFF)
+    if isinstance(value, dict):
+        if "raw" in value:
+            return _s.pack("<H", int(value["raw"]) & 0xFFFF)
+        if "version" in value:
+            return encode_bmv_sw_version(value["version"])
+    raise ValueError(f"cannot encode BMV_SW_VERSION from {value!r}")
+
+
 _STRUCT_DECODERS = {
     "PRODUCT_ID": decode_product_id,
+    "BMV_SW_VERSION": decode_bmv_sw_version,
     "APP_VERSION": decode_app_version_register,
     "PRODUCT_REVISION": decode_product_revision,
     "HISTORY_TOTAL": decode_history_total,
@@ -1091,6 +1253,9 @@ def encode_value(reg: HexRegister, value: float | int | str | bool | list[str] |
         if kind == "NETWORK_STATUS":
             assert isinstance(value, (dict, int, bytes))
             return encode_network_status(value)  # type: ignore[arg-type]
+        if kind == "BMV_SW_VERSION":
+            assert isinstance(value, (dict, int, str, bytes))
+            return encode_bmv_sw_version(value)  # type: ignore[arg-type]
         raise ValueError(f"STRUCT {reg.name}/{kind} is read-only (history); pass raw bytes")
     if reg.cls == "ENUM":
         if isinstance(value, str):

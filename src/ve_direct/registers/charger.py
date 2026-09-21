@@ -1,3 +1,5 @@
-"""Phoenix/Smart chargers (incl. IP43): Text labels + HEX flavor."""
-TEXT_LABELS = ["PID", "FW", "SER#", "V", "V2", "V3", "I", "I2", "I3", "CS",
-               "ERR", "MODE", "Relay"]
+"""Phoenix/Smart chargers (incl. IP43): HEX flavor (see registers/__init__.py).
+
+NOTE: the former TEXT_LABELS list was dead code (no importer).
+Authoritative Text labels live in ve_direct.tables.LABEL_INFO.
+"""

@@ -125,6 +125,99 @@ class TestText(unittest.TestCase):
         self.assertNotIn("CHECKSUM", frames[0].fields)
         self.assertNotIn("Checksum", frames[0].fields)
 
+    def test_bare_hex_pid(self):
+        # "A04A" without 0x prefix must decode per the spec PID list.
+        f = TextParser().feed(make_text_block({"PID": "A04A"}))[0]
+        self.assertEqual(f["PID"].value, 0xA04A)
+        self.assertEqual(f["PID"].human, "BlueSolar MPPT 100|30 rev2")
+        f2 = TextParser().feed(make_text_block({"PID": "0xA04A"}))[0]
+        self.assertEqual(f2["PID"].value, 0xA04A)
+        f3 = TextParser().feed(make_text_block({"PID": "0204"}))[0]
+        self.assertEqual(f3["PID"].value, 0x204)
+        self.assertIn("BMV-702", f3["PID"].human)
+
+    def test_empty_string_missing_restricted(self):
+        # "" is missing only for spec'd labels T/CE/SOC/TTG; "---" stays liberal.
+        blk = make_text_block({
+            "V": "", "T": "", "CE": "", "SOC": "", "TTG": "",
+        })
+        f = TextParser().feed(blk)[0]
+        self.assertIsNotNone(f["V"].value)  # V "" is not missing per spec
+        self.assertEqual(f["V"].value, "")
+        self.assertIsNone(f["T"].value)
+        self.assertIsNone(f["CE"].value)
+        self.assertIsNone(f["SOC"].value)
+        self.assertIsNone(f["TTG"].value)
+        # "---" still treated as missing even for non-spec labels (liberal).
+        f2 = TextParser().feed(make_text_block({"V": "---"}))[0]
+        self.assertIsNone(f2["V"].value)
+
+    def test_fwe_short_rejected(self):
+        f = TextParser().feed(make_text_block({"FWE": "FF"}))[0]
+        self.assertIsNone(f["FWE"].human)
+        # Short-but-valid 5-char form still decodes (208FF -> 0208FF).
+        f2 = TextParser().feed(make_text_block({"FWE": "208FF"}))[0]
+        self.assertEqual(f2["FWE"].human, "v2.08")
+        f3 = TextParser().feed(make_text_block({"FWE": "020801"}))[0]
+        self.assertIn("beta", f3["FWE"].human)
+
+    def test_ttg_minus_one_infinite(self):
+        f = TextParser().feed(make_text_block({"TTG": "-1"}))[0]
+        self.assertEqual(f["TTG"].value, -1)
+        self.assertIsNotNone(f["TTG"].human)
+        self.assertIn("infinite", f["TTG"].human.lower())
+
+    def test_checksum_not_in_label_info(self):
+        from ve_direct.tables import LABEL_INFO
+        self.assertNotIn("Checksum", LABEL_INFO)
+        self.assertNotIn("CHECKSUM", LABEL_INFO)
+
+    def test_percent_covers_dm(self):
+        f = TextParser().feed(make_text_block({"SOC": "997", "DM": "15"}))[0]
+        self.assertAlmostEqual(f["SOC"].percent, 99.7)
+        self.assertAlmostEqual(f["DM"].percent, 1.5)
+
+    def test_coverage_cap_ble_warn_mode_mon(self):
+        blk = make_text_block({
+            "CAP_BLE": "3", "WARN": "5", "MODE": "2", "MON": "-9",
+            "AC_OUT_V": "23000", "AC_OUT_I": "15", "AC_OUT_S": "100",
+            "DC_IN_V": "1200", "DC_IN_I": "50", "DC_IN_P": "60",
+            "V2": "13800", "V3": "13800", "I2": "100", "I3": "-50",
+            "H13": "2", "H14": "3",
+        })
+        f = TextParser().feed(blk)[0]
+        self.assertIn("BLE supports switching off", f["CAP_BLE"].human)
+        self.assertIn("permanent", f["CAP_BLE"].human)
+        self.assertIn("Low voltage", f["WARN"].human)
+        self.assertIn("Inverter", f["MODE"].human)
+        self.assertEqual(f["MON"].value, -9)
+        self.assertEqual(f["MON"].human, "Solar charger")
+        f_mon0 = TextParser().feed(make_text_block({"MON": "0"}))[0]
+        self.assertEqual(f_mon0["MON"].human, "Battery monitor (BMV)")
+        f_mon8 = TextParser().feed(make_text_block({"MON": "8"}))[0]
+        self.assertEqual(f_mon8["MON"].human, "Water heater")
+        self.assertAlmostEqual(f.to_si()["AC_OUT_V"], 230.0)
+        self.assertAlmostEqual(f.to_si()["AC_OUT_I"], 1.5)
+        self.assertEqual(f.to_si()["AC_OUT_S"], 100)
+        self.assertAlmostEqual(f.to_si()["DC_IN_V"], 12.0)
+        self.assertAlmostEqual(f.to_si()["DC_IN_I"], 5.0)
+        self.assertEqual(f.to_si()["DC_IN_P"], 60)
+        self.assertAlmostEqual(f.to_si()["V2"], 13.8)
+        self.assertAlmostEqual(f.to_si()["V3"], 13.8)
+        self.assertAlmostEqual(f.to_si()["I2"], 0.1)
+        self.assertAlmostEqual(f.to_si()["I3"], -0.05)
+        self.assertEqual(f["H13"].value, 2)
+        self.assertEqual(f["H14"].value, 3)
+
+    def test_oversized_input_safety(self):
+        # Spec guideline: 9B label, 33B value, max 22 fields/block; parser is
+        # liberal but caps buffered input at 8 KiB.
+        p = TextParser()
+        self.assertEqual(p.feed(b"X" * 20000), [])
+        self.assertLess(p.pending_bytes, 8192)
+        good = make_text_block({"PID": "0x204", "V": "123"})
+        self.assertEqual(TextParser().feed(b"Y" * 9000 + good)[0]["V"].value, 123)
+
 
 if __name__ == "__main__":
     unittest.main()

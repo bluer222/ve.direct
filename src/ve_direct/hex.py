@@ -40,6 +40,10 @@ HEX_FLAG_DESCRIPTIONS = {
     HEX_FLAG_PARAMETER_ERROR: "parameter error",
 }
 
+# Nibble 0x3 is AppVersion (request) vs Unknown (response);
+# nibble 0x4 is ProductId (request) vs Error (response) — see
+# BlueSolar-HEX §1 command/response tables and Orion-XS-HEX §1.
+# A single dict cannot label both directions, so keep separate maps.
 RESPONSE_NAMES = {
     CMD_BOOT: "Boot",
     CMD_DONE: "Done",
@@ -53,17 +57,33 @@ RESPONSE_NAMES = {
     CMD_ASYNC: "Async",
 }
 
+REQUEST_NAMES = {
+    CMD_BOOT: "Boot",
+    CMD_DONE: "Ping",
+    CMD_APP_VERSION: "AppVersion",
+    CMD_PRODUCT_ID: "ProductId",
+    CMD_RESTART: "Restart",
+    CMD_GET: "Get",
+    CMD_SET: "Set",
+}
+
+
+def command_name(cmd: int, *, is_request: bool = False) -> str:
+    """Label nibble ``cmd`` for the request or response direction."""
+    table = REQUEST_NAMES if is_request else RESPONSE_NAMES
+    return table.get(cmd, f"Cmd({cmd:X})")
+
 
 def decode_app_version_24(raw: bytes | int | object) -> dict:
+    """Decode 24-bit firmware version (Orion XS §1.1 register 0x0102).
+
+    Bytes: byte 0 = identifier (0x00), bytes 1..3 = version (0xHHMMLL in LE).
+    Orion-XS §1.1 Notes 1-2 document only LL == 0xFF = release (vHH.MM).
+    Any other LL value is undocumented: return version None with an
+    "unknown(...)" type, never an invented label.
+    """
     if hasattr(raw, "value_bytes"):
         raw = getattr(raw, "value_bytes")
-    """Decode 24-bit firmware version (Orion XS §1 Note 1 & register 0x0102).
-
-    Orion XS uses 24-bit firmware version format:
-    Bytes: byte 0 = identifier (0x00), bytes 1..3 = version (0xHHMMLL in LE).
-    LL == 0xFF denotes an official release build (vHH.MM).
-    Other values indicate a beta or test build (vHH.MM-beta.LL).
-    """
     if isinstance(raw, int):
         raw_b = raw.to_bytes(4 if raw > 0xFFFFFF else 3, "little")
     else:
@@ -85,38 +105,29 @@ def decode_app_version_24(raw: bytes | int | object) -> dict:
     major = f"{hh}"
     minor = f"{mm:02X}"
     if ll == 0xFF:
-        tname = "release"
-        ver = f"{major}.{minor}"
-    else:
-        tname = "beta"
-        ver = f"{major}.{minor}-beta.{ll:02d}"
-    return {"version": ver, "type": tname, "build": ll, "raw": h}
+        return {"version": f"{major}.{minor}", "type": "release",
+                "build": ll, "raw": h}
+    # Undocumented LL: only 0xFF = release is defined (Orion-XS §1.1 Notes 1-2).
+    return {"version": None, "type": f"unknown(0x{ll:02X})",
+            "build": ll, "raw": h}
 
 
 def decode_app_version(raw: bytes) -> dict:
-    """Decode AppVersion Done / Ping payload (BlueSolar-HEX §1, Orion-XS-HEX §1).
+    """Decode BlueSolar AppVersion Done payload (BlueSolar-HEX §1).
 
-    2-byte form: ``0x4116`` = v1.16 (minor is BCD/hex digits, e.g. 0x16->"16");
+    Strict 2-byte form: ``0x4116`` = v1.16 (minor is hex digits);
     top 2 bits = firmware type (00 bootloader, 01 application, 10 tester,
     11 release candidate). E.g. ``0xD101`` = Release Candidate D of v1.01.
-    Orion XS ping returns ``0xYFFF`` (no version in ping; Y indicates fw type).
+    Any other length (incl. 3-byte input) is undocumented: return
+    version None / type "unknown".  Orion-XS 0xYFFF ping handling lives in
+    decode_ping_version only, so a 2-byte value like FFFF always decodes
+    here as a BlueSolar version and can never conflate with an Orion ping.
     Returns ``{"version": "1.16", "type": "application", "raw": ...}``.
     """
     h = bytes(raw).hex().upper()
-    if len(raw) == 3:
-        return {"version": None, "type": "application24", "raw": h}
-    if len(raw) < 2:
+    if len(bytes(raw)) != 2:
         return {"version": None, "type": "unknown", "raw": h}
-    v = int.from_bytes(raw[:2], "little")
-    
-    # Orion XS Ping response: 0xYFFF where lower 12 bits are 0xFFF
-    if (v & 0x0FFF) == 0x0FFF:
-        y = (v >> 12) & 0x0F
-        orion_types = {0b0011: "bootloader", 0b0111: "application",
-                       0b1011: "tester", 0b1111: "release_candidate"}
-        tname = orion_types.get(y, f"unknown_{y:X}")
-        return {"version": None, "type": tname, "raw": h}
-
+    v = int.from_bytes(bytes(raw)[:2], "little")
     fw_type = (v >> 14) & 0x03
     tname = {0: "bootloader", 1: "application", 2: "tester", 3: "release_candidate"}[fw_type]
     major = (v >> 8) & 0x0F
@@ -130,7 +141,21 @@ def decode_app_version(raw: bytes) -> dict:
 
 
 def decode_ping_version(raw: bytes) -> dict:
-    """Ping response payload decodes like AppVersion (same version encoding)."""
+    """Decode Ping response (BlueSolar-HEX §1 response 5, Orion-XS-HEX §1).
+
+    Orion XS ping returns ``0xYFFF`` (no version; Y = fw type); BlueSolar
+    ping carries a version in the same 2-byte encoding as AppVersion.
+    """
+    h = bytes(raw).hex().upper()
+    if len(bytes(raw)) == 2:
+        v = int.from_bytes(bytes(raw)[:2], "little")
+        # Orion XS Ping: 0xYFFF where lower 12 bits are 0xFFF (no version).
+        if (v & 0x0FFF) == 0x0FFF:
+            y = (v >> 12) & 0x0F
+            orion_types = {0b0011: "bootloader", 0b0111: "application",
+                           0b1011: "tester", 0b1111: "release_candidate"}
+            tname = orion_types.get(y, f"unknown_{y:X}")
+            return {"version": None, "type": tname, "raw": h}
     return decode_app_version(raw)
 
 
@@ -144,7 +169,13 @@ def verify_frame(cmd: int, data: bytes, checksum: int) -> bool:
 
 
 def encode_frame(cmd: int, payload: bytes = b"") -> bytes:
-    """Encode ``:<cmd><payload hex><checksum>\\n`` (uppercase)."""
+    """Encode ``:<cmd><payload hex><checksum>\\n`` (uppercase).
+
+    Note: Orion-XS §1.3 prints ``:30300F4`` for Unknown(03 00) but that line
+    fails the checksum rule; the correct encoding is ``:303004F``
+    (3+0x03+0x00+0x4F == 0x55).  The doc has a typo; the code is right.
+    Do not "fix" this to match the printed typo.
+    """
     if not 0x0 <= cmd <= 0xF:
         raise FrameError(f"command must be one nibble, got {cmd:#x}")
     cs = compute_checksum(cmd, payload)
@@ -164,8 +195,19 @@ class HexFrame:
         return RESPONSE_NAMES.get(self.cmd, f"Cmd({self.cmd:X})")
 
     @property
+    def request_name(self) -> str:
+        return REQUEST_NAMES.get(self.cmd, f"Cmd({self.cmd:X})")
+
+    @property
     def register_id(self) -> int | None:
-        """LE u16 register id (first 2 data bytes), if present."""
+        """LE u16 register id, defined only for Get/Set/Async (docs §1).
+
+        Returns None for every other command (Done/Ping/Unknown/Error/
+        Boot/Restart/...): e.g. a product-id Done payload is version bytes,
+        not a register id.
+        """
+        if self.cmd not in (CMD_GET, CMD_SET, CMD_ASYNC):
+            return None
         if len(self.data) >= 2:
             return struct.unpack("<H", self.data[:2])[0]
         return None
@@ -192,8 +234,11 @@ def decode_line(line: bytes | str, *, strict: bool = False) -> HexFrame:
     one corrupt line never kills the Text/HEX stream; pass ``strict=True``
     for request/response validation where a bad checksum must raise.
     """
-    raw = line.encode("ascii") if isinstance(line, str) else bytes(line)
-    s = raw.strip().decode("ascii", errors="strict")
+    try:
+        raw = line.encode("ascii") if isinstance(line, str) else bytes(line)
+        s = raw.strip().decode("ascii", errors="strict")
+    except (UnicodeDecodeError, UnicodeEncodeError) as e:
+        raise FrameError(f"HEX line is not ASCII: {e}") from e
     if not s.startswith(":"):
         raise FrameError(f"HEX line must start with ':', got {s!r}")
     hexpart = s[1:].strip()

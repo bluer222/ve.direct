@@ -189,8 +189,11 @@ class AsyncVEDirect:
             )
 
     def _handle_hex(self, frame: HexFrame) -> None:
+        # Contract: callers decode with strict=True so checksum failures raise
+        # in decode_line before reaching here. A frame with valid=False must
+        # never be silently dropped — fail loudly instead.
         if not frame.valid:
-            return
+            raise ChecksumError(f"HEX checksum failed for {frame.raw!r}")
         if frame.cmd == _hex.CMD_ASYNC:
             self.async_frames.put_nowait(frame)
             return
@@ -225,9 +228,20 @@ class AsyncVEDirect:
         if frame.cmd in (_hex.CMD_ERROR, _hex.CMD_CHECKSUM_ERROR):
             fut = self._active_future()
             if fut is not None and not fut.done():
-                exc_cls = ChecksumError if frame.cmd == _hex.CMD_CHECKSUM_ERROR else RegisterError
-                fut.set_exception(exc_cls(
-                    f"device reports {frame.name}: {frame.raw!r}"))
+                # BlueSolar-HEX §1 / Orion-XS-HEX §1 response 4 carries two
+                # distinct meanings: payload 0xAAAA = framing error (wire
+                # checksum/structure) vs payload 0 = unable to enter
+                # bootloader. Response 2 (Orion) is always a framing error.
+                if frame.cmd == _hex.CMD_CHECKSUM_ERROR:
+                    exc: Exception = ChecksumError(
+                        f"device reports {frame.name}: {frame.raw!r}")
+                elif bytes(frame.data) == bytes.fromhex("AAAA"):
+                    exc = ChecksumError(
+                        f"device reports Error (framing error): {frame.raw!r}")
+                else:
+                    exc = RegisterError(
+                        f"device reports {frame.name}: {frame.raw!r}")
+                fut.set_exception(exc)
 
     async def _wait_future(self, fut: asyncio.Future, timeout: float) -> HexFrame:
         """Wait for fut to be resolved by any read pump, pumping ourselves if idle."""
@@ -416,22 +430,32 @@ class AsyncVEDirect:
     async def get_product_id(self, timeout: float = 2.0) -> int:
         """``:451`` — returns product id as int.
 
-        BMV and Phoenix specifications use a 2-byte little-endian Done payload.
-        MPPT and Orion use the standardized 4-byte form (instance, PID,
-        reserved).  A flavor is required to safely accept the 2-byte form.
+        Primary path is the standardized 4-byte Done form (BlueSolar-HEX
+        §1.1 / Orion-XS-HEX §1.1: byte0 instance 0x00, bytes1-2 PID,
+        byte3 reserved 0xFF); malformed 4-byte payloads are rejected.
+        Legacy fallback: BlueSolar-HEX §1.1 Note 1 says product info is
+        2-byte since fw 1.12 and 4-byte only since fw 1.30, and §1.3 shows
+        2-byte Done replies (e.g. ``:1000351``). Pre-1.30 MPPTs can never
+        return the 4-byte form, so a 2-byte reply is accepted as the PID
+        for MPPT-family flavors (and BMV/INV, whose specs use 2-byte LE).
         """
         import struct as _s
         frame = await self._command_transact(
             _hex.build_product_id(), _hex.CMD_DONE, timeout)
-        data = frame.data
-        if len(data) >= 4:
+        data = bytes(frame.data)
+        if len(data) == 4:
+            if data[0] != 0x00 or data[3] != 0xFF:
+                raise RegisterError(
+                    f"malformed 4-byte product-id reply (want 00 <PID LE> FF): "
+                    f"{frame.raw!r}")
             return _s.unpack("<H", data[1:3])[0]
-        if len(data) == 2 and self.flavor in ("BMV", "BMV71", "INV"):
+        if len(data) == 2 and self.flavor in (
+                "BMV", "BMV71", "INV", "MPPT", "MPPT_RS"):
             return _s.unpack("<H", data)[0]
         if len(data) == 2 and self.flavor is None:
             raise RegisterError(
-                "2-byte product-id reply is valid for BMV/Phoenix but unsafe "
-                "for MPPT/Orion; set flavor='BMV', 'BMV71', or 'INV'")
+                "2-byte product-id reply is valid for BMV/Phoenix and legacy "
+                "pre-1.30 MPPT but unsafe without a flavor; set flavor")
         raise RegisterError(
             f"invalid product-id reply for flavor {self.flavor!r}: {frame.raw!r}"
         )

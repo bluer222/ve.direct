@@ -106,10 +106,13 @@ Fully and independently parsed and validated directly from official Victron spec
 - Product info: `0x0100`, `0x0101` (revision), `0x0102` (app ver), `0x010A` (serial), `0x010B` (model)
 - Capabilities: `0x0140` (capabilities 1), `0x0150` (BLE capabilities)
 - Inverter control & settings: `0x0200` (mode), `0x0201` (state), `0x0207` (off reason),
-  `0x0209` (remote switch), `0x0230` (voltage setpoint), `0x0231` (min voltage setpoint), `0x0232` (max voltage setpoint)
+  `0x0230` (voltage setpoint), `0x0231` (min voltage setpoint), `0x0232` (max voltage setpoint)
+  (Note: `0x0209`/`0x020A` appeared in an earlier draft of this DB but in
+  neither the Phoenix Rev 5 snapshot nor any other snapshot; both were
+  removed as phantom registers.)
 - AC output: `0x2200` (AC voltage), `0x2201` (AC current), `0x2202` (AC nominal voltage), `0x2203` (rated power),
   `0x2205` (apparent power), `0x2206` (load sense threshold), `0x2207` (load sense clear),
-  `0x2210` (alarm power), `0x2211` (voltage range min), `0x2212` (voltage range max)
+  `0x2210` (shutdown low-voltage set), `0x2211` (voltage range min), `0x2212` (voltage range max)
 - Non-volatile memory: `0xEB99` (`INV_NVM_COMMAND`: 1=Save, 2=Revert, 3=Backup, 4=Default), `0x0004` (restore defaults)
 - Eco mode & dynamic cut-off: `0xEB03` (50Hz/60Hz), `0xEB04` (eco min current), `0xEB06` (eco retry time),
   `0xEB10` (load detect periods), `0xEBBA` (dyn cutoff enable), `0xEBB1..0xEBB7` (dyn cutoff parameters)
@@ -123,7 +126,8 @@ Fully and independently parsed and validated directly from official Victron spec
 - Monitor data: `0xED8D` (main voltage), `0xED7D` (aux starter voltage), `0xED8F` (current 0.1A),
   `0xED8C` (current precise 0.001A), `0xED8E` (power 1W), `0xEEFF` (consumed Ah 0.1Ah),
   `0x0FFF` (SOC 0.01%), `0x0FFE` (TTG min), `0xEDEC` (temp 0.01K), `0x0382` (midpoint voltage),
-  `0x0383` (midpoint deviation), `0xEEB6` (synchronization state), `0xEEB8`, `0xEEFC`
+  `0x0383` (midpoint deviation), `0xEEB6` (synchronization state), `0xEEB8` (DC monitor mode,
+  Sn16, BMV-712 v4.07+; visible under both `BMV` and `BMV71`), `0xEEFC` (buzzer, Un8 0..1)
 - Monitor settings: `0x1000` (battery capacity), `0x1001` (charged voltage), `0x1002` (tail current),
   `0x1003` (charged detection time), `0x1004` (charge efficiency), `0x1005` (peukert coefficient),
   `0x1006` (current threshold), `0x1007` (TTG delta T), `0x1008` (discharge floor), `0x1009` (relay low SOC clear),
@@ -135,11 +139,13 @@ Fully and independently parsed and validated directly from official Victron spec
   `0x030A` (low voltage alarms), `0x030B` (high voltage alarms), `0x030E` (min starter voltage),
   `0x030F` (max starter voltage), `0x0310` (discharged energy kWh), `0x0311` (charged energy kWh)
 - Alarms & Relays: `0x0320..0x032D` (BMV alarm thresholds), `0x0331/0x0332` (midpoint alarm),
-  `0x031F` (alarm acknowledge), `0x034D` (relay invert), `0x034E` (relay state), `0x034F` (relay mode),
+  `0x031F` (alarm acknowledge — table row has no write-only marker, so get+set),
+  `0x034D` (relay invert, Un8 0..1), `0x034E` (relay state), `0x034F` (relay mode Un8 0..2),
   `0x0350..0x0357` (relay thresholds), `0x035A..0x035D` (relay temp), `0x0361/0x0362` (relay midpoint)
-- Display & Shunt settings: `0xEEFE` (intensity), `0x0400` (always on), `0xEEF5` (scroll speed),
-  `0xEEE0..0xEEE8` (show toggles), `0xEEF9` (SW version), `0xEEF6` (setup lock), `0xEEFB` (shunt amps),
-  `0xEEFA` (shunt volts), `0xEEF7` (temp unit), `0xEEF4` (temp coeff), `0xEEF8` (aux input),
+- Display & Shunt settings: `0xEEFE` (intensity), `0x0400` (always on, Un8 0..1), `0xEEF5` (scroll speed),
+  `0xEEE0..0xEEE8` (show toggles, Un8 0..1), `0xEEF9` (SW version, Un16 HEX AA.BB),
+  `0xEEF6` (setup lock, Un8 0..1), `0xEEFB` (shunt amps),
+  `0xEEFA` (shunt volts), `0xEEF7` (temp unit), `0xEEF4` (temp coeff, unit `%CAP/°C`), `0xEEF8` (aux input),
   `0xEC41` (settings changed timestamp), `0x0120` (device uptime), `0x010C` (description)
 
 ### Reverse-engineered — krahabb, NO official doc
@@ -190,6 +196,29 @@ product's scale, width, enum, or access mode:
 - `0x2211/0x2212`: `VOLTAGE_RANGE_MIN/MAX` (INV) vs `ADJUSTABLE_VOLTAGE_*`
   (MPPT_RS) — same scale
 
+### Liberal flavoring policy (by design, not an error)
+
+Flavor tags are a superset of strict doc provenance and are intentionally
+not narrowed, because narrowing would break `for_flavor()` consumers with
+no wire-behavior contradiction:
+
+- Display `0x0400-0x0404` are `ANY` although BlueSolar-HEX scopes them to
+  pluggable-LCD models; `0x0406`/`0x0408` stay `MPPT_RS` (internal display).
+- `MPPT_HISTORY_*` (`0x10A0-0x10BE`) carry `MPPT` as well as `MPPT_RS`
+  although BlueSolar-HEX Note 2 restricts them to multi-tracker units.
+- Generic `ANY` control/status IDs (`APP_VER 0x0102`, `GROUP_ID`,
+  `CAPABILITIES`, `DEVICE_MODE`/`DEVICE_STATE`, `WARNING`/`ALARM_REASON`,
+  `RELAY_OPERATION_MODE`, `RELAY_PANEL_HIGH_*`, `DISPLAY_*`) are visible in
+  the BMV view although BMV-7xx-HEX Rev 7 defines no such registers (verified
+  by ID search of the snapshot: `0x0102`/`0x0104`/`0x0140`/`0x031C`/`0x031E`/
+  `0xEDD9`/`0xEDBA`/`0xEDB9`/`0x0401`-`0x0404` never occur there, and
+  `0x0200`-`0x0202` occur only as BMV60x product-ID values, not registers);
+  likewise `0x0401-0x0404` are absent from the BMV display
+  table (BMV documents only `0xEEFE`/`0x0400`/`0xEEF5`/`0xEEE0-0xEEE8` there).
+- Un8 0..1 (OFF,ON) settings (BMV buzzer/show-toggles/setup-lock and friends,
+  `RELAY_CONTROL`, `INV_DYN_CUTOFF_ENABLE`) stay `BOOLEAN`: Python bool ==
+  0/1, so wire values round-trip and truthiness is preserved.
+
 ### Enums / sentinels / flavors
 
 - Enums baseline `ve_reg_enum.h`, extended from docs: `RELAY_OPERATION_MODE`
@@ -204,6 +233,24 @@ product's scale, width, enum, or access mode:
   Phoenix `0x0207` off-reason bits 0/2/3/4/5 (HEX Rev 5 §2.3.2).
   Phoenix BLE capabilities are `0x0150` (product-info table, same ID as BMV);
   the §2.2.5 heading `0x0160` is a Victron typo and is not a second register.
+- Per-flavor enum overrides (same wire ID, family-documented names; generic
+  entries unchanged): `RELAY_MODE_BMV` (BMV Rev 7 `0x034F` 0..2 DFLT/CHRG/REM),
+  `RELAY_MODE_INV` (Phoenix Rev 5 §2.8.1 `0x034F` values 0,2,3,4,5,6 — no 1),
+  `DEVICE_STATE_ORION`/`DEVICE_MODE_ORION` (Orion-XS-HEX `0x0201` 0 NOT_CHARGING /
+  11 PSU / 245 WAKE-UP / 255 UNAVAILABLE and `0x0200` 0/4 off, 1/3 on),
+  `DEVICE_STATE_INV`/`DEVICE_MODE_INV` (Phoenix Rev 5 §2.3.1 states 0,1,2,9 and
+  §2.4.2 modes 2,3,4,5,0xFD), `WARNING_REASON_INV` (Phoenix Rev 5 §2.3.3 bits
+  0,1,5,6,8,9,10,11). Selected by flavor-qualified lookup; see `HEX_REGISTERS.md`.
+- Doc errata captured in the DB: BlueSolar-HEX `0x200D` is typed un8 but lists
+  bits 0..8 — bit 8 STANDBY is undecodable on the wire, so the map keeps bits
+  0..7 and the dtype stays uint8_t; BlueSolar-HEX off-reason bits 7..8 are
+  Reserved (no "engine" bit — that name is Orion-only) with bit 9 battery-temp-low;
+  `BAT_VOLTAGE_SETTING` keeps BlueSolar values 0 (auto) and 36 although the
+  Orion-XS-HEX table lists 12/24/48 only; charger error 19 (polarity reversed,
+  disabled since fw 1.15) decodes instead of `unknown(19)`; `0xEDF5`
+  (storage voltage) is absent from the BlueSolar-HEX Rev 18 battery table and
+  from every other snapshot — kept as a krahabb-sourced CHG setting with this
+  provenance note rather than silently dropped.
 - Sentinels→`None` (encode back): `0xEDEC`/`0x2031`/`0x2002` = `0xFFFF`,
   `0x2003` = `0x7FFF`, `0xD18D` = `0x7FFFFFFF`, `0xEDE6` = `0xFFFF` (=use max),
   `0xEC41` = `0xFFFFFFFF`, history/cycle

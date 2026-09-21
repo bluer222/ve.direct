@@ -101,13 +101,18 @@ class TestFullHex(unittest.TestCase):
         self.assertEqual(H.decode_app_version(bytes.fromhex("1641"))["version"], "1.16")
         self.assertEqual(H.decode_app_version(bytes.fromhex("1641"))["type"], "application")
         self.assertEqual(H.decode_app_version(bytes.fromhex("0111"))["type"], "bootloader")
-        self.assertEqual(H.decode_app_version(bytes.fromhex("010203"))["type"], "application24")
+        # 3-byte input is undocumented: no invented "application24" type.
+        undoc3 = H.decode_app_version(bytes.fromhex("010203"))
+        self.assertIsNone(undoc3["version"])
+        self.assertEqual(undoc3["type"], "unknown")
         rel = H.decode_app_version_24(bytes.fromhex("00FF0201"))
         self.assertEqual(rel["version"], "1.02")
         self.assertEqual(rel["type"], "release")
-        beta = H.decode_app_version_24(bytes.fromhex("00030201"))
-        self.assertEqual(beta["version"], "1.02-beta.03")
-        self.assertEqual(beta["type"], "beta")
+        # Non-0xFF LL is undocumented (Orion-XS §1.1 Notes 1-2 define only
+        # LL==0xFF = release): never an invented "beta" label.
+        undoc = H.decode_app_version_24(bytes.fromhex("00030201"))
+        self.assertIsNone(undoc["version"])
+        self.assertTrue(undoc["type"].startswith("unknown"))
 
     def test_boot_name(self):
         self.assertEqual(H.decode_line(H.encode_frame(0, H.BOOT_MAGIC)).name, "Boot")

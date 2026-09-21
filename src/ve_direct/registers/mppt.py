@@ -1,4 +1,6 @@
-"""MPPT solar chargers (BlueSolar/SmartSolar): Text labels + HEX flavor."""
-TEXT_LABELS = ["PID", "FW", "SER#", "V", "I", "VPV", "PPV", "CS", "MPPT", "OR",
-               "ERR", "LOAD", "IL", "Relay", "H19", "H20", "H21", "H22", "H23",
-               "HSDS", "AR", "WARN"]
+"""MPPT solar chargers (BlueSolar/SmartSolar): HEX flavor (see registers/__init__.py).
+
+NOTE: the former TEXT_LABELS list was dead code (no importer) and partly
+wrong (it listed WARN, which Text 3.34 Table I marks Phoenix-inverter only).
+Authoritative Text labels live in ve_direct.tables.LABEL_INFO.
+"""

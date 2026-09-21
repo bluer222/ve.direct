@@ -35,11 +35,11 @@ BMV/SmartShunt sends alternating PID-block + history-block. In code: frame[label
 | TTG | min | as-is | BMV/SmartShunt | Time-to-go (-1 = infinite, not discharging) |
 | Alarm | — | — | BMV/SmartShunt | Alarm condition active (ON/OFF) |
 | Relay | — | — | MPPT, Inverter, Charger, BMV/SmartShunt | Relay state (ON/OFF) |
-| AR | — | — | MPPT, Inverter, BMV/SmartShunt | Alarm reason (bitmask sum, decimal) |
-| WARN | — | — | MPPT, Inverter | Warning reason, live (inverter only, same bits as AR) |
-| OR | — | — | MPPT, OrionXS/BuckBoost | Off reason (bitmask, decimal) |
+| AR | — | — | BMV/SmartShunt, Inverter | Alarm reason (bitmask sum, decimal) |
+| WARN | — | — | Inverter | Warning reason, live (inverters only, same bits as AR) |
+| OR | — | — | MPPT, Inverter, OrionXS/BuckBoost | Off reason (bitmask, decimal) |
 | CS | — | — | MPPT, Inverter, Charger, OrionXS/BuckBoost | State of operation |
-| ERR | — | — | MPPT, Inverter, Charger, OrionXS/BuckBoost | Error code |
+| ERR | — | — | MPPT, Charger, OrionXS/BuckBoost | Error code |
 | MODE | — | — | Inverter, Charger, OrionXS/BuckBoost | Device mode |
 | MPPT | — | — | MPPT | Tracker operation mode |
 | MON | — | — | BMV/SmartShunt | DC monitor mode |
@@ -72,8 +72,8 @@ BMV/SmartShunt sends alternating PID-block + history-block. In code: frame[label
 | AC_OUT_S | VA | as-is | Inverter | AC output apparent power |
 | DC_IN_V | 0.01V | V ÷100 | OrionXS/BuckBoost | DC input voltage (BuckBoost/OrionXS) |
 | DC_IN_I | 0.1A | A ÷10 | OrionXS/BuckBoost | DC input current (BuckBoost/OrionXS) |
-| DC_IN_P | W | as-is | OrionXS/BuckBoost | DC input power (BuckBoost/OrionXS) |
-| CAP_BLE | — | — | see spec matrix | BLE off-capability bitmask |
+| DC_IN_P | W | as-is | OrionXS/BuckBoost | DC input power, 1W units per spec (BuckBoost/OrionXS) |
+| CAP_BLE | — | — | Inverter (Smart Phoenix; §CAP_BLE + history 3.26, no Fields-table row) | BLE off-capability bitmask |
 
 ## Decoded values
 
@@ -95,7 +95,13 @@ CAP_BLE bits: 0x1=BLE supports switching off, 0x2=BLE switching off is permanent
 
 PID: e.g. 0x204=BMV-702, 0xA04A=BlueSolar 100|30 rev2, 0xA058=SmartSolar 150|35, 0xA3F0=Orion XS 12V/12V-50A, 0xA3F1=Orion XS 1400; full map in tables.py:PID_MAP (171 entries incl. 0xA048, 0xA110/0xA111 from BlueSolar-HEX and Phoenix-HEX Rev 5 0xA2B1/0xA2E1/0xA2F1).
 
-Notes: SOC raw 0..1000 = 0..100.0%. TTG -1 = infinite (not discharging).
+Notes: SOC raw 0..1000 = 0..100.0%. TTG -1 = infinite (not discharging,
+surfaced as `.human = "Infinite (not discharging)"`).
 T/CE/SOC/TTG show `---` when unsynced or no sensor. FW/FWE expose decoded
 version text through `.human`. LOAD/Alarm/Relay are normalized to uppercase
 (old firmware sent On/Off).
+
+Implementation guidelines (spec p.11): label 9B, value 33B, max 22
+fields/block. The parser keeps liberal acceptance (arbitrary lengths) but
+caps buffered input at 8 KiB (oversized HEX candidates and Text backlog are
+truncated) so hostile/corrupt input cannot grow memory unbounded.
