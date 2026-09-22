@@ -82,6 +82,12 @@ source) vs reverse-engineering. Code references are `file:line` (approx).
 - Restore: `0x0004` (WRITE_ONLY, data ignored)
 - History (STRUCT→dict): `0x1030` (WRITE_ONLY), `0x104F`,
   `0x1050-0x106E`, `0x10A0-0x10BE`
+  (Doc-side ambiguity, resolved for the overview side: the BlueSolar-HEX
+  History-data overview lists MPPT history as `0x10A0...0x10BE` — 31 registers,
+  symmetric with daily history `0x1050...0x106E` (31) — while the History-MPPT
+  day-record detail heading says `0x10A0..0x10BD` (30). The DB implements
+  `0x10A0..0x10BE` following the overview/symmetry; see
+  `src/ve_direct/registers/__init__.py` `range(0x10A0, 0x10BF)`.)
 - Display: `0x0400`, `0x0401`, `0x0402`, `0x0403`, `0x0404`, `0x0406`, `0x0408`
 - Networking: `0x2000`, `0x2001`, `0x2002`, `0x2003`, `0x2004` (WRITE_ONLY),
   `0x2007`, `0x2008`, `0x2009`, `0x200A`, `0x200B`, `0x200C`, `0x200D`,
@@ -157,7 +163,7 @@ Fully and independently parsed and validated directly from official Victron spec
 Header quote (`ve_reg_register.h`): "`UNKNOWN_` ... based off reverse
 engineering field observations" / "`U_` prefix ... data meaning is inferred
 ... but still there's no official docs". All `MULTI_RS` flavor
-(`src/ve_direct/registers/__init__.py:187-200`):
+(`src/ve_direct/registers/__init__.py:258-271`):
 
 | Name | ID |
 |---|---|
@@ -203,6 +209,14 @@ product's scale, width, enum, or access mode:
   (MPPT/MPPT_RS) — same scale
 - `0xEDEF`: `BAT_VOLTAGE` (CHG, READ_WRITE) vs `INV_BAT_VOLTAGE` (INV,
   READ_ONLY, Phoenix section 2.1 product-info table) — same scale
+- `0x0350/0x0351/0x0352/0x0353`: `RELAY_BAT_LOW_SET/LOW_CLEAR/HIGH_SET/HIGH_CLEAR`
+  (MPPT/MPPT_RS, Un16 0.01 V, BlueSolar-HEX Relay settings) vs
+  `BMV_RELAY_LOW_VOLTAGE/LOW_CLEAR/HIGH_VOLTAGE/HIGH_CLEAR` (BMV, Un16 0.1 V,
+  BMV Rev 7 Relay settings). Phoenix Rev 5 and Orion-XS snapshots define no
+  `0x0350-0x0353` (verified by ID search), so the generic entries are scoped to
+  (`MPPT`, `MPPT_RS`) following the `0x0400` precedent; `for_flavor("BMV")`
+  excludes them and `lookup(0x0350, flavor="BMV")` resolves the BMV meaning.
+  Unflavored `lookup(0x0350)` raises `AmbiguousRegisterError`.
 
 ### Liberal flavoring policy (by design, not an error)
 
@@ -216,7 +230,10 @@ no wire-behavior contradiction:
   (Un8 0..1 OFF/ON) while BlueSolar-HEX defines it as Display backlight
   mode (0=keypress/1=on/2=auto), so `DISPLAY_BACKLIGHT_MODE` is scoped to
   (`MPPT`, `MPPT_RS`) and only `BMV_BACKLIGHT_ALWAYS_ON` is visible to
-  `BMV`/`BMV71`.
+  `BMV`/`BMV71`. `0x0350-0x0353` are the second exception (same precedent):
+  BlueSolar-HEX relay battery set/clear (0.01 V) vs BMV Rev 7 relay low/high
+  voltage(+clear) (0.1 V), so generic `RELAY_BAT_*` is scoped to
+  (`MPPT`, `MPPT_RS`) and only `BMV_RELAY_*` is visible to `BMV`/`BMV71`.
 - `MPPT_HISTORY_*` (`0x10A0-0x10BE`) carry `MPPT` as well as `MPPT_RS`
   although BlueSolar-HEX Note 2 restricts them to multi-tracker units.
 - Generic `ANY` control/status IDs (`APP_VER 0x0102`, `GROUP_ID`,

@@ -30,9 +30,23 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root / "src"))
 sys.path.insert(0, str(project_root / "tools"))
 
-from spec_parser import load_all_specs
+from spec_parser import (
+    BlueSolarHEXParser,
+    VEDirectTextParser,
+    _is_desc_continuation,
+    load_all_specs,
+)
 import fetch_specs
-from fetch_specs import check_specs, extract_text, remote_last_modified, snapshot_revision_info
+from fetch_specs import (
+    check_specs,
+    extract_text,
+    fetch_remote_snapshot_text,
+    normalize_snapshot_text,
+    remote_last_modified,
+    snapshot_freshness_status,
+    snapshot_revision_info,
+    verify_remote_content,
+)
 import ve_direct.registers as R
 from ve_direct.exceptions import AmbiguousRegisterError
 import ve_direct.tables as T
@@ -46,7 +60,15 @@ import ve_direct.tables as T
 # accidental addition fails here.
 EXPECTED_COUNTS = {
     # BlueSolar: 1.1 tables + 16 per-tracker mirrors + 6 timer events
-    # + 31 daily-history (0x1050..0x106E) + 31 MPPT-history (0x10A0..0x10BE).
+    # + 31 daily-history (0x1050..0x106E) + 31 MPPT-history. The MPPT
+    # history endpoints conflict inside the doc itself: the 1.1-table
+    # multi-line range ends at 0x10BE while the "History MPPT day record"
+    # detail header prints 0x10A0..0x10BD (daily history agrees at 0x106E
+    # on both sides). Documented resolution: the table endpoint wins, so
+    # the parser keeps 31 IDs 0x10A0..0x10BE; see
+    # test_bluesolar_mppt_history_doc_conflict, which asserts both
+    # conflicting endpoints plus this resolution instead of silently
+    # unioning them.
     "bluesolar": 206,
     # Orion: 1.1 tables + typo rescue xEDE0 + 0x0004/0x0206/0xEDDA/0x2013/
     # 0x0150/0x0090 detail IDs + 0x1030/0x1042/0x1043/0x106F/0x1099 +
@@ -62,6 +84,31 @@ EXPECTED_COUNTS = {
 }
 
 
+def count_doc_field_labels(section: str) -> set[str]:
+    """Independent Text-mode label counter, deliberately shaped unlike the
+    parser's ``^\\s{10,25}...\\s{2,}`` on both axes while staying exact: it
+    anchors the label column narrowly (10-20; the doc prints every label
+    at column 13, prose/footnotes sit at 25+) and tolerates ANY
+    inter-column gap (``\\s+``), whereas the parser anchors the gap
+    (``\\s{2,}``) over a wider indent window. A single-space label row —
+    missed by the parser's gap rule — is still counted here, so it fails
+    loudly as a parser-vs-counter mismatch instead of passing ``len==63``
+    on both sides. The stoplist is shared only because the "Label" header
+    itself sits in the label column; verified: this yields exactly the 63
+    doc fields on the current snapshot with no prose false positives
+    (footnote prose at 25+ is outside 10-20)."""
+    stoplist = {
+        "Label", "Table", "The", "Note", "Victron", "General", "E-mail",
+        "When", "Both", "Available", "60x",
+    }
+    return {
+        m.group(1)
+        for line in section.splitlines()
+        for m in [re.match(r"^\s{10,20}([A-Za-z0-9_#]+)\s+", line)]
+        if m and m.group(1) not in stoplist
+    }
+
+
 def scrape_doc_ids(text: str) -> set[int]:
     """Independent crude ID collector: every 0xHHHH occurrence plus ".."
     range expansion. Deliberately dumber than the parser so parser drops
@@ -69,7 +116,16 @@ def scrape_doc_ids(text: str) -> set[int]:
     intentionally far more permissive than the parser's 64-register
     `_expand_id_range` cap (a shared cap would hide the same blind spot on
     both sides, e.g. a 0x1000..0x10FF span missed by both): only absurd
-    spans such as the BMV Range-column bound 0x0000..0xFFFF are excluded."""
+    spans such as the BMV Range-column bound 0x0000..0xFFFF are excluded.
+    Likewise the multi-line ``0xAAAA ...`` / bare ``0xBBBB`` scan below
+    looks up to 8 lines ahead while the parser only scans 3
+    (``range(i + 1, min(i + 4, ...))``): the parser's tight window encodes
+    the doc's current layout (endpoint on the very next content line), so
+    the test deliberately over-scans — a 5-line gap or format drift is
+    still scraped here and then fails loudly as scraped-but-unparsed (or
+    as an invented-ID mismatch), instead of being missed by both sides.
+    Over-scan false positives are guarded by the strict bare-ID line
+    match plus the 1024-span cap."""
     ids = {int(x, 16) for x in re.findall(r"0x([0-9A-Fa-f]{4})\b", text)}
     for m in re.finditer(r"0x([0-9A-Fa-f]{4})\s*\.\.\s*0x([0-9A-Fa-f]{4})", text):
         a, b = int(m.group(1), 16), int(m.group(2), 16)
@@ -79,7 +135,7 @@ def scrape_doc_ids(text: str) -> set[int]:
     for i, line in enumerate(lines):
         if re.match(r"^\s*0x[0-9A-Fa-f]{4}\s*\.\.\.\s*$", line):
             a = int(re.match(r"^\s*0x([0-9A-Fa-f]{4})", line).group(1), 16)  # type: ignore[union-attr]
-            for nxt in lines[i + 1 : i + 4]:
+            for nxt in lines[i + 1 : i + 9]:
                 m2 = re.match(r"^\s*(0x[0-9A-Fa-f]{4})\s*$", nxt)
                 if m2:
                     b = int(m2.group(1), 16)
@@ -148,7 +204,10 @@ SCALE_NONE_ALLOW = {
         0xEDE5, 0xEDE8, 0xEDFD, 0xEDFE, 0xEDFF,  # battery on/off/mode settings
     })
     | frozenset(range(0x1050, 0x106F))  # daily history structs
-    | frozenset(range(0x10A0, 0x10BF))  # MPPT history structs (doc table runs to 0x10BE)
+    # MPPT history structs: doc table runs to 0x10BE while the detail
+    # header prints 0x10BD (table endpoint wins, see
+    # test_bluesolar_mppt_history_doc_conflict).
+    | frozenset(range(0x10A0, 0x10BF))
     | frozenset(range(0xEDA0, 0xEDA6)),  # timer event words
     # Orion: product info, BLE/mode/state/off-reason, battery on/off/mode
     # rows, remote/network mode+status, history-block records, detail-only
@@ -208,6 +267,8 @@ SCALE_VALUE_EXCEPTIONS = {
 # the footnote cell to unknown, provenance in notes), and Orion detail-only
 # IDs (Value tables / prose without widths).
 DTYPE_UNKNOWN_ALLOW = {
+    # Table endpoint wins for the MPPT 0x10BE-vs-0x10BD doc conflict (see
+    # test_bluesolar_mppt_history_doc_conflict): all 31 IDs are structs.
     "bluesolar": frozenset({0x0004, 0x1030, 0x104F, 0xEDD1, 0xEDD3})
     | frozenset(range(0x1050, 0x106F))
     | frozenset(range(0x10A0, 0x10BF))
@@ -323,6 +384,68 @@ class TestSpecParsers(unittest.TestCase):
                 f"{key}: parser IDs absent from snapshot: "
                 f"{sorted(f'0x{i:04X}' for i in invented)}",
             )
+
+    def test_bluesolar_mppt_history_doc_conflict(self):
+        """The doc conflicts on the MPPT history endpoint: the 1.1-table
+        multi-line range ends at 0x10BE while the "History MPPT day
+        record" detail header prints 0x10A0..0x10BD. This test pins both
+        conflicting endpoints as found in the snapshot (so a doc revision
+        fixing either side fails here for re-triage) and pins the
+        documented parser resolution: the table endpoint wins, i.e. 0x10BE
+        is parsed and the MPPT history block spans 31 IDs 0x10A0..0x10BE.
+        A possibly-invented 0x10BE therefore cannot hide inside the
+        scraped-union of test_spec_snapshot_reverse_coverage."""
+        text = self.raw_texts["bluesolar"]
+        lines = text.splitlines()
+        # Table side: " 0x10A0 ..." line followed (within the doc's layout)
+        # by the bare " 0x10BE" endpoint line.
+        table_starts = [
+            i for i, line in enumerate(lines)
+            if re.match(r"^\s*0x10A0\s*\.\.\.\s*$", line)
+        ]
+        self.assertEqual(len(table_starts), 1, "expected exactly one 0x10A0 ... table row")
+        table_end = next(
+            (lines[j].strip() for j in range(table_starts[0] + 1, table_starts[0] + 4)
+             if re.match(r"^\s*0x[0-9A-Fa-f]{4}\s*$", lines[j])),
+            None,
+        )
+        self.assertEqual(table_end, "0x10BE", f"table-side MPPT endpoint changed: {table_end}")
+        # Header side: the detail section prints the shorter span.
+        headers = [
+            line.strip() for line in lines
+            if re.search(r"0x10A0\s*\.\.\s*0x10BD", line)
+        ]
+        self.assertEqual(len(headers), 1, f"header-side 0x10A0..0x10BD line changed: {headers}")
+        self.assertIn("History MPPT day record", headers[0])
+        # Documented resolution: table endpoint wins.
+        self.assertIn(0x10BE, self.bs_regs, "parser must keep the table endpoint 0x10BE")
+        mppt_block = [rid for rid in self.bs_regs if 0x10A0 <= rid <= 0x10BE]
+        self.assertEqual(len(mppt_block), 31, f"MPPT history block must span 31 IDs, got {len(mppt_block)}")
+        # Control: daily history agrees on both sides (0x106E), so only
+        # the MPPT span is conflict-allowlisted here.
+        daily_end = next(
+            (lines[j].strip() for i, line in enumerate(lines)
+             if re.match(r"^\s*0x1050\s*\.\.\.\s*$", line)
+             for j in range(i + 1, i + 4)
+             if re.match(r"^\s*0x[0-9A-Fa-f]{4}\s*$", lines[j])),
+            None,
+        )
+        self.assertEqual(daily_end, "0x106E")
+        self.assertTrue(any(re.search(r"0x1050\s*\.\.\s*0x106E", line) for line in lines))
+
+    def test_multiline_scan_gap_divergence(self):
+        """Proves the test-side multi-line scan is truly independent of the
+        parser's tight 3-line window: a synthetic ``0xAAAA ...`` range
+        whose bare endpoint sits 5 lines ahead (format drift) is expanded
+        by scrape_doc_ids (8-line window) but missed by the parser, i.e.
+        it would fail loudly as scraped-but-unparsed instead of being
+        missed by both."""
+        filler = ["some intervening layout line"] * 4
+        text = "\n".join([" 0x2000 ...", *filler, " 0x2002"])
+        scraped = scrape_doc_ids(text)
+        self.assertIn(0x2001, scraped)
+        parsed = BlueSolarHEXParser(text).parse_registers()
+        self.assertNotIn(0x2001, parsed)
 
     def test_spec_schema_compliance(self):
         """Verify 100% register presence, scale factor, data type, and flavor compliance across all 4 specifications."""
@@ -466,6 +589,111 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(
             R.lookup("RELAY_BAT_LOW_SET", flavor="BMV").scale, 0.1)
 
+    def test_snapshot_freshness_against_online(self):
+        """Real-directory freshness gate: FAIL when the online docs are
+        reachable and newer than tests/specs/*.txt, SKIP (never fail)
+        when offline or otherwise unverifiable. Pinned EXPECTED_COUNTS
+        alone would stay green against a new online revision; this gate
+        closes that hole while staying green in offline environments
+        (network unreachable -> "unknown" -> skip)."""
+        status, detail = snapshot_freshness_status(self.specs_dir)
+        if status == "unknown":
+            self.skipTest(f"freshness unverifiable, skipping: {detail}")
+        self.assertEqual(status, "fresh", f"online specs newer than snapshots: {detail}")
+
+    def test_text_unknown_units_empty(self):
+        """The snapshot's Units column vocabulary was enumerated directly
+        from tests/specs/VE.Direct-Protocol-3.34.txt (leading tokens:
+        mV/mA/mAh/W/VA/1W/0.01 kWh/0.01 V/0.1 A/°C/‰/Minutes/Seconds plus
+        footnote-glued and bare-footnote forms) and is fully covered by
+        _TEXT_UNITS_RE — Hz/kWh are absent from the snapshot, so no
+        vocabulary addition is due. A future unit (e.g. Hz/kWh) would fall
+        through to Units="" with unit text leaking into the description
+        while the `glued` invariant and spot-checks stay green; the
+        parser therefore records such candidates and this test fails
+        loudly until the unit is explicitly allowlisted with
+        justification."""
+        self.assertEqual(
+            self.specs["text"].unknown_units, [],
+            f"unknown Units cells (allowlist with justification or fix vocabulary): "
+            f"{self.specs['text'].unknown_units}",
+        )
+
+    def test_text_unknown_unit_recorded_loudly(self):
+        """Synthetic future-unit row: the parser must record ("Hz") rather
+        than silently leaking it into the description."""
+        section = (
+            "The units used by the serial interface are as follows:\n"
+            "             HZz                 Hz                       Some new quantity\n"
+            "             V                   mV                       Main voltage\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        parser = VEDirectTextParser(section)
+        fields = parser.parse_fields()
+        self.assertEqual(parser.unknown_units, [("HZz", "Hz")])
+        self.assertEqual(fields["HZz"].units, "")
+        # Control: known units never record.
+        self.assertEqual(fields["V"].units, "mV")
+
+    def test_text_field_counter_gap_divergence(self):
+        """Proves the independent counter is truly gap-permissive: a
+        synthetic single-space label row is counted by
+        count_doc_field_labels yet missed by the parser's ``\\s{2,}``
+        rule, i.e. it would fail loudly as a parser-vs-counter mismatch
+        instead of passing ``len==63`` on both sides."""
+        section = (
+            "The units used by the serial interface are as follows:\n"
+            "             V                   mV                       Main voltage\n"
+            "             QZ single-space description row\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        self.assertIn("QZ", count_doc_field_labels(section))
+        self.assertNotIn("QZ", VEDirectTextParser(section).parse_fields())
+
+    def _continuation_section(self, indent: int) -> str:
+        pad = " " * indent
+        return (
+            "The units used by the serial interface are as follows:\n"
+            "             H1                  mAh    11\n"
+            f"{pad}Depth of the deepest discharge\n"
+            "             H4                  11\n"
+            f"{pad}Number of charge cycles\n"
+            "             H17                 0.01 kWh                 Amount of discharged energy (BMV) /\n"
+            f"{pad}Amount of produced energy (DC monitor)\n"
+            "Table I Supported Text-mode fields\n"
+        )
+
+    def test_text_continuation_indent_shift_resilient(self):
+        """Regression: a `pdftotext -layout` column drift that moves the
+        description column left must not silently drop continuation joins.
+        The doc prints continuations at indent 58; the old hard
+        `indent >= 40` floor dropped every H1/H4/H5/H10/H17/H18 join after
+        a -20 shift (58 -> 38) while device bullets (indent-free scan)
+        kept parsing. Both layouts below must join identically."""
+        expected = {
+            "H1": "Depth of the deepest discharge",
+            "H4": "Number of charge cycles",
+            "H17": "Amount of discharged energy (BMV) / Amount of produced energy (DC monitor)",
+        }
+        for indent in (58, 38):
+            with self.subTest(indent=indent):
+                fields = VEDirectTextParser(self._continuation_section(indent)).parse_fields()
+                for label, desc in expected.items():
+                    self.assertEqual(fields[label].description, desc)
+
+    def test_is_desc_continuation_relative_rule(self):
+        """Unit-level pins for the relative-indent rule (label column 13):
+        footnote prose (25-27) and furniture never qualify, continuations
+        qualify across a ±15 drift band."""
+        self.assertFalse(_is_desc_continuation(" " * 26 + "Available on Phoenix Smart Chargers"))
+        self.assertFalse(_is_desc_continuation(" " * 27 + "When the battery is not discharging"))
+        self.assertFalse(_is_desc_continuation("Victron Energy BlueSolar HEX protocol"))
+        self.assertFalse(_is_desc_continuation(" " * 58 + "60x 70x SmartShunt header"))
+        self.assertFalse(_is_desc_continuation(""))
+        for indent in (33, 38, 43, 58, 63):
+            with self.subTest(indent=indent):
+                self.assertTrue(_is_desc_continuation(" " * indent + "Depth of the deepest discharge"))
+
     def test_text_protocol_spec(self):
         """Verify all parsed Text mode fields and product IDs from Text Protocol 3.34 exist in code."""
         missing_fields = [f.label for f in self.text_fields.values() if f.label not in T.LABEL_INFO]
@@ -474,24 +702,14 @@ class TestSpecParsers(unittest.TestCase):
         missing_pids = [f"0x{pid:04X} ({p.model_name})" for pid, p in self.pids.items() if pid not in T.PID_MAP]
         self.assertEqual(missing_pids, [], f"Parsed PIDs missing from PID_MAP: {missing_pids}")
 
-        # Doc totals against the snapshot (not just parser-vs-code). The indent
-        # window here is intentionally wider than the parser's ^\s{10,25} so
-        # a shared-indent blind spot (e.g. an 8-space label row missed by
-        # both) fails loudly as a parser-vs-counter mismatch instead.
+        # Doc totals against the snapshot (not just parser-vs-code); the
+        # counter is count_doc_field_labels above (independent shape, see
+        # its justification).
         text = self.raw_texts["text"]
         start = text.find("The units used by the serial interface are as follows:")
         end = text.find("Table I Supported Text-mode fields")
         section = text[start:end]
-        stoplist = {
-            "Label", "Table", "The", "Note", "Victron", "General", "E-mail",
-            "When", "Both", "Available", "60x",
-        }
-        doc_fields = {
-            m.group(1)
-            for line in section.splitlines()
-            for m in [re.match(r"^\s{4,40}([A-Za-z0-9_#]+)\s{2,}", line)]
-            if m and m.group(1) not in stoplist
-        }
+        doc_fields = count_doc_field_labels(section)
         self.assertEqual(len(doc_fields), EXPECTED_COUNTS["fields"])
         self.assertEqual(set(self.text_fields), doc_fields)
 
@@ -786,6 +1004,155 @@ class TestFetchSpecs(unittest.TestCase):
                 return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
             ):
                 self.assertFalse(check_specs(Path(tmp)))
+
+    def _write_dated_specs(self, tmp: Path) -> None:
+        self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
+
+    def test_freshness_status_fresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
+            ):
+                status, _ = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "fresh")
+
+    def test_freshness_status_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+            ):
+                status, detail = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "stale")
+                self.assertIn("BlueSolar", detail)
+
+    def test_freshness_status_same_day_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2023, 2, 1, 18, 0, tzinfo=datetime.timezone.utc),
+            ):
+                status, _ = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "unknown")
+
+    def test_freshness_status_offline_is_unknown(self):
+        # Offline (URLError from urlopen) must SKIP the suite, never fail it.
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                side_effect=OSError("Network is unreachable"),
+            ):
+                status, _ = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "unknown")
+
+    def test_freshness_status_no_header_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            with mock.patch.object(fetch_specs, "remote_last_modified", return_value=None):
+                status, _ = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "unknown")
+
+    def test_freshness_status_undated_local_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "no markers here\n")
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
+            ):
+                status, _ = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "unknown")
+
+    def test_freshness_status_missing_file_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            (Path(tmp) / "BlueSolar-HEX-protocol.txt").unlink()
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
+            ):
+                status, _ = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "unknown")
+
+    def test_normalize_snapshot_text(self):
+        self.assertEqual(
+            normalize_snapshot_text("a  \r\nb\t \n\n"),
+            "a\nb",
+        )
+        self.assertEqual(normalize_snapshot_text("x"), "x")
+
+    def test_fetch_remote_snapshot_text_match_path(self):
+        with mock.patch.object(fetch_specs, "download_pdf_bytes", return_value=b"%PDF"):
+            with mock.patch.object(fetch_specs.shutil, "which", return_value="/usr/bin/pdftotext"):
+                with mock.patch.object(fetch_specs, "extract_text") as mx:
+                    def _fake(pdf_path, txt_path):
+                        Path(txt_path).write_text("remote layout\n")
+                        return True
+                    mx.side_effect = _fake
+                    self.assertEqual(
+                        fetch_remote_snapshot_text("http://example/x.pdf"), "remote layout\n"
+                    )
+
+    def test_fetch_remote_snapshot_text_download_failure(self):
+        with mock.patch.object(
+            fetch_specs, "download_pdf_bytes", side_effect=OSError("offline")
+        ):
+            self.assertIsNone(fetch_remote_snapshot_text("http://example/x.pdf"))
+
+    def test_fetch_remote_snapshot_text_no_pdftotext(self):
+        with mock.patch.object(fetch_specs, "download_pdf_bytes", return_value=b"%PDF"):
+            with mock.patch.object(fetch_specs.shutil, "which", return_value=None):
+                self.assertIsNone(fetch_remote_snapshot_text("http://example/x.pdf"))
+
+    def test_fetch_remote_snapshot_text_extract_failure(self):
+        with mock.patch.object(fetch_specs, "download_pdf_bytes", return_value=b"%PDF"):
+            with mock.patch.object(fetch_specs.shutil, "which", return_value="/usr/bin/pdftotext"):
+                with mock.patch.object(fetch_specs, "extract_text", return_value=False):
+                    self.assertIsNone(fetch_remote_snapshot_text("http://example/x.pdf"))
+
+    def test_verify_remote_content_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "local snapshot\n")
+            with mock.patch.object(
+                fetch_specs, "fetch_remote_snapshot_text", return_value="local snapshot  \n"
+            ):
+                results = verify_remote_content(Path(tmp))
+                self.assertEqual(set(results), set(fetch_specs.OFFICIAL_SPECS))
+                self.assertTrue(all(v is True for v in results.values()))
+
+    def test_verify_remote_content_diff(self):
+        # Same-timestamp CDN re-upload: content differs -> False (would-be
+        # FRESH under header-only --check, caught here by --sync).
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "local snapshot\n")
+            with mock.patch.object(
+                fetch_specs, "fetch_remote_snapshot_text", return_value="tampered remote\n"
+            ):
+                results = verify_remote_content(Path(tmp))
+                self.assertTrue(all(v is False for v in results.values()))
+
+    def test_verify_remote_content_unverifiable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "local snapshot\n")
+            with mock.patch.object(
+                fetch_specs, "fetch_remote_snapshot_text", return_value=None
+            ):
+                results = verify_remote_content(Path(tmp))
+                self.assertTrue(all(v is None for v in results.values()))
+
+    def test_verify_remote_content_missing_local(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "local snapshot\n")
+            (Path(tmp) / "BlueSolar-HEX-protocol.txt").unlink()
+            with mock.patch.object(
+                fetch_specs, "fetch_remote_snapshot_text", return_value="local snapshot\n"
+            ):
+                results = verify_remote_content(Path(tmp))
+                self.assertIsNone(results["BlueSolar-HEX-protocol"])
 
 
 if __name__ == "__main__":

@@ -48,7 +48,11 @@ stricter provenance lives in docs/SOURCES.md instead. 0x0400 is the
 exception: BMV Rev 7 defines it as Backlight Always On (BOOLEAN) while
 BlueSolar-HEX defines it as Display backlight mode (ENUM), so
 DISPLAY_BACKLIGHT_MODE is scoped to (MPPT, MPPT_RS) and only
-BMV_BACKLIGHT_ALWAYS_ON is visible to BMV/BMV71.
+BMV_BACKLIGHT_ALWAYS_ON is visible to BMV/BMV71. 0x0350-0x0353 are the
+second exception (same precedent): BlueSolar-HEX defines them as relay
+battery set/clear (0.01 V) while BMV Rev 7 defines the same IDs as relay
+low/high voltage(+clear) (0.1 V), so the generic RELAY_BAT_* entries are
+scoped to (MPPT, MPPT_RS) and only BMV_RELAY_* is visible to BMV/BMV71.
 
 Sentinels decoded as None (encode None back to sentinel):
 - BAT_TEMPERATURE 0xEDEC 0xFFFF, TIME_OF_DAY 0x2031 0xFFFF,
@@ -284,11 +288,21 @@ for _reg in [
     # OFF/ON) while BlueSolar-HEX defines it as Display backlight mode
     # (0=keypress/1=on/2=auto), so it is scoped to (MPPT, MPPT_RS) so each
     # flavor resolves to exactly one 0x0400 meaning.
+    # 0x0350-0x0353 are the second exception (same 0x0400 precedent):
+    # BlueSolar-HEX Relay settings defines them as battery low/high set/clear
+    # (Un16 0.01 V); BMV Rev 7 Relay settings defines the same wire IDs as
+    # Relay Low/High Voltage(+Clear) (Un16 0.1 V, BMV_RELAY_*). Phoenix Rev 5
+    # and Orion-XS snapshots define no 0x0350-0x0353 at all (verified by ID
+    # search), so the generic entries are scoped to (MPPT, MPPT_RS) — the only
+    # family documenting the 0.01 V meaning — so for_flavor("BMV") excludes
+    # them and lookup(0x0350, flavor="BMV") resolves the 0.1 V BMV register.
+    # Name-based lookup with a flavor re-resolves by wire ID (see lookup()),
+    # so hex_get("RELAY_BAT_LOW_SET", flavor="BMV") decodes via the BMV entry.
     _r("RELAY_OPERATION_MODE", 0xEDD9, "ENUM", "READ_WRITE", flavors=("ANY",), enum="RELAY_OPERATION_MODE"),
-    _r("RELAY_BAT_LOW_SET", 0x0350, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
-    _r("RELAY_BAT_LOW_CLEAR", 0x0351, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
-    _r("RELAY_BAT_HIGH_SET", 0x0352, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
-    _r("RELAY_BAT_HIGH_CLEAR", 0x0353, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
+    _r("RELAY_BAT_LOW_SET", 0x0350, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("MPPT", "MPPT_RS")),
+    _r("RELAY_BAT_LOW_CLEAR", 0x0351, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("MPPT", "MPPT_RS")),
+    _r("RELAY_BAT_HIGH_SET", 0x0352, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("MPPT", "MPPT_RS")),
+    _r("RELAY_BAT_HIGH_CLEAR", 0x0353, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("MPPT", "MPPT_RS")),
     _r("RELAY_PANEL_HIGH_SET", 0xEDBA, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
     _r("RELAY_PANEL_HIGH_CLEAR", 0xEDB9, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
     _r("RELAY_MIN_ENABLED_TIME", 0x100A, "NUMERIC", "READ_WRITE", "uint16_t", "min", 1.0, ("ANY",)),
@@ -541,11 +555,16 @@ DEVICE_MODE_ORION_MAP = {0: "off", 1: "on", 3: "on", 4: "off"}
 DEVICE_MODE_INV_MAP = {2: "inverter_on", 3: "device_on", 4: "device_off",
                        5: "eco", 0xFD: "hibernate"}
 DEVICE_FUNCTION_MAP = {0: "charger", 1: "psu"}
-# Generic HEX 0x0201 map. 245 is WAKE-UP per BlueSolar-HEX §1.1 device-state
+# Generic HEX 0x0201 map. State 0 is NOT_CHARGING per BlueSolar-HEX §1.1
+# Device-state-values and Orion-XS-HEX Device-state-values (both list 0 as
+# NOT_CHARGING; LINK_DEVICE_STATE and the ORION override agree). Phoenix Rev 5
+# §2.3.1 defines 0 as Off, but that family resolves via the INV override
+# (DEVICE_STATE_INV_MAP[0]="off"), so the generic rename is safe there.
+# 245 is WAKE-UP per BlueSolar-HEX §1.1 device-state
 # values and Orion-XS-HEX device-state values (the LINK_DEVICE_STATE and
 # ORION override maps agree); Text-3.34 CS "Starting-up" is a separate
 # Text-mode map (tables.py) and does not apply here.
-DEVICE_STATE_MAP = {0: "off", 1: "low_power", 2: "fault", 3: "bulk", 4: "absorption",
+DEVICE_STATE_MAP = {0: "not_charging", 1: "low_power", 2: "fault", 3: "bulk", 4: "absorption",
                     5: "floating", 6: "storage", 7: "equalize_manual", 8: "passthru",
                     9: "inverting", 0x0A: "assisting", 0x0B: "power_supply",
                     0xF4: "sustain", 0xF5: "wake_up", 0xF6: "repeated_absorption",
@@ -665,6 +684,15 @@ CAPABILITIES_MAP = {
     31: "needs_battery_to_shutdown",
 }
 CAPABILITIES_BLE_MAP = {
+    # Decision: keep Orion-family bit names 2-8 on the shared ANY register
+    # instead of scoping them out of the BMV path. BMV Rev 7 §Bluetooth
+    # capabilities reserves bits 2..31 (only 0 HAS_SUPPORT, 1 PERMANENT) and
+    # Phoenix Rev 5 §2.2.5 likewise documents only bits 0-1, while
+    # Orion-XS-HEX §BLE capabilities names bits 0-8 (9..31 not defined).
+    # Reserved bits read 0 on BMV/Phoenix hardware, so the extra names never
+    # misdecode there — they are best-effort for Orion and harmless elsewhere.
+    # A BMV-only override would force lookup(0x0150) ambiguous (like 0x0201)
+    # with no wire-behavior gain, so the single ANY entry is kept.
     0: "ble_mode", 1: "permanent_off", 2: "ble_off_recovery_time",
     3: "recovery_time_zero_permanent", 4: "service_mode", 5: "trends",
     6: "ad_key", 7: "soc_sync_via_trend", 8: "settings_lock",

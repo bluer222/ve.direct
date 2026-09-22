@@ -9,13 +9,13 @@ entries are observational and separately exposed as
 The tables below are a compact overview; range-generated history/tracker names
 and some product aliases are omitted. `REGISTERS` is the authoritative list.
 
-Same-ID aliases: For registers sharing wire IDs with device-specific names, scales, or data types (e.g. 0x0320/0x0321 INV alarm 0.01V vs Orion lockout 0.1V; 0xEDBB/0xEDBD/0xEDBC/0xED8D/0xED8F panel vs Orion in/out; 0xED8E BMV DC power int16 1W vs Orion output power uint32 0.01W; 0x2211/0x2212 INV range vs MPPT_RS adjustable), lookup by name (lookup(name)) is exact. Calling lookup(int) on an aliased ID requires specifying flavor (e.g. lookup(0xED8E, flavor="ORION")), and raises AmbiguousRegisterError if flavor is omitted.
+Same-ID aliases: For registers sharing wire IDs with device-specific names, scales, or data types (e.g. 0x0320/0x0321 INV alarm 0.01V vs Orion lockout 0.1V; 0xEDBB/0xEDBD/0xEDBC/0xED8D/0xED8F panel vs Orion in/out; 0xED8E BMV DC power int16 1W vs Orion output power uint32 0.01W; 0x2211/0x2212 INV range vs MPPT_RS adjustable; 0x0350-0x0353 MPPT relay battery 0.01V vs BMV relay 0.1V), lookup by name (lookup(name)) is exact. Calling lookup(int) on an aliased ID requires specifying flavor (e.g. lookup(0xED8E, flavor="ORION")), and raises AmbiguousRegisterError if flavor is omitted.
 
 Per-flavor enum overrides share a wire ID with the generic entry but decode with family-documented value names: 0x0200/0x0201 (`ORION_DEVICE_MODE/STATE`, `INV_DEVICE_MODE/STATE` vs generic `DEVICE_MODE/STATE`), 0x031C/0x031E (`INV_WARNING/ALARM_REASON` vs generic, Phoenix Rev 5 §2.3.3 bits only), 0x034F (`BMV_RELAY_MODE` 0..2 DFLT/CHRG/REM, `INV_RELAY_MODE` without value 1, vs the MPPT-shared superset). A flavor-qualified lookup selects the override; no other family's decode changes.
 
-Flavor tags are deliberately liberal (a superset of strict doc provenance): e.g. pluggable-display 0x0401-0x0404 (BlueSolar-HEX: LCD models only), per-tracker history 0x10A0-0x10BE (BlueSolar-HEX Note 2: multi-tracker/MPPT RS only, also listed under MPPT), and generic ANY control/status IDs visible in the BMV view though absent from BMV-7xx-HEX. They are not narrowed because that would break `for_flavor()` consumers with no wire-behavior contradiction; strict provenance is tracked in `SOURCES.md`. Exception: 0x0400 collides (BlueSolar-HEX Display backlight mode ENUM vs BMV Rev 7 Backlight Always On BOOLEAN), so `DISPLAY_BACKLIGHT_MODE` is scoped to BlueSolar/SmartSolar MPPT + MPPT RS and only `BMV_BACKLIGHT_ALWAYS_ON` is visible to BMV/BMV71.
+Flavor tags are deliberately liberal (a superset of strict doc provenance): e.g. pluggable-display 0x0401-0x0404 (BlueSolar-HEX: LCD models only), per-tracker history 0x10A0-0x10BE (BlueSolar-HEX Note 2: multi-tracker/MPPT RS only, also listed under MPPT), and generic ANY control/status IDs visible in the BMV view though absent from BMV-7xx-HEX. They are not narrowed because that would break `for_flavor()` consumers with no wire-behavior contradiction; strict provenance is tracked in `SOURCES.md`. Exceptions: 0x0400 collides (BlueSolar-HEX Display backlight mode ENUM vs BMV Rev 7 Backlight Always On BOOLEAN), so `DISPLAY_BACKLIGHT_MODE` is scoped to BlueSolar/SmartSolar MPPT + MPPT RS and only `BMV_BACKLIGHT_ALWAYS_ON` is visible to BMV/BMV71; 0x0350-0x0353 collide (BlueSolar-HEX relay battery 0.01V vs BMV Rev 7 relay 0.1V), so generic `RELAY_BAT_*` is scoped to BlueSolar/SmartSolar MPPT + MPPT RS and only `BMV_RELAY_*` is visible to BMV/BMV71.
 
-STRUCT registers decode to dict (history, timer events, voltage range, load control, network status); encode accepts the same dict (histories are read-only — pass raw bytes to encode). Sentinels decode as None: BAT_TEMPERATURE/TIME_OF_DAY/BATTERY_VOLTAGE_SENSE 0xFFFF, BATTERY_TEMPERATURE_SENSE 0x7FFF, ORION_BATTERY_VOLTAGE 0x7FFFFFFF, LOW_TEMP_CHARGE_CURRENT 0xFFFF (=use max), SETTINGS_CHANGED_TIMESTAMP 0xEC41 0xFFFFFFFF (=Invalid/no settings ever modified, BMV Rev 7 p8), BMV alarm/relay temperature 0x032A-0x032D/0x035A-0x035D 0x0000 (=disabled, valid 174..372 K); history 0xFF/0xFFFF/0xFFFFFFFF per-field. BAT_TYPE tables differ per charger (see decode_bat_type(charger="small"|"large"|"rs")); default BAT_TYPE map is {0xFF:user} for backward compat. YIELD_TODAY/YIELD_YESTERDAY are un32 on fw<=1.12, un16 above (BlueSolar-HEX Note 4); the DB accepts both reply widths.
+STRUCT registers decode to dict (history, timer events, voltage range, load control, network status); encode accepts the same dict (histories are read-only — pass raw bytes to encode). Sentinels decode as None: BAT_TEMPERATURE/TIME_OF_DAY/BATTERY_VOLTAGE_SENSE 0xFFFF, BATTERY_TEMPERATURE_SENSE 0x7FFF, ORION_BATTERY_VOLTAGE 0x7FFFFFFF, LOW_TEMP_CHARGE_CURRENT 0xFFFF (=use max), SETTINGS_CHANGED_TIMESTAMP 0xEC41 0xFFFFFFFF (=Invalid/no settings ever modified, BMV Rev 7 p8), BMV alarm/relay temperature 0x032A-0x032D/0x035A-0x035D 0x0000 (=disabled, valid 174..372 K); history 0xFF/0xFFFF/0xFFFFFFFF per-field. BAT_TYPE tables differ per charger (see decode_bat_type(charger="small"|"large"|"rs")); the BAT_TYPE register binds BAT_TYPE_LARGE, while ENUM_MAPS["BAT_TYPE"] ({0xFF:user}) is only a back-compat stub bound to no register. YIELD_TODAY/YIELD_YESTERDAY are un32 on fw<=1.12, un16 above (BlueSolar-HEX Note 4); the DB accepts both reply widths.
 
 Framing: ":<cmd><hex><check>\n", `(cmd+sum(data)+check)&0xFF==0x55`. Commands: ping `:154`, app-version `:352` (decode via decode_app_version), product-id `:451`, restart `:64F` (no reply), get `:7<id>00`, set `:8<id>00<val>` (e.g. `:8F0ED0064000C`), boot `:0<51FA*5>`. Replies Done/Get/Set carry flags byte (nonzero = `RegisterError`); Async `:A` queued in `dev.async_frames`. `decode_line(..., strict=True)` raises `ChecksumError`; streaming defaults to `valid=False`.
 
@@ -46,35 +46,84 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | GROUP_ID | 0x0104 | NUMERIC | READ_ONLY | uint8_t | — | 1.0 | All devices | — |
 | SERIAL_NUMBER | 0x010A | STRING | CONSTANT | — | — | 1.0 | All devices | — |
 | MODEL_NAME | 0x010B | STRING | CONSTANT | — | — | 1.0 | All devices | — |
+| BMV_DESCRIPTION | 0x010C | STRING | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | CAPABILITIES | 0x0140 | BITMASK | CONSTANT | uint32_t | — | 1.0 | All devices | CAPABILITIES |
 | CAPABILITIES_BLE | 0x0150 | BITMASK | READ_ONLY | uint32_t | — | 1.0 | All devices | CAPABILITIES_BLE |
 | DEVICE_MODE | 0x0200 | ENUM | READ_WRITE | — | — | 1.0 | All devices | DEVICE_MODE |
 | DEVICE_STATE | 0x0201 | ENUM | READ_ONLY | — | — | 1.0 | All devices | DEVICE_STATE |
 | REMOTE_CONTROL_USED | 0x0202 | BITMASK | READ_WRITE | uint32_t | — | 1.0 | All devices | REMOTE_CONTROL_USED |
 | DEVICE_OFF_REASON | 0x0205 | BITMASK | READ_ONLY | uint8_t | — | 1.0 | BlueSolar/SmartSolar MPPT | OFF_REASON_MPPT |
-| DEVICE_FUNCTION | 0x0206 | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | DEVICE_FUNCTION |
+| DEVICE_FUNCTION | 0x0206 | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | DEVICE_FUNCTION |
 | DEVICE_OFF_REASON_2 | 0x0207 | BITMASK | READ_ONLY | uint32_t | — | 1.0 | BlueSolar/SmartSolar MPPT | OFF_REASON_MPPT |
 | INV_DEVICE_OFF_REASON | 0x0207 | BITMASK | READ_ONLY | uint32_t | — | 1.0 | Phoenix/Smart inverters | OFF_REASON_INV |
-| AC_OUT_VOLTAGE_SETPOINT | 0x0230 | NUMERIC | WRITE_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
 | AC_OUT_VOLTAGE_SETPOINT_MIN | 0x0231 | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
 | AC_OUT_VOLTAGE_SETPOINT_MAX | 0x0232 | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
 | MPPT_TRACKERS | 0x0244 | NUMERIC | CONSTANT | uint8_t | — | 1.0 | MPPT RS | — |
+| BMV_DEEPEST_DISCHARGE | 0x0300 | NUMERIC | READ_ONLY | int32_t | Ah | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_DEPTH_LAST_DISCHARGE | 0x0301 | NUMERIC | READ_ONLY | int32_t | Ah | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_DEPTH_AVERAGE_DISCHARGE | 0x0302 | NUMERIC | READ_ONLY | int32_t | Ah | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_NUMBER_CYCLES | 0x0303 | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_NUMBER_FULL_DISCHARGES | 0x0304 | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_CUMULATIVE_AMP_HOURS | 0x0305 | NUMERIC | READ_ONLY | int32_t | Ah | 0.1 | BMV-700/702/712, SmartShunt | — |
 | UNKNOWN_0305 | 0x0305 | NUMERIC | READ_ONLY | uint32_t | kWh | 0.001 | Multi RS / Inverter RS | — |
+| BMV_MINIMUM_VOLTAGE | 0x0306 | NUMERIC | READ_ONLY | int32_t | V | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_MAXIMUM_VOLTAGE | 0x0307 | NUMERIC | READ_ONLY | int32_t | V | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_SECONDS_SINCE_FULL_CHARGE | 0x0308 | NUMERIC | READ_ONLY | uint32_t | s | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_NUMBER_AUTOMATIC_SYNCS | 0x0309 | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_NUMBER_LOW_VOLTAGE_ALARMS | 0x030A | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_NUMBER_HIGH_VOLTAGE_ALARMS | 0x030B | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_MINIMUM_STARTER_VOLTAGE | 0x030E | NUMERIC | READ_ONLY | int32_t | V | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_MAXIMUM_STARTER_VOLTAGE | 0x030F | NUMERIC | READ_ONLY | int32_t | V | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_AMOUNT_DISCHARGED_ENERGY | 0x0310 | NUMERIC | READ_ONLY | uint32_t | kWh | 0.01 | BMV-700/702/712, SmartShunt | — |
 | U_OUTPUT_YIELD | 0x0310 | NUMERIC | READ_ONLY | uint32_t | kWh | 0.001 | Multi RS / Inverter RS | — |
+| BMV_AMOUNT_CHARGED_ENERGY | 0x0311 | NUMERIC | READ_ONLY | uint32_t | kWh | 0.01 | BMV-700/702/712, SmartShunt | — |
 | U_USER_YIELD | 0x0311 | NUMERIC | READ_ONLY | uint32_t | kWh | 0.001 | Multi RS / Inverter RS | — |
 | WARNING_REASON | 0x031C | BITMASK | READ_ONLY | uint16_t | — | 1.0 | All devices | WARNING_REASON |
 | ALARM_REASON | 0x031E | BITMASK | READ_ONLY | uint16_t | — | 1.0 | All devices | WARNING_REASON |
-| ALARM_LOW_VOLTAGE_SET | 0x0320 | NUMERIC | WRITE_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
+| BMV_ALARM_ACKNOWLEDGE | 0x031F | VOID | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_VOLTAGE | 0x0320 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
 | INPUT_VOLTAGE_LOCKOUT | 0x0320 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| ALARM_LOW_VOLTAGE_CLEAR | 0x0321 | NUMERIC | WRITE_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
+| BMV_ALARM_LOW_VOLTAGE_CLEAR | 0x0321 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
 | INPUT_VOLTAGE_RESTART | 0x0321 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
+| BMV_ALARM_HIGH_VOLTAGE | 0x0322 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_VOLTAGE_CLEAR | 0x0323 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_STARTER | 0x0324 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_STARTER_CLEAR | 0x0325 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_STARTER | 0x0326 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_STARTER_CLEAR | 0x0327 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_SOC | 0x0328 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_SOC_CLEAR | 0x0329 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_TEMPERATURE | 0x032A | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_TEMPERATURE_CLEAR | 0x032B | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_TEMPERATURE | 0x032C | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_TEMPERATURE_CLEAR | 0x032D | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_MID_VOLTAGE | 0x0331 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_MID_VOLTAGE_CLEAR | 0x0332 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_INVERT | 0x034D | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | RELAY_CONTROL | 0x034E | BOOLEAN | READ_WRITE | — | — | 1.0 | All devices | — |
-| RELAY_MODE | 0x034F | ENUM | READ_WRITE | — | — | 1.0 | BlueSolar/SmartSolar MPPT | RELAY_MODE |
 | BMV_RELAY_MODE | 0x034F | ENUM | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | RELAY_MODE_BMV |
-| RELAY_BAT_LOW_SET | 0x0350 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
-| RELAY_BAT_LOW_CLEAR | 0x0351 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
-| RELAY_BAT_HIGH_SET | 0x0352 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
-| RELAY_BAT_HIGH_CLEAR | 0x0353 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
+| RELAY_MODE | 0x034F | ENUM | READ_WRITE | — | — | 1.0 | BlueSolar/SmartSolar MPPT | RELAY_MODE |
+| BMV_RELAY_LOW_VOLTAGE | 0x0350 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| RELAY_BAT_LOW_SET | 0x0350 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_RELAY_LOW_VOLTAGE_CLEAR | 0x0351 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| RELAY_BAT_LOW_CLEAR | 0x0351 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_RELAY_HIGH_VOLTAGE | 0x0352 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| RELAY_BAT_HIGH_SET | 0x0352 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_RELAY_HIGH_VOLTAGE_CLEAR | 0x0353 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| RELAY_BAT_HIGH_CLEAR | 0x0353 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_RELAY_LOW_STARTER | 0x0354 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_LOW_STARTER_CLEAR | 0x0355 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_HIGH_STARTER | 0x0356 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_HIGH_STARTER_CLEAR | 0x0357 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_LOW_TEMPERATURE | 0x035A | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_LOW_TEMPERATURE_CLEAR | 0x035B | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_HIGH_TEMPERATURE | 0x035C | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_HIGH_TEMPERATURE_CLEAR | 0x035D | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_MID_VOLTAGE | 0x0361 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_MID_VOLTAGE_CLEAR | 0x0362 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_MIDPOINT_VOLTAGE | 0x0382 | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_MIDPOINT_DEVIATION | 0x0383 | NUMERIC | READ_ONLY | int16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_BACKLIGHT_ALWAYS_ON | 0x0400 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | DISPLAY_BACKLIGHT_MODE | 0x0400 | ENUM | READ_WRITE | — | — | 1.0 | BlueSolar/SmartSolar MPPT, MPPT RS | DISPLAY_BACKLIGHT_MODE |
 | DISPLAY_BACKLIGHT_INTENSITY | 0x0401 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | All devices | — |
 | DISPLAY_SCROLL_SPEED | 0x0402 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | All devices | — |
@@ -83,9 +132,22 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | DISPLAY_CONTRAST | 0x0406 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | MPPT RS | — |
 | DISPLAY_BACKLIGHT_MODE_RS | 0x0408 | ENUM | READ_WRITE | — | — | 1.0 | MPPT RS | DISPLAY_BACKLIGHT_MODE_RS |
 | UNKNOWN_0FFC | 0x0FFC | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | Multi RS / Inverter RS | — |
+| BMV_START_SYNCHRONIZED | 0x0FFD | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | TTG | 0x0FFE | NUMERIC | READ_ONLY | uint16_t | min | 1.0 | BMV-700/702/712, SmartShunt | — |
 | SOC | 0x0FFF | NUMERIC | READ_ONLY | uint16_t | % | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_BATTERY_CAPACITY | 0x1000 | NUMERIC | READ_WRITE | uint16_t | Ah | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_CHARGED_VOLTAGE | 0x1001 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_TAIL_CURRENT | 0x1002 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_CHARGED_DETECTION_TIME | 0x1003 | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_CHARGE_EFFICIENCY | 0x1004 | NUMERIC | READ_WRITE | uint16_t | % | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_PEUKERT_COEFFICIENT | 0x1005 | NUMERIC | READ_WRITE | uint16_t | — | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_CURRENT_THRESHOLD | 0x1006 | NUMERIC | READ_WRITE | uint16_t | A | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_TTG_DELTA_T | 0x1007 | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_DISCHARGE_FLOOR | 0x1008 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_LOW_SOC_CLEAR | 0x1009 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
 | RELAY_MIN_ENABLED_TIME | 0x100A | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | All devices | — |
+| BMV_RELAY_DISABLE_TIME | 0x100B | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_USER_CURRENT_ZERO | 0x1034 | NUMERIC | READ_ONLY | int16_t | ADC count | 1.0 | BMV-700/702/712, SmartShunt | — |
 | INV_HISTORY_TIME | 0x1040 | NUMERIC | READ_ONLY | uint32_t | s | 1.0 | Phoenix/Smart inverters | — |
 | INV_HISTORY_ENERGY | 0x1041 | NUMERIC | READ_ONLY | uint32_t | kVAh | 0.01 | Phoenix/Smart inverters | — |
 | CUMULATIVE_SERVICE_HISTORY | 0x1042 | STRUCT | READ_ONLY | — | — | 1.0 | Orion XS | CUMULATIVE_HISTORY |
@@ -97,7 +159,6 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | CHARGE_VOLTAGE_SETPOINT | 0x2001 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS, Orion XS | — |
 | BATTERY_VOLTAGE_SENSE | 0x2002 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS, Orion XS | — |
 | BATTERY_TEMPERATURE_SENSE | 0x2003 | NUMERIC | READ_WRITE | int16_t | C | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS, Orion XS | — |
-| REMOTE_COMMAND | 0x2004 | ENUM | WRITE_ONLY | — | — | 1.0 | BlueSolar/SmartSolar MPPT, MPPT RS | REMOTE_COMMAND |
 | CHARGE_STATE_ELAPSED | 0x2007 | NUMERIC | READ_WRITE | uint32_t | ms | 1.0 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | ABSORPTION_TIME | 0x2008 | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | NETWORK_ERROR_CODE | 0x2009 | ENUM | READ_WRITE | — | — | 1.0 | BlueSolar/SmartSolar MPPT, MPPT RS | CHR_ERROR_CODE |
@@ -119,7 +180,6 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | AC_OUT_NOM_VOLTAGE | 0x2202 | NUMERIC | READ_ONLY | uint8_t | V | 1.0 | Phoenix/Smart inverters | — |
 | AC_OUT_RATED_POWER | 0x2203 | NUMERIC | READ_ONLY | int16_t | VA | 1.0 | Phoenix/Smart inverters | — |
 | AC_OUT_APPARENT_POWER | 0x2205 | NUMERIC | READ_ONLY | int32_t | VA | 1.0 | Phoenix/Smart inverters | — |
-| SHUTDOWN_LOW_VOLTAGE_SET | 0x2210 | NUMERIC | WRITE_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
 | ADJUSTABLE_VOLTAGE_MIN | 0x2211 | NUMERIC | CONSTANT | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | VOLTAGE_RANGE_MIN | 0x2211 | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
 | ADJUSTABLE_VOLTAGE_MAX | 0x2212 | NUMERIC | CONSTANT | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
@@ -137,6 +197,8 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | UNKNOWN_D5C8 | 0xD5C8 | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | Multi RS / Inverter RS | — |
 | UNKNOWN_D5CA | 0xD5CA | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | Multi RS / Inverter RS | — |
 | UNKNOWN_D5CB | 0xD5CB | NUMERIC | READ_ONLY | uint32_t | — | 1.0 | Multi RS / Inverter RS | — |
+| INV_LOOP_GET_IINV | 0xEB4E | NUMERIC | READ_ONLY | int16_t | A | 0.001 | Phoenix/Smart inverters | — |
+| INV_DYN_CUTOFF_VOLTAGE | 0xEBB1 | NUMERIC | READ_ONLY | uint16_t | V | 0.001 | Phoenix/Smart inverters | — |
 | SETTINGS_CHANGED_TIMESTAMP | 0xEC41 | NUMERIC | READ_WRITE | uint32_t | s | 1.0 | All devices | — |
 | MPPT_TRACKER_MODE_1 | 0xECC3 | ENUM | READ_ONLY | — | — | 1.0 | MPPT RS | MPPT_TRACKER_MODE |
 | PANEL_VOLTAGE_1 | 0xECCB | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | MPPT RS | — |
@@ -154,9 +216,10 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | PANEL_VOLTAGE_4 | 0xECFB | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | MPPT RS | — |
 | PANEL_POWER_4 | 0xECFC | NUMERIC | READ_ONLY | uint32_t | W | 0.01 | MPPT RS | — |
 | PANEL_CURRENT_4 | 0xECFD | NUMERIC | READ_ONLY | uint16_t | A | 0.1 | MPPT RS | — |
-| INV_LOOP_GET_IINV | 0xEB4E | NUMERIC | READ_ONLY | int16_t | A | 0.001 | Phoenix/Smart inverters | — |
-| INV_DYN_CUTOFF_VOLTAGE | 0xEBB1 | NUMERIC | READ_ONLY | uint16_t | V | 0.001 | Phoenix/Smart inverters | — |
+| REBULK_VOLTAGE_OFFSET | 0xED2E | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_AUX_VOLTAGE | 0xED7D | NUMERIC | READ_ONLY | int16_t | V | 0.01 | BMV-700/702/712, SmartShunt | — |
 | BATTERY_RIPPLE_VOLTAGE | 0xED8B | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | MPPT RS | — |
+| BMV_CURRENT_PRECISE | 0xED8C | NUMERIC | READ_ONLY | int32_t | A | 0.001 | BMV-700/702/712, SmartShunt | — |
 | DC_CHANNEL1_VOLTAGE | 0xED8D | NUMERIC | READ_ONLY | int16_t | V | 0.01 | BMV-700/702/712, SmartShunt, Phoenix/Smart inverters, MPPT RS | — |
 | OUTPUT_VOLTAGE | 0xED8D | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
 | DC_CHANNEL1_POWER | 0xED8E | NUMERIC | READ_ONLY | int16_t | W | 1.0 | BMV-700/702/712, SmartShunt | — |
@@ -195,81 +258,133 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | PANEL_MAXIMUM_CURRENT | 0xEDBF | NUMERIC | CONSTANT | uint16_t | A | 0.1 | MPPT RS | — |
 | EQUALISE_VOLTAGE_MAXIMUM | 0xEDC6 | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | MPPT RS | — |
 | EQUALISE_CURRENT_MAXIMUM | 0xEDC7 | NUMERIC | READ_ONLY | uint8_t | % | 1.0 | MPPT RS | — |
-| VOLTAGE_COMPENSATION | 0xEDCA | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| STREETLIGHT_VERSION | 0xEDCC | NUMERIC | READ_ONLY | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| HISTORY_VERSION | 0xEDCD | NUMERIC | READ_ONLY | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| VOLTAGE_SETTINGS_RANGE | 0xEDCE | STRUCT | READ_ONLY | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | VOLTAGE_RANGE |
+| VOLTAGE_COMPENSATION | 0xEDCA | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| STREETLIGHT_VERSION | 0xEDCC | NUMERIC | READ_ONLY | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| HISTORY_VERSION | 0xEDCD | NUMERIC | READ_ONLY | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| VOLTAGE_SETTINGS_RANGE | 0xEDCE | STRUCT | READ_ONLY | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | VOLTAGE_RANGE |
 | MAXIMUM_POWER_YESTERDAY | 0xEDD0 | NUMERIC | READ_ONLY | uint16_t | W | 1.0 | BlueSolar/SmartSolar MPPT | — |
 | YIELD_YESTERDAY | 0xEDD1 | NUMERIC | READ_ONLY | uint16_t/uint32_t (fw-dependent) | kWh | 0.01 | BlueSolar/SmartSolar MPPT | — |
 | MAXIMUM_POWER_TODAY | 0xEDD2 | NUMERIC | READ_ONLY | uint16_t | W | 1.0 | BlueSolar/SmartSolar MPPT | — |
 | YIELD_TODAY | 0xEDD3 | NUMERIC | READ_ONLY | uint16_t/uint32_t (fw-dependent) | kWh | 0.01 | BlueSolar/SmartSolar MPPT | — |
-| ADDITIONAL_CHARGER_STATE | 0xEDD4 | BITMASK | READ_ONLY | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | ADDITIONAL_CHARGER_STATE |
-| CHARGER_VOLTAGE | 0xEDD5 | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| CHARGER_CURRENT | 0xEDD7 | NUMERIC | READ_ONLY | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
+| ADDITIONAL_CHARGER_STATE | 0xEDD4 | BITMASK | READ_ONLY | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | ADDITIONAL_CHARGER_STATE |
+| CHARGER_VOLTAGE | 0xEDD5 | NUMERIC | READ_ONLY | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| CHARGER_CURRENT | 0xEDD7 | NUMERIC | READ_ONLY | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | RELAY_OPERATION_MODE | 0xEDD9 | ENUM | READ_WRITE | — | — | 1.0 | All devices | RELAY_OPERATION_MODE |
-| CHR_ERROR_CODE | 0xEDDA | ENUM | READ_ONLY | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | CHR_ERROR_CODE |
-| CHR_INTERNAL_TEMPERATURE | 0xEDDB | NUMERIC | READ_ONLY | int16_t | C | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
+| CHR_ERROR_CODE | 0xEDDA | ENUM | READ_ONLY | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | CHR_ERROR_CODE |
+| CHR_INTERNAL_TEMPERATURE | 0xEDDB | NUMERIC | READ_ONLY | int16_t | C | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | USER_YIELD | 0xEDDC | NUMERIC | READ_ONLY | uint32_t | kWh | 0.01 | BlueSolar/SmartSolar MPPT | — |
 | SYSTEM_YIELD | 0xEDDD | NUMERIC | READ_ONLY | uint32_t | kWh | 0.01 | BlueSolar/SmartSolar MPPT | — |
-| CHARGER_MAXIMUM_CURRENT | 0xEDDF | NUMERIC | READ_ONLY | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_LOW_TEMP_LEVEL | 0xEDE0 | NUMERIC | READ_WRITE | int16_t | C | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| REBULK_VOLTAGE_OFFSET | 0xED2E | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| EQUALISATION_DURATION | 0xEDE3 | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| EQUALISATION_CURRENT_LEVEL | 0xEDE4 | NUMERIC | READ_WRITE | uint8_t | % | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| AUTO_EQUALISE_STOP_ON_VOLTAGE | 0xEDE5 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| LOW_TEMP_CHARGE_CURRENT | 0xEDE6 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| TAIL_CURRENT | 0xEDE7 | NUMERIC | READ_WRITE | uint16_t | — | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BMS_PRESENT | 0xEDE8 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_VOLTAGE_SETTING | 0xEDEA | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | BAT_VOLTAGE_SETTING |
+| CHARGER_MAXIMUM_CURRENT | 0xEDDF | NUMERIC | READ_ONLY | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_LOW_TEMP_LEVEL | 0xEDE0 | NUMERIC | READ_WRITE | int16_t | C | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| EQUALISATION_DURATION | 0xEDE3 | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| EQUALISATION_CURRENT_LEVEL | 0xEDE4 | NUMERIC | READ_WRITE | uint8_t | % | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| AUTO_EQUALISE_STOP_ON_VOLTAGE | 0xEDE5 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| LOW_TEMP_CHARGE_CURRENT | 0xEDE6 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| TAIL_CURRENT | 0xEDE7 | NUMERIC | READ_WRITE | uint16_t | — | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMS_PRESENT | 0xEDE8 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_VOLTAGE_SETTING | 0xEDEA | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | BAT_VOLTAGE_SETTING |
 | BAT_TEMPERATURE | 0xEDEC | NUMERIC | READ_ONLY | uint16_t | K | 0.01 | All devices | — |
-| BAT_VOLTAGE | 0xEDEF | NUMERIC | READ_WRITE | uint8_t | V | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
+| BAT_VOLTAGE | 0xEDEF | NUMERIC | READ_WRITE | uint8_t | V | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | INV_BAT_VOLTAGE | 0xEDEF | NUMERIC | READ_ONLY | uint8_t | V | 1.0 | Phoenix/Smart inverters | — |
-| BAT_MAX_CURRENT | 0xEDF0 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_TYPE | 0xEDF1 | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | BAT_TYPE_LARGE |
-| BAT_TEMPERATURE_COMPENSATION | 0xEDF2 | NUMERIC | READ_WRITE | int16_t | mV/K | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_EQUALISATION_VOLTAGE | 0xEDF4 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_STORAGE_VOLTAGE | 0xEDF5 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_FLOAT_VOLTAGE | 0xEDF6 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_ABSORPTION_VOLTAGE | 0xEDF7 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_ABSORPTION_LIMIT | 0xEDFB | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_BULK_LIMIT | 0xEDFC | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| AUTOMATIC_EQUALISATION_MODE | 0xEDFD | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| ADAPTIVE_MODE | 0xEDFE | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BATTERYSAFE_MODE | 0xEDFF | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
+| BAT_MAX_CURRENT | 0xEDF0 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_TYPE | 0xEDF1 | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | BAT_TYPE_LARGE |
+| BAT_TEMPERATURE_COMPENSATION | 0xEDF2 | NUMERIC | READ_WRITE | int16_t | mV/K | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_EQUALISATION_VOLTAGE | 0xEDF4 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_STORAGE_VOLTAGE | 0xEDF5 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_FLOAT_VOLTAGE | 0xEDF6 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_ABSORPTION_VOLTAGE | 0xEDF7 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_ABSORPTION_LIMIT | 0xEDFB | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_BULK_LIMIT | 0xEDFC | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| AUTOMATIC_EQUALISATION_MODE | 0xEDFD | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| ADAPTIVE_MODE | 0xEDFE | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BATTERYSAFE_MODE | 0xEDFF | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | ESTIMATED_BATTERY_TEMPERATURE | 0xEE12 | NUMERIC | READ_ONLY | uint16_t | K | 0.01 | Orion XS | — |
 | SHUTDOWN_VOLTAGE | 0xEE36 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Orion XS | — |
 | START_VOLTAGE | 0xEE37 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Orion XS | — |
 | DELAYED_START_VOLTAGE | 0xEE38 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Orion XS | — |
 | START_DELAY | 0xEE39 | NUMERIC | READ_WRITE | uint32_t | s | 1.0 | Orion XS | — |
+| BMV_SYNC_STATE | 0xEEB6 | NUMERIC | READ_ONLY | uint8_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | DC_MONITOR_MODE | 0xEEB8 | ENUM | READ_WRITE | int16_t | — | 1.0 | BMV-700/702/712, SmartShunt (+BMV71) | MON |
+| BMV_SHOW_VOLTAGE | 0xEEE0 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_AUXILIARY_VOLTAGE | 0xEEE1 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_MID_VOLTAGE | 0xEEE2 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_CURRENT | 0xEEE3 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_CONSUMED_AH | 0xEEE4 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_SOC | 0xEEE5 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_TTG | 0xEEE6 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_TEMPERATURE | 0xEEE7 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_POWER | 0xEEE8 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_TEMPERATURE_COEFFICIENT | 0xEEF4 | NUMERIC | READ_WRITE | uint16_t | %CAP/degC | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_SCROLL_SPEED | 0xEEF5 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SETUP_LOCK | 0xEEF6 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_TEMPERATURE_UNIT | 0xEEF7 | ENUM | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | BMV_TEMPERATURE_UNIT |
+| BMV_AUXILIARY_INPUT | 0xEEF8 | ENUM | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | BMV_AUXILIARY_INPUT |
+| BMV_SW_VERSION | 0xEEF9 | STRUCT | READ_ONLY | — | — | 1.0 | BMV-700/702/712, SmartShunt | BMV_SW_VERSION |
+| BMV_SHUNT_VOLTS | 0xEEFA | NUMERIC | READ_WRITE | uint16_t | V | 0.001 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHUNT_AMPS | 0xEEFB | NUMERIC | READ_WRITE | uint16_t | A | 1.0 | BMV-700/702/712, SmartShunt | — |
 | ALARM_BUZZER | 0xEEFC | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_BACKLIGHT_INTENSITY | 0xEEFE | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_CONSUMED_AH | 0xEEFF | NUMERIC | READ_ONLY | int32_t | Ah | 0.1 | BMV-700/702/712, SmartShunt | — |
 | TIMER_EVENT_0..5 | 0xEDA0..0xEDA5 | STRUCT | READ_WRITE | — | — | — | BlueSolar/SmartSolar MPPT | TIMER_EVENT |
 | DAILY_HISTORY_0..30 | 0x1050..0x106E | STRUCT | READ_ONLY | — | — | — | BlueSolar/SmartSolar MPPT | HISTORY_DAY |
 | MPPT_HISTORY_0..30 | 0x10A0..0x10BE | STRUCT | READ_ONLY | — | — | — | MPPT RS, BlueSolar/SmartSolar MPPT | HISTORY_MPPT_DAY |
 | CYCLE_HISTORY_0..40 | 0x1070..0x1098 | STRUCT | READ_ONLY | — | — | — | Orion XS | CYCLE_HISTORY |
-
 ## hex_set — writable registers (READ_WRITE + WRITE_ONLY)
 
 | Name | ID | Class | Access | Type | Unit | Scale | Devices | Enum |
 |---|---|---|---|---|---|---|---|---|
 | RESTORE_DEFAULTS | 0x0004 | VOID | WRITE_ONLY | — | — | 1.0 | All devices | — |
 | BLE_MODE | 0x0090 | ENUM | READ_WRITE | uint8_t | — | 1.0 | All devices | BLE_MODE |
+| BMV_DESCRIPTION | 0x010C | STRING | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | DEVICE_MODE | 0x0200 | ENUM | READ_WRITE | — | — | 1.0 | All devices | DEVICE_MODE |
 | REMOTE_CONTROL_USED | 0x0202 | BITMASK | READ_WRITE | uint32_t | — | 1.0 | All devices | REMOTE_CONTROL_USED |
-| DEVICE_FUNCTION | 0x0206 | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | DEVICE_FUNCTION |
+| DEVICE_FUNCTION | 0x0206 | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | DEVICE_FUNCTION |
 | AC_OUT_VOLTAGE_SETPOINT | 0x0230 | NUMERIC | WRITE_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
+| BMV_ALARM_ACKNOWLEDGE | 0x031F | VOID | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | ALARM_LOW_VOLTAGE_SET | 0x0320 | NUMERIC | WRITE_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
+| BMV_ALARM_LOW_VOLTAGE | 0x0320 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
 | INPUT_VOLTAGE_LOCKOUT | 0x0320 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
 | ALARM_LOW_VOLTAGE_CLEAR | 0x0321 | NUMERIC | WRITE_ONLY | uint16_t | V | 0.01 | Phoenix/Smart inverters | — |
+| BMV_ALARM_LOW_VOLTAGE_CLEAR | 0x0321 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
 | INPUT_VOLTAGE_RESTART | 0x0321 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
+| BMV_ALARM_HIGH_VOLTAGE | 0x0322 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_VOLTAGE_CLEAR | 0x0323 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_STARTER | 0x0324 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_STARTER_CLEAR | 0x0325 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_STARTER | 0x0326 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_STARTER_CLEAR | 0x0327 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_SOC | 0x0328 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_SOC_CLEAR | 0x0329 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_TEMPERATURE | 0x032A | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_LOW_TEMPERATURE_CLEAR | 0x032B | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_TEMPERATURE | 0x032C | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_HIGH_TEMPERATURE_CLEAR | 0x032D | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_MID_VOLTAGE | 0x0331 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_ALARM_MID_VOLTAGE_CLEAR | 0x0332 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_INVERT | 0x034D | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | RELAY_CONTROL | 0x034E | BOOLEAN | READ_WRITE | — | — | 1.0 | All devices | — |
-| RELAY_MODE | 0x034F | ENUM | READ_WRITE | — | — | 1.0 | BlueSolar/SmartSolar MPPT | RELAY_MODE |
 | BMV_RELAY_MODE | 0x034F | ENUM | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | RELAY_MODE_BMV |
 | INV_RELAY_MODE | 0x034F | ENUM | WRITE_ONLY | — | — | 1.0 | Phoenix/Smart inverters | RELAY_MODE_INV |
-| RELAY_BAT_LOW_SET | 0x0350 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
-| RELAY_BAT_LOW_CLEAR | 0x0351 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
-| RELAY_BAT_HIGH_SET | 0x0352 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
-| RELAY_BAT_HIGH_CLEAR | 0x0353 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
+| RELAY_MODE | 0x034F | ENUM | READ_WRITE | — | — | 1.0 | BlueSolar/SmartSolar MPPT | RELAY_MODE |
+| BMV_RELAY_LOW_VOLTAGE | 0x0350 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| RELAY_BAT_LOW_SET | 0x0350 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_RELAY_LOW_VOLTAGE_CLEAR | 0x0351 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| RELAY_BAT_LOW_CLEAR | 0x0351 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_RELAY_HIGH_VOLTAGE | 0x0352 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| RELAY_BAT_HIGH_SET | 0x0352 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_RELAY_HIGH_VOLTAGE_CLEAR | 0x0353 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| RELAY_BAT_HIGH_CLEAR | 0x0353 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMV_RELAY_LOW_STARTER | 0x0354 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_LOW_STARTER_CLEAR | 0x0355 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_HIGH_STARTER | 0x0356 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_HIGH_STARTER_CLEAR | 0x0357 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_LOW_TEMPERATURE | 0x035A | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_LOW_TEMPERATURE_CLEAR | 0x035B | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_HIGH_TEMPERATURE | 0x035C | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_HIGH_TEMPERATURE_CLEAR | 0x035D | NUMERIC | READ_WRITE | uint16_t | K | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_MID_VOLTAGE | 0x0361 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_MID_VOLTAGE_CLEAR | 0x0362 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_BACKLIGHT_ALWAYS_ON | 0x0400 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | DISPLAY_BACKLIGHT_MODE | 0x0400 | ENUM | READ_WRITE | — | — | 1.0 | BlueSolar/SmartSolar MPPT, MPPT RS | DISPLAY_BACKLIGHT_MODE |
 | DISPLAY_BACKLIGHT_INTENSITY | 0x0401 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | All devices | — |
 | DISPLAY_SCROLL_SPEED | 0x0402 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | All devices | — |
@@ -277,11 +392,23 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | DISPLAY_TEMPERATURE_UNIT | 0x0404 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | All devices | — |
 | DISPLAY_CONTRAST | 0x0406 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | MPPT RS | — |
 | DISPLAY_BACKLIGHT_MODE_RS | 0x0408 | ENUM | READ_WRITE | — | — | 1.0 | MPPT RS | DISPLAY_BACKLIGHT_MODE_RS |
+| BMV_START_SYNCHRONIZED | 0x0FFD | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_BATTERY_CAPACITY | 0x1000 | NUMERIC | READ_WRITE | uint16_t | Ah | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_CHARGED_VOLTAGE | 0x1001 | NUMERIC | READ_WRITE | uint16_t | V | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_TAIL_CURRENT | 0x1002 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_CHARGED_DETECTION_TIME | 0x1003 | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_CHARGE_EFFICIENCY | 0x1004 | NUMERIC | READ_WRITE | uint16_t | % | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_PEUKERT_COEFFICIENT | 0x1005 | NUMERIC | READ_WRITE | uint16_t | — | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_CURRENT_THRESHOLD | 0x1006 | NUMERIC | READ_WRITE | uint16_t | A | 0.01 | BMV-700/702/712, SmartShunt | — |
+| BMV_TTG_DELTA_T | 0x1007 | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_DISCHARGE_FLOOR | 0x1008 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_RELAY_LOW_SOC_CLEAR | 0x1009 | NUMERIC | READ_WRITE | uint16_t | % | 0.1 | BMV-700/702/712, SmartShunt | — |
 | RELAY_MIN_ENABLED_TIME | 0x100A | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | All devices | — |
+| BMV_RELAY_DISABLE_TIME | 0x100B | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BMV-700/702/712, SmartShunt | — |
 | BMV_ZERO_CURRENT | 0x1029 | VOID | WRITE_ONLY | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | BMV_SYNCHRONIZE | 0x102C | VOID | WRITE_ONLY | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
-| CLEAR_HISTORY | 0x1030 | VOID | WRITE_ONLY | — | — | 1.0 | BlueSolar/SmartSolar MPPT, Orion XS | — |
 | BMV_CLEAR_HISTORY | 0x1030 | VOID | WRITE_ONLY | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| CLEAR_HISTORY | 0x1030 | VOID | WRITE_ONLY | — | — | 1.0 | BlueSolar/SmartSolar MPPT, Orion XS | — |
 | CHARGE_VOLTAGE_SETPOINT | 0x2001 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS, Orion XS | — |
 | BATTERY_VOLTAGE_SENSE | 0x2002 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS, Orion XS | — |
 | BATTERY_TEMPERATURE_SENSE | 0x2003 | NUMERIC | READ_WRITE | int16_t | C | 0.01 | BlueSolar/SmartSolar MPPT, MPPT RS, Orion XS | — |
@@ -313,6 +440,7 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | INV_DYN_CUTOFF_FACTOR | 0xEBB7 | NUMERIC | WRITE_ONLY | uint16_t | — | 1.0 | Phoenix/Smart inverters | — |
 | INV_DYN_CUTOFF_ENABLE | 0xEBBA | BOOLEAN | WRITE_ONLY | — | — | 1.0 | Phoenix/Smart inverters | — |
 | SETTINGS_CHANGED_TIMESTAMP | 0xEC41 | NUMERIC | READ_WRITE | uint32_t | s | 1.0 | All devices | — |
+| REBULK_VOLTAGE_OFFSET | 0xED2E | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | LOAD_AES_TIMER | 0xED90 | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BlueSolar/SmartSolar MPPT | — |
 | SUNSET_DELAY | 0xED96 | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BlueSolar/SmartSolar MPPT | — |
 | SUNRISE_DELAY | 0xED97 | NUMERIC | READ_WRITE | uint16_t | min | 1.0 | BlueSolar/SmartSolar MPPT | — |
@@ -328,33 +456,50 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | LOAD_OFFSET_VOLTAGE | 0xEDAC | NUMERIC | READ_WRITE | uint8_t | V | 0.01 | BlueSolar/SmartSolar MPPT | — |
 | RELAY_PANEL_HIGH_CLEAR | 0xEDB9 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
 | RELAY_PANEL_HIGH_SET | 0xEDBA | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | All devices | — |
-| VOLTAGE_COMPENSATION | 0xEDCA | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
+| VOLTAGE_COMPENSATION | 0xEDCA | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | RELAY_OPERATION_MODE | 0xEDD9 | ENUM | READ_WRITE | — | — | 1.0 | All devices | RELAY_OPERATION_MODE |
-| BAT_LOW_TEMP_LEVEL | 0xEDE0 | NUMERIC | READ_WRITE | int16_t | C | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| REBULK_VOLTAGE_OFFSET | 0xED2E | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| EQUALISATION_DURATION | 0xEDE3 | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| EQUALISATION_CURRENT_LEVEL | 0xEDE4 | NUMERIC | READ_WRITE | uint8_t | % | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| AUTO_EQUALISE_STOP_ON_VOLTAGE | 0xEDE5 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| LOW_TEMP_CHARGE_CURRENT | 0xEDE6 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| TAIL_CURRENT | 0xEDE7 | NUMERIC | READ_WRITE | uint16_t | — | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BMS_PRESENT | 0xEDE8 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_VOLTAGE_SETTING | 0xEDEA | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | BAT_VOLTAGE_SETTING |
-| BAT_VOLTAGE | 0xEDEF | NUMERIC | READ_WRITE | uint8_t | V | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_MAX_CURRENT | 0xEDF0 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_TYPE | 0xEDF1 | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | BAT_TYPE_LARGE |
-| BAT_TEMPERATURE_COMPENSATION | 0xEDF2 | NUMERIC | READ_WRITE | int16_t | mV/K | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_EQUALISATION_VOLTAGE | 0xEDF4 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_STORAGE_VOLTAGE | 0xEDF5 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_FLOAT_VOLTAGE | 0xEDF6 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_ABSORPTION_VOLTAGE | 0xEDF7 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_ABSORPTION_LIMIT | 0xEDFB | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BAT_BULK_LIMIT | 0xEDFC | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| AUTOMATIC_EQUALISATION_MODE | 0xEDFD | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| ADAPTIVE_MODE | 0xEDFE | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
-| BATTERYSAFE_MODE | 0xEDFF | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost | — |
+| BAT_LOW_TEMP_LEVEL | 0xEDE0 | NUMERIC | READ_WRITE | int16_t | C | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| EQUALISATION_DURATION | 0xEDE3 | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| EQUALISATION_CURRENT_LEVEL | 0xEDE4 | NUMERIC | READ_WRITE | uint8_t | % | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| AUTO_EQUALISE_STOP_ON_VOLTAGE | 0xEDE5 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| LOW_TEMP_CHARGE_CURRENT | 0xEDE6 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| TAIL_CURRENT | 0xEDE7 | NUMERIC | READ_WRITE | uint16_t | — | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BMS_PRESENT | 0xEDE8 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_VOLTAGE_SETTING | 0xEDEA | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | BAT_VOLTAGE_SETTING |
+| BAT_VOLTAGE | 0xEDEF | NUMERIC | READ_WRITE | uint8_t | V | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_MAX_CURRENT | 0xEDF0 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_TYPE | 0xEDF1 | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | BAT_TYPE_LARGE |
+| BAT_TEMPERATURE_COMPENSATION | 0xEDF2 | NUMERIC | READ_WRITE | int16_t | mV/K | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_EQUALISATION_VOLTAGE | 0xEDF4 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_STORAGE_VOLTAGE | 0xEDF5 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_FLOAT_VOLTAGE | 0xEDF6 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_ABSORPTION_VOLTAGE | 0xEDF7 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_ABSORPTION_LIMIT | 0xEDFB | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BAT_BULK_LIMIT | 0xEDFC | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| AUTOMATIC_EQUALISATION_MODE | 0xEDFD | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| ADAPTIVE_MODE | 0xEDFE | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| BATTERYSAFE_MODE | 0xEDFF | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | SHUTDOWN_VOLTAGE | 0xEE36 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Orion XS | — |
 | START_VOLTAGE | 0xEE37 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Orion XS | — |
 | DELAYED_START_VOLTAGE | 0xEE38 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Orion XS | — |
 | START_DELAY | 0xEE39 | NUMERIC | READ_WRITE | uint32_t | s | 1.0 | Orion XS | — |
+| DC_MONITOR_MODE | 0xEEB8 | ENUM | READ_WRITE | int16_t | — | 1.0 | BMV-700/702/712, SmartShunt (+BMV71) | MON |
+| BMV_SHOW_VOLTAGE | 0xEEE0 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_AUXILIARY_VOLTAGE | 0xEEE1 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_MID_VOLTAGE | 0xEEE2 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_CURRENT | 0xEEE3 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_CONSUMED_AH | 0xEEE4 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_SOC | 0xEEE5 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_TTG | 0xEEE6 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_TEMPERATURE | 0xEEE7 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHOW_POWER | 0xEEE8 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_TEMPERATURE_COEFFICIENT | 0xEEF4 | NUMERIC | READ_WRITE | uint16_t | %CAP/degC | 0.1 | BMV-700/702/712, SmartShunt | — |
+| BMV_SCROLL_SPEED | 0xEEF5 | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_SETUP_LOCK | 0xEEF6 | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_TEMPERATURE_UNIT | 0xEEF7 | ENUM | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | BMV_TEMPERATURE_UNIT |
+| BMV_AUXILIARY_INPUT | 0xEEF8 | ENUM | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | BMV_AUXILIARY_INPUT |
+| BMV_SHUNT_VOLTS | 0xEEFA | NUMERIC | READ_WRITE | uint16_t | V | 0.001 | BMV-700/702/712, SmartShunt | — |
+| BMV_SHUNT_AMPS | 0xEEFB | NUMERIC | READ_WRITE | uint16_t | A | 1.0 | BMV-700/702/712, SmartShunt | — |
 | ALARM_BUZZER | 0xEEFC | BOOLEAN | READ_WRITE | — | — | 1.0 | BMV-700/702/712, SmartShunt | — |
+| BMV_BACKLIGHT_INTENSITY | 0xEEFE | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | BMV-700/702/712, SmartShunt | — |
 | TIMER_EVENT_0..5 | 0xEDA0..0xEDA5 | STRUCT | READ_WRITE | — | — | — | BlueSolar/SmartSolar MPPT | TIMER_EVENT |

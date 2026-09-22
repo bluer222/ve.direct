@@ -5,6 +5,21 @@ Fetch official Victron Energy VE.Direct protocol specifications.
 Downloads the official PDF specifications directly from victronenergy.com
 and extracts their text layout using `pdftotext` (if available) for
 automated schema validation and testing.
+
+Freshness modes (see --check vs --sync):
+
+* ``--check`` (default, fast): header-only. Each local snapshot's own
+  revision/date markers are compared against the online Last-Modified
+  headers without downloading anything (stdlib-only). Limitation: a
+  CDN/static re-upload that changes PDF content without bumping
+  Last-Modified still reports FRESH — header comparison cannot see
+  content. Use ``--sync`` when content assurance is required.
+* ``--sync`` (slow, thorough): full download. Each remote PDF is
+  downloaded, re-extracted with ``pdftotext -layout``, and the extracted
+  text is compared (whitespace-normalized) against the local snapshot.
+  A same-timestamp content change reports SYNC-DIFF instead of passing
+  as fresh. Requires network + pdftotext; unverifiable specs report
+  SYNC-UNKNOWN.
 """
 
 from __future__ import annotations
@@ -141,6 +156,136 @@ def snapshot_revision_info(text: str):
     return label, (max(dates) if dates else None)
 
 
+def download_pdf_bytes(url: str, timeout: float = 60.0) -> bytes:
+    """Download a remote PDF into memory (stdlib-only)."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def normalize_snapshot_text(text: str) -> str:
+    """Normalize extracted layout text for content comparison.
+
+    Strips trailing whitespace per line and surrounding blank lines and
+    normalizes CRLF: the same PDF re-extracted on another platform must
+    still compare equal, while any real content change still differs.
+    """
+    return "\n".join(
+        line.rstrip() for line in text.replace("\r\n", "\n").splitlines()
+    ).strip()
+
+
+def fetch_remote_snapshot_text(url: str, timeout: float = 60.0):
+    """Download the remote PDF and return its ``pdftotext -layout`` text.
+
+    Returns ``None`` when unverifiable: network/download failure,
+    missing ``pdftotext``, or a failed extraction. Separated from
+    :func:`verify_remote_content` so tests can mock at either boundary.
+    """
+    import tempfile
+
+    try:
+        pdf_bytes = download_pdf_bytes(url, timeout=timeout)
+    except Exception:
+        return None
+    if not shutil.which("pdftotext"):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        pdf_path = Path(tmp) / "remote.pdf"
+        txt_path = Path(tmp) / "remote.txt"
+        try:
+            pdf_path.write_bytes(pdf_bytes)
+        except Exception:
+            return None
+        if not extract_text(pdf_path, txt_path):
+            return None
+        try:
+            return txt_path.read_text(errors="ignore")
+        except Exception:
+            return None
+
+
+def verify_remote_content(specs_dir: Path, timeout: float = 60.0):
+    """Full-download content check: remote-extracted text vs local snapshot.
+
+    Returns ``{key: True/False/None}``: True = content matches, False =
+    content differs (SYNC-DIFF, however Last-Modified compares), None =
+    unverifiable (offline, no pdftotext, extraction failure). Missing or
+    empty local snapshots are also None (nothing to compare against).
+    """
+    results = {}
+    for key, info in OFFICIAL_SPECS.items():
+        txt_path = specs_dir / f"{key}.txt"
+        if not txt_path.is_file() or txt_path.stat().st_size == 0:
+            results[key] = None
+            continue
+        try:
+            local_text = txt_path.read_text(errors="ignore")
+        except Exception:
+            results[key] = None
+            continue
+        remote_text = fetch_remote_snapshot_text(info["url"], timeout=timeout)
+        if remote_text is None:
+            results[key] = None
+        else:
+            results[key] = (
+                normalize_snapshot_text(remote_text) == normalize_snapshot_text(local_text)
+            )
+    return results
+
+
+def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
+    """Real-directory freshness gate for the test suite.
+
+    Compares each snapshot's own revision/date markers against the online
+    Last-Modified headers (headers only, stdlib-only; no download).
+
+    Returns ``(status, detail)`` with status one of:
+
+    * ``"stale"`` — at least one online copy is newer than its snapshot
+      (suite must FAIL);
+    * ``"fresh"`` — every spec verifiable and no online copy newer
+      (suite passes);
+    * ``"unknown"`` — anything unverifiable (offline/network error, no
+      Last-Modified header, unparseable local markers, same-day
+      intraday ambiguity, missing file): the suite must SKIP, never
+      fail and never pass on partial evidence.
+    """
+    try:
+        entries = list(OFFICIAL_SPECS.items())
+    except Exception as e:  # pragma: no cover - defensive
+        return "unknown", f"cannot enumerate specs ({e})"
+    problems = []
+    for key, info in entries:
+        txt_path = specs_dir / f"{key}.txt"
+        if not txt_path.is_file() or txt_path.stat().st_size == 0:
+            return "unknown", f"{key}.txt missing; freshness unverifiable"
+        try:
+            label, local_date = snapshot_revision_info(txt_path.read_text(errors="ignore"))
+        except Exception as e:
+            return "unknown", f"{key}.txt markers unparseable ({e})"
+        if local_date is None:
+            return "unknown", f"{key}.txt carries no parseable revision date"
+        try:
+            remote_dt = remote_last_modified(info["url"], timeout=timeout)
+        except Exception as e:
+            return "unknown", f"{key}.txt network unreachable ({e})"
+        if remote_dt is None:
+            return "unknown", f"{key}.txt: server gave no Last-Modified header"
+        if remote_dt.date() > local_date:
+            problems.append(
+                f"{key}.txt online copy newer (remote {remote_dt:%Y-%m-%d} > snapshot {local_date.isoformat()})"
+            )
+        elif remote_dt.date() == local_date:
+            return (
+                "unknown",
+                f"{key}.txt remote revision is same-day ({remote_dt:%Y-%m-%d}); freshness unverifiable",
+            )
+    if problems:
+        return "stale", "; ".join(problems)
+    return "fresh", "all snapshots predate their online Last-Modified dates"
+
+
 def check_specs(specs_dir: Path) -> bool:
     print(f"Checking specifications in {specs_dir}:")
     all_ok = True
@@ -158,6 +303,11 @@ def check_specs(specs_dir: Path) -> bool:
     # without comparing content. Instead each snapshot's own revision/date
     # markers are compared against the online Last-Modified headers (headers
     # only, stdlib-only). Unverifiable freshness is a failure, not a pass.
+    # Header-only limitation (honest FRESH): a remote older-or-equal
+    # Last-Modified reports FRESH without comparing bytes, so a CDN/static
+    # re-upload that changes content without bumping the header passes as
+    # fresh here. Run with --sync for the full-download content comparison
+    # (verify_remote_content) when content assurance is required.
     print("  Verifying snapshot freshness (content revision vs online Last-Modified)...")
     for key, info in OFFICIAL_SPECS.items():
         txt_path = specs_dir / f"{key}.txt"
@@ -211,12 +361,28 @@ def main() -> int:
         default=Path(__file__).resolve().parent.parent / "tests" / "specs",
         help="Destination directory for downloaded specifications (default: tests/specs)",
     )
-    parser.add_argument("--check", action="store_true", help="Verify presence of extracted specification files.")
+    parser.add_argument("--check", action="store_true", help="Verify presence of extracted specification files (fast, header-only freshness; see --sync for content assurance).")
+    parser.add_argument("--sync", action="store_true", help="Full-download content verification: download each remote PDF, re-extract with pdftotext -layout, and compare against the local snapshot (catches same-timestamp re-uploads that --check reports FRESH).")
     parser.add_argument("--extract-only", action="store_true", help="Extract text from existing PDFs without re-downloading.")
     args = parser.parse_args()
 
     dest_dir = args.dest_dir
     dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.sync:
+        print(f"Verifying remote content in {dest_dir} (full download)...")
+        results = verify_remote_content(dest_dir)
+        all_ok = True
+        for key, matched in results.items():
+            if matched is True:
+                print(f"  [SYNC-OK] {key}.txt - remote content matches snapshot")
+            elif matched is False:
+                print(f"  [SYNC-DIFF] {key}.txt - remote content DIFFERS from snapshot; refresh snapshots")
+                all_ok = False
+            else:
+                print(f"  [SYNC-UNKNOWN] {key}.txt - cannot verify (offline, no pdftotext, or missing snapshot)")
+                all_ok = False
+        return 0 if all_ok else 1
 
     if args.check:
         ok = check_specs(dest_dir)

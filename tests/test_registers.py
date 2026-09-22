@@ -163,8 +163,8 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.decode_value(st, bytes([245])), "wake_up")
         self.assertEqual(R.decode_value(st, bytes([255])), "unavailable")
         self.assertEqual(R.decode_value(st, b"\x03"), "bulk")
-        # Generic map is unchanged for other families.
-        self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), b"\x00"), "off")
+        # Generic map follows BlueSolar-HEX §1.1 (0 = NOT_CHARGING).
+        self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), b"\x00"), "not_charging")
         self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), bytes([245])), "wake_up")
 
     def test_orion_device_mode_override(self):
@@ -373,6 +373,74 @@ class TestRegisters(unittest.TestCase):
                 raw = _s.pack("<H", 17400)
                 self.assertAlmostEqual(R.decode_value(reg, raw), 174.0)
                 self.assertEqual(R.encode_value(reg, 174.0), raw)
+
+    # --- cycle-4 issue 1: shared 0x0201 state 0 is NOT_CHARGING ---
+    def test_device_state_0_not_charging(self):
+        # BlueSolar-HEX §1.1 + Orion-XS-HEX both list 0 as NOT_CHARGING.
+        self.assertEqual(R.DEVICE_STATE_MAP[0], "not_charging")
+        self.assertEqual(
+            R.decode_value(R.lookup("DEVICE_STATE"), b"\x00"), "not_charging")
+        self.assertEqual(
+            R.decode_value(R.lookup(0x0201, flavor="MPPT"), b"\x00"),
+            "not_charging")
+        # Family overrides resolve independently (Phoenix Off stays).
+        self.assertEqual(
+            R.decode_value(R.lookup(0x0201, flavor="ORION"), b"\x00"),
+            "not_charging")
+        self.assertEqual(
+            R.decode_value(R.lookup(0x0201, flavor="INV"), b"\x00"), "off")
+        self.assertEqual(R.DEVICE_STATE_INV_MAP[0], "off")
+
+    # --- cycle-4 issue 2: 0x0350-0x0353 generic scoped to MPPT family ---
+    def test_relay_bat_scoped_out_of_bmv(self):
+        import struct as _s
+        bmv = R.for_flavor("BMV")
+        for name in ("RELAY_BAT_LOW_SET", "RELAY_BAT_LOW_CLEAR",
+                     "RELAY_BAT_HIGH_SET", "RELAY_BAT_HIGH_CLEAR"):
+            self.assertNotIn(name, bmv, name)
+            reg = R.lookup(name)
+            self.assertEqual(reg.flavors, frozenset({"MPPT", "MPPT_RS"}))
+        # BMV flavor resolves the 0.1 V BMV meanings (10x apart).
+        reg_bmv = R.lookup(0x0350, flavor="BMV")
+        self.assertEqual(reg_bmv.name, "BMV_RELAY_LOW_VOLTAGE")
+        self.assertAlmostEqual(reg_bmv.scale, 0.1)
+        self.assertEqual(
+            R.lookup("RELAY_BAT_LOW_SET", flavor="BMV").name,
+            "BMV_RELAY_LOW_VOLTAGE")
+        self.assertEqual(
+            R.lookup("RELAY_BAT_LOW_SET", flavor="BMV").scale, 0.1)
+        # Scale contrast proves the collision mattered: same raw = 10x value.
+        raw = _s.pack("<H", 1200)
+        self.assertAlmostEqual(
+            R.decode_value(R.lookup("RELAY_BAT_LOW_SET"), raw), 12.0)
+        self.assertAlmostEqual(R.decode_value(reg_bmv, raw), 120.0)
+        # MPPT-family access unchanged.
+        self.assertIn("RELAY_BAT_LOW_SET", R.for_flavor("MPPT"))
+        self.assertIn("RELAY_BAT_LOW_SET", R.for_flavor("MPPT_RS"))
+        self.assertEqual(
+            R.lookup(0x0350, flavor="MPPT").name, "RELAY_BAT_LOW_SET")
+        self.assertEqual(
+            R.lookup(0x0350, flavor="MPPT_RS").name, "RELAY_BAT_LOW_SET")
+        self.assertEqual(R.lookup(0x0350, flavor="MPPT").scale, 0.01)
+
+    # --- cycle-4 issue 3: CAPABILITIES_BLE bits 2-8 kept best-effort ---
+    def test_capabilities_ble_reserved_best_effort(self):
+        # Single ANY register (no BMV override → no new ambiguity).
+        reg = R.lookup("CAPABILITIES_BLE")
+        self.assertEqual(reg.id, 0x0150)
+        self.assertIn("ANY", reg.flavors)
+        self.assertEqual(R.lookup(0x0150, flavor="BMV").name, "CAPABILITIES_BLE")
+        self.assertEqual(R.lookup(0x0150, flavor="INV").name, "CAPABILITIES_BLE")
+        # Orion-family names kept for bits 2-8 (BMV/Phoenix reserve them).
+        self.assertEqual(R.ENUM_MAPS["CAPABILITIES_BLE"][2], "ble_off_recovery_time")
+        self.assertEqual(R.ENUM_MAPS["CAPABILITIES_BLE"][8], "settings_lock")
+        # Reserved bits decode best-effort; documented bits 0-1 unchanged.
+        self.assertEqual(
+            R.decode_value(reg, (1 << 2).to_bytes(4, "little")),
+            ["ble_off_recovery_time"])
+        self.assertEqual(
+            R.decode_value(reg, (1).to_bytes(4, "little")), ["ble_mode"])
+        self.assertEqual(R.decode_value(reg, (0).to_bytes(4, "little")), [])
 
 
 if __name__ == "__main__":

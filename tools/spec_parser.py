@@ -260,7 +260,17 @@ class BlueSolarHEXParser:
     def _parse_id_ranges(self, regs: Dict[int, ParsedRegister]) -> None:
         """Expand multi-line ``0xAAAA ...`` / bare ``0xBBBB`` pairs (timer
         events 0xEDA0..0xEDA5, daily history, MPPT history) and inline
-        ``0xAAAA..0xBBBB`` history headers into struct records."""
+        ``0xAAAA..0xBBBB`` history headers into struct records.
+
+        Known doc conflict (verified against tests/specs snapshot): the
+        1.1-table multi-line MPPT range ends at 0x10BE while the
+        "History MPPT day record" detail header prints 0x10A0..0x10BD
+        (daily history agrees at 0x106E on both sides; only MPPT
+        conflicts). Resolution: the table endpoint wins (0x10BE is a
+        real register), so the union below intentionally keeps 31 IDs
+        0x10A0..0x10BE; tests/test_spec_parsers.py asserts both
+        conflicting endpoints plus this resolution instead of silently
+        unioning them."""
         lines = self.text.splitlines()
         for i, line in enumerate(lines):
             for m in re.finditer(r"0x([0-9A-Fa-f]{4})\s*\.\.\s*0x([0-9A-Fa-f]{4})", line):
@@ -852,8 +862,21 @@ _TEXT_FOOTNOTE_RE = re.compile(r"^\s*\d[\d\s,]*")
 #: the device-column header of the next table).
 _TEXT_CONT_EXCLUDE = ("60x", "Victron Energy", "General phone", "www.victronenergy", "Label")
 
+#: Shape of a would-be Units cell the closed _TEXT_UNITS_RE vocabulary did
+#: not recognize: an optional decimal factor plus a short alphabetic unit
+#: ("Hz", "kWh", "0.5 Hz"). At most one internal space (the factor gap) is
+#: allowed so multi-word descriptions ("Off reason", "Load output state
+#: (ON/OFF)") never match; every snapshot description is >= 2 words, so a
+#: single-token candidate before a 2+-space column gap is fail-closed by
+#: design (a future one-word description would trip the unknown-unit gate
+#: for human review, which is the intended loud failure). Length-guarded
+#: (<= 16 chars): real units are short, descriptions are not.
+_UNKNOWN_UNIT_CAND_RE = re.compile(r"^(?:\d+(?:\.\d+)?\s)?[A-Za-z°‰%Ωμ/]+[\d,]*$")
 
-def _split_text_units_desc(rest: str) -> Tuple[str, str]:
+
+def _split_text_units_desc(
+    rest: str, label: str = "", unknown_sink: Optional[List[Tuple[str, str]]] = None
+) -> Tuple[str, str]:
     """Split a fields-table row remainder into ``(units, description)``.
 
     Strips footnote references and the device-bullet tail (bullets belong to
@@ -862,6 +885,14 @@ def _split_text_units_desc(rest: str) -> Tuple[str, str]:
     the description then lives on the continuation line. No description in
     the doc starts with a digit, so a leading digit run is always a
     footnote, never description text.
+
+    Unknown units fail loudly instead of leaking into the description: when
+    the closed _TEXT_UNITS_RE vocabulary does not match but the remainder
+    opens with a short single-token candidate before the 2+-space column
+    gap (e.g. a future "Hz" row), the candidate is appended to
+    ``unknown_sink`` as ``(label, candidate)`` (when a sink is given) and
+    the row still parses as ``("", rest)`` so the suite — which asserts the
+    sink is empty — breaks until the unit is explicitly allowlisted.
     """
     units = ""
     m = _TEXT_UNITS_RE.match(rest)
@@ -873,19 +904,37 @@ def _split_text_units_desc(rest: str) -> Tuple[str, str]:
             rest = rest[fm.end():]
     elif re.fullmatch(r"\d[\d\s,]*", rest.strip()):
         return "", ""  # bare footnote cell, description on continuation line
+    else:
+        head = rest.split("•", 1)[0]
+        parts = re.split(r"\s{2,}", head.strip(), maxsplit=1)
+        if len(parts) == 2:
+            cand = parts[0].strip()
+            # Footnote-glued unknowns ("Hz11", "kWh10,11"): strip the
+            # trailing footnote digits for the shape check but record raw.
+            shape = re.sub(r"\d[\d\s,]*$", "", cand).strip() or cand
+            if len(cand) <= 16 and _UNKNOWN_UNIT_CAND_RE.match(shape):
+                if unknown_sink is not None:
+                    unknown_sink.append((label, cand))
     return units, rest.split("•", 1)[0].strip()
 
 
-def _is_desc_continuation(line: str) -> bool:
-    """True for description-column continuation lines (indent >= 40).
+def _is_desc_continuation(line: str, base_indent: int = 13) -> bool:
+    """True for description-column continuation lines.
 
-    Footnote prose (indent <= ~27), page furniture (indent 0) and the
-    next table's device-column header never qualify.
+    Relative-indent rule: the continuation must sit at least 20 columns
+    right of its label row (``base_indent`` + 20; the doc prints labels at
+    13 and continuations at 58, footnotes at 25-27, so the threshold 33
+    tolerates a ±15-column ``pdftotext -layout`` drift in either direction
+    while footnote prose still misses it). The previous hard ``indent >=
+    40`` floor silently dropped every H1/H4/H5/H10/H17/H18 join after a
+    -20 shift while device bullets (position-scanned, indent-free) kept
+    parsing. Footnote prose (indent <= ~27), page furniture (indent 0) and
+    the next table's device-column header never qualify.
     """
     s = line.strip()
     if not s:
         return False
-    if len(line) - len(line.lstrip(" ")) < 40:
+    if len(line) - len(line.lstrip(" ")) < base_indent + 20:
         return False
     return not any(x in line for x in _TEXT_CONT_EXCLUDE)
 
@@ -895,6 +944,12 @@ class VEDirectTextParser:
 
     def __init__(self, text: str):
         self.text = text
+        #: ``(label, candidate)`` rows whose Units cell did not match the
+        #: closed _TEXT_UNITS_RE vocabulary (see _split_text_units_desc).
+        #: Empty for the current snapshot; the suite asserts it stays
+        #: empty so a newly introduced unit breaks loudly until
+        #: explicitly allowlisted with justification.
+        self.unknown_units: List[Tuple[str, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> VEDirectTextParser:
@@ -931,6 +986,7 @@ class VEDirectTextParser:
         section = self._fields_section()
         lines = section.splitlines()
         tables = self._device_column_starts(lines)
+        self.unknown_units = []
 
         label_re = re.compile(r"^\s{10,25}([A-Za-z0-9_#]+)\s{2,}(.*?)\s*$")
         stoplist = {
@@ -938,7 +994,7 @@ class VEDirectTextParser:
             "When", "Both", "Available", "60x",
         }
 
-        pending: Optional[List[Any]] = None  # [label, units, desc, raw_lines]
+        pending: Optional[List[Any]] = None  # [label, units, desc, raw_lines, label_indent]
 
         def table_starts(idx: int) -> List[int]:
             cur: List[int] = []
@@ -962,7 +1018,7 @@ class VEDirectTextParser:
         def flush(idx: int) -> None:
             if pending is None:
                 return
-            label, units, desc, raw_lines = pending
+            label, units, desc, raw_lines, _indent = pending
             fields[label] = ParsedTextField(
                 label=label, units=units, description=desc,
                 devices=devices_for(raw_lines, table_starts(idx)),
@@ -977,15 +1033,19 @@ class VEDirectTextParser:
                     pending = None
                     continue
                 flush(idx)
-                units, desc = _split_text_units_desc(m.group(2))
-                pending = [label, units, desc, [line]]
+                units, desc = _split_text_units_desc(
+                    m.group(2), label=label, unknown_sink=self.unknown_units
+                )
+                pending = [label, units, desc, [line], len(line) - len(line.lstrip(" "))]
             elif pending is not None:
                 pending[3].append(line)
                 # Continuation description: rows whose remainder held only a
                 # footnote (H1/H4/H5/H10) carry the description on the next
                 # description-column line; H17/H18 split "...(BMV) /" across
                 # two lines. Other lines only extend the device-bullet scan.
-                if (pending[2] == "" or pending[2].endswith("/")) and _is_desc_continuation(line):
+                # The indent anchor is this row's own label column (relative
+                # rule), never a hard absolute floor.
+                if (pending[2] == "" or pending[2].endswith("/")) and _is_desc_continuation(line, pending[4]):
                     cont = line.split("•", 1)[0].strip()
                     pending[2] = cont if pending[2] == "" else pending[2] + " " + cont
         flush(len(lines))
