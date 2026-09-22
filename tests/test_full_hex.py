@@ -163,7 +163,7 @@ class TestFullHex(unittest.TestCase):
         self.assertEqual(
             R.lookup("BAT_VOLTAGE", flavor="INV").access, "READ_ONLY")
         self.assertEqual(
-            R.lookup("RELAY_MODE", flavor="INV").access, "WRITE_ONLY")
+            R.lookup("INV_RELAY_MODE", flavor="INV").access, "WRITE_ONLY")
 
     def test_capabilities_full_bits(self):
         m = R.ENUM_MAPS["CAPABILITIES"]

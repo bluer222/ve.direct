@@ -863,15 +863,17 @@ _TEXT_FOOTNOTE_RE = re.compile(r"^\s*\d[\d\s,]*")
 _TEXT_CONT_EXCLUDE = ("60x", "Victron Energy", "General phone", "www.victronenergy", "Label")
 
 #: Shape of a would-be Units cell the closed _TEXT_UNITS_RE vocabulary did
-#: not recognize: an optional decimal factor plus a short alphabetic unit
-#: ("Hz", "kWh", "0.5 Hz"). At most one internal space (the factor gap) is
-#: allowed so multi-word descriptions ("Off reason", "Load output state
-#: (ON/OFF)") never match; every snapshot description is >= 2 words, so a
-#: single-token candidate before a 2+-space column gap is fail-closed by
-#: design (a future one-word description would trip the unknown-unit gate
-#: for human review, which is the intended loud failure). Length-guarded
-#: (<= 16 chars): real units are short, descriptions are not.
-_UNKNOWN_UNIT_CAND_RE = re.compile(r"^(?:\d+(?:\.\d+)?\s)?[A-Za-z°‰%Ωμ/]+[\d,]*$")
+#: not recognize: anything letter-bearing before the 2+-space column gap.
+#: Multi-word candidates ("kilo watt hours") are recorded as well as single
+#: tokens: the old single-token shape check let a future multi-word unit
+#: leak into the description with unknown_units==[]. Length-guarded (<= 32
+#: chars): the longest vocabulary unit is 8 chars ("0.01 kWh"), so 32 gives
+#: 4x headroom for plausible multi-word units, while description sentences
+#: (which only reach this branch through an accidental internal double
+#: space) are far longer. Verified: no snapshot row yields a two-part
+#: pre-gap split here, so the widened gate stays empty on current docs.
+_UNKNOWN_UNIT_CAND_RE = re.compile(r"[A-Za-z°‰%Ωμ]")
+_UNKNOWN_UNIT_MAX_LEN = 32
 
 
 def _split_text_units_desc(
@@ -888,8 +890,8 @@ def _split_text_units_desc(
 
     Unknown units fail loudly instead of leaking into the description: when
     the closed _TEXT_UNITS_RE vocabulary does not match but the remainder
-    opens with a short single-token candidate before the 2+-space column
-    gap (e.g. a future "Hz" row), the candidate is appended to
+    holds a letter-bearing candidate before the 2+-space column gap (e.g. a
+    future "Hz" or "kilo watt hours" row), the raw candidate is appended to
     ``unknown_sink`` as ``(label, candidate)`` (when a sink is given) and
     the row still parses as ``("", rest)`` so the suite — which asserts the
     sink is empty — breaks until the unit is explicitly allowlisted.
@@ -909,10 +911,11 @@ def _split_text_units_desc(
         parts = re.split(r"\s{2,}", head.strip(), maxsplit=1)
         if len(parts) == 2:
             cand = parts[0].strip()
-            # Footnote-glued unknowns ("Hz11", "kWh10,11"): strip the
-            # trailing footnote digits for the shape check but record raw.
+            # Footnote-glued unknowns ("Hz11", "kWh10,11"): a trailing
+            # footnote run must not defeat the letter check, so it is
+            # stripped for the check but the raw candidate is recorded.
             shape = re.sub(r"\d[\d\s,]*$", "", cand).strip() or cand
-            if len(cand) <= 16 and _UNKNOWN_UNIT_CAND_RE.match(shape):
+            if len(cand) <= _UNKNOWN_UNIT_MAX_LEN and _UNKNOWN_UNIT_CAND_RE.search(shape):
                 if unknown_sink is not None:
                     unknown_sink.append((label, cand))
     return units, rest.split("•", 1)[0].strip()
@@ -1003,11 +1006,26 @@ class VEDirectTextParser:
                     cur = starts
             return cur
 
-        def devices_for(raw_lines: List[str], starts: List[int]) -> List[str]:
+        def devices_for(raw_lines: List[str], starts: List[int], label: str = "?") -> List[str]:
+            # A bullet past the last known column start belongs to the last
+            # device only while it still sits under that column's own header
+            # print width; anything further right is an Nth device column the
+            # 7-entry TEXT_DEVICES cannot name, so it fails loudly instead of
+            # silently merging into BuckBoost. Tolerance == len("BuckBoost"):
+            # bullets are printed under their headers, and the measured
+            # snapshot maximum overhang past the BuckBoost start is +8 (I/P
+            # rows, layout drift), so 9 keeps every current row green while
+            # an 8th column (next pitch >= ~+10) trips loudly for triage.
             found: Set[int] = set()
             for raw in raw_lines:
                 for m in re.finditer("•", raw):
                     p = m.start()
+                    if starts and p > starts[-1] + len("BuckBoost"):
+                        raise ValueError(
+                            f"text field {label!r}: device bullet at column {p} "
+                            f"beyond known device columns (last start {starts[-1]}); "
+                            "extend TEXT_DEVICES instead of merging into BuckBoost"
+                        )
                     col = 0
                     for s, start in enumerate(starts):
                         if start <= p + 1:
@@ -1021,7 +1039,7 @@ class VEDirectTextParser:
             label, units, desc, raw_lines, _indent = pending
             fields[label] = ParsedTextField(
                 label=label, units=units, description=desc,
-                devices=devices_for(raw_lines, table_starts(idx)),
+                devices=devices_for(raw_lines, table_starts(idx), label),
             )
 
         for idx, line in enumerate(lines):

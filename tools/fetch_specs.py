@@ -57,6 +57,24 @@ OFFICIAL_SPECS = {
     },
 }
 
+#: Last revision verified byte-identical against the online PDFs ("label" /
+#: "date" are the snapshot's own markers, "verified_on" the UTC day of the
+#: successful ``--sync`` content comparison, None = never verified online).
+#: Lets a human tell verification happened without network access; the
+#: suite asserts label/date still match the snapshots, so doc drift fails
+#: loudly until re-verified. Refreshed automatically by ``--sync`` for
+#: every SYNC-OK spec (see update_manifest_text); hand-edits must stay
+#: comment-justified like any other allowlist.
+# FRESHNESS-MANIFEST-BEGIN
+FRESHNESS_MANIFEST = {
+    "BlueSolar-HEX-protocol": {"label": "Rev 18", "date": "2021-11-15", "verified_on": None},
+    "Orion-XS-HEX-protocol": {"label": "Initial version 2025-06-16", "date": "2025-06-16", "verified_on": None},
+    "BMV-7xx-HEX-Protocol": {"label": "Rev 7", "date": "2021-07-01", "verified_on": None},
+    "VE.Direct-HEX-Protocol-Phoenix-Inverter": {"label": "Rev 5", "date": "2021-09-06", "verified_on": None},
+    "VE.Direct-Protocol-3.34": {"label": "v3.34", "date": "2025-04-14", "verified_on": None},
+}
+# FRESHNESS-MANIFEST-END
+
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
@@ -153,6 +171,34 @@ def snapshot_revision_info(text: str):
             dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
         except ValueError:
             continue
+    # Month-first drift ("April 14, 2025") with optional ordinal/comma.
+    for mon, d, y in re.findall(
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})",
+        tail,
+    ):
+        try:
+            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+        except ValueError:
+            continue
+    # Ordinal day-first drift ("14th April 2025") with optional comma.
+    for d, mon, y in re.findall(
+        r"(\d{1,2})(?:st|nd|rd|th)\s+"
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r",?\s+(\d{4})",
+        tail,
+    ):
+        try:
+            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+        except ValueError:
+            continue
+    if label is None and re.search(r"Initial version", tail):
+        # Undated-label docs (Orion-XS tail is "Changes: 16-06-2025 Initial
+        # version ..."): without this the label check is vacuous (None) and
+        # freshness is date-only. The Changes date scopes the marker, so the
+        # latest mined revision date disambiguates repeated "Initial version"
+        # mentions across revisions.
+        label = f"Initial version {max(dates).isoformat()}" if dates else "Initial version"
     return label, (max(dates) if dates else None)
 
 
@@ -250,40 +296,109 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
       Last-Modified header, unparseable local markers, same-day
       intraday ambiguity, missing file): the suite must SKIP, never
       fail and never pass on partial evidence.
+
+    Every spec is evaluated (no first-failure short-circuit: an early
+    same-day ``unknown`` must not mask a later ``stale``); the worst
+    status wins (stale > unknown > fresh) and the detail names every
+    stale/unverifiable spec.
     """
     try:
         entries = list(OFFICIAL_SPECS.items())
     except Exception as e:  # pragma: no cover - defensive
         return "unknown", f"cannot enumerate specs ({e})"
-    problems = []
+    stale: list[str] = []
+    unknowns: list[str] = []
     for key, info in entries:
         txt_path = specs_dir / f"{key}.txt"
         if not txt_path.is_file() or txt_path.stat().st_size == 0:
-            return "unknown", f"{key}.txt missing; freshness unverifiable"
+            unknowns.append(f"{key}.txt missing; freshness unverifiable")
+            continue
         try:
             label, local_date = snapshot_revision_info(txt_path.read_text(errors="ignore"))
         except Exception as e:
-            return "unknown", f"{key}.txt markers unparseable ({e})"
+            unknowns.append(f"{key}.txt markers unparseable ({e})")
+            continue
         if local_date is None:
-            return "unknown", f"{key}.txt carries no parseable revision date"
+            unknowns.append(f"{key}.txt carries no parseable revision date")
+            continue
         try:
             remote_dt = remote_last_modified(info["url"], timeout=timeout)
         except Exception as e:
-            return "unknown", f"{key}.txt network unreachable ({e})"
+            unknowns.append(f"{key}.txt network unreachable ({e})")
+            continue
         if remote_dt is None:
-            return "unknown", f"{key}.txt: server gave no Last-Modified header"
+            unknowns.append(f"{key}.txt: server gave no Last-Modified header")
+            continue
         if remote_dt.date() > local_date:
-            problems.append(
+            stale.append(
                 f"{key}.txt online copy newer (remote {remote_dt:%Y-%m-%d} > snapshot {local_date.isoformat()})"
             )
         elif remote_dt.date() == local_date:
-            return (
-                "unknown",
-                f"{key}.txt remote revision is same-day ({remote_dt:%Y-%m-%d}); freshness unverifiable",
+            unknowns.append(
+                f"{key}.txt remote revision is same-day ({remote_dt:%Y-%m-%d}); freshness unverifiable"
             )
-    if problems:
-        return "stale", "; ".join(problems)
+    if stale:
+        return "stale", "; ".join(stale + unknowns)
+    if unknowns:
+        return "unknown", "; ".join(unknowns)
     return "fresh", "all snapshots predate their online Last-Modified dates"
+
+
+def content_gate_verdict(results: dict) -> tuple:
+    """Second-stage verdict for full-download content comparison.
+
+    ``results`` is the ``{key: True/False/None}`` map from
+    :func:`verify_remote_content`. Returns ``(status, detail)`` with the
+    same worst-wins ordering as :func:`snapshot_freshness_status`: any
+    content DIFF (False) is ``"stale"`` (fail); all-match (True) is
+    ``"fresh"``; anything unverifiable (None: offline, no pdftotext,
+    missing snapshot) is ``"unknown"`` (skip with reason, never pass on
+    partial evidence). Mixed match+unverifiable is ``"unknown"`` naming
+    the unverifiable specs.
+    """
+    diffs = sorted(k for k, v in results.items() if v is False)
+    unknowns = sorted(k for k, v in results.items() if v is not True and v is not False)
+    if diffs:
+        detail = f"remote content DIFFERS for: {', '.join(diffs)}"
+        if unknowns:
+            detail += f"; unverifiable: {', '.join(unknowns)}"
+        return "stale", detail
+    if unknowns:
+        if len(unknowns) == len(results):
+            return "unknown", (
+                "content comparison unverifiable for all specs "
+                f"({', '.join(unknowns)}); need network + pdftotext"
+            )
+        return "unknown", f"content comparison unverifiable for: {', '.join(unknowns)}"
+    return "fresh", "all remote contents match their snapshots"
+
+
+def update_manifest_text(source: str, manifest: dict, verified_on: str) -> str:
+    """Rewrite the FRESHNESS_MANIFEST block in ``source`` from ``manifest``.
+
+    ``manifest`` maps spec key to ``(label, date)`` (``(label, iso_date)``
+    strings; either may be None for unparseable snapshots). Pure function
+    (no file I/O) so the suite can test it without touching the checkout;
+    only the ``--sync`` CLI path writes the result back to this file.
+    """
+    # Marker strings are concatenated so this function's own source never
+    # matches the rewrite regex below (it would otherwise rewrite itself).
+    begin = "# FRESHNESS-MANIFEST-" + "BEGIN"
+    end = "# FRESHNESS-MANIFEST-" + "END"
+    lines = []
+    for key in OFFICIAL_SPECS:
+        label, date = manifest.get(key, (None, None))
+        lines.append(
+            f'    "{key}": {{"label": {label!r}, "date": {date!r}, '
+            f'"verified_on": {verified_on!r}}},'
+        )
+    block = begin + "\nFRESHNESS_MANIFEST = {\n" + "\n".join(lines) + "\n}\n" + end
+    return re.sub(
+        begin + r".*?" + end,
+        lambda _m: block,
+        source,
+        flags=re.DOTALL,
+    )
 
 
 def check_specs(specs_dir: Path) -> bool:
@@ -382,6 +497,33 @@ def main() -> int:
             else:
                 print(f"  [SYNC-UNKNOWN] {key}.txt - cannot verify (offline, no pdftotext, or missing snapshot)")
                 all_ok = False
+        if all_ok:
+            # Refresh the checked-in last-verified manifest from the freshly
+            # confirmed snapshots so the suite (and humans) can see that
+            # online verification happened, and when.
+            today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+            manifest = {}
+            for key in OFFICIAL_SPECS:
+                try:
+                    label, local_date = snapshot_revision_info(
+                        (dest_dir / f"{key}.txt").read_text(errors="ignore")
+                    )
+                except Exception:
+                    label, local_date = None, None
+                manifest[key] = (
+                    label,
+                    local_date.isoformat() if local_date else None,
+                )
+            try:
+                source_path = Path(__file__)
+                source_path.write_text(
+                    update_manifest_text(
+                        source_path.read_text(errors="ignore"), manifest, today
+                    )
+                )
+                print(f"  FRESHNESS_MANIFEST refreshed (verified_on={today})")
+            except Exception as e:
+                print(f"  Warning: could not refresh FRESHNESS_MANIFEST ({e})", file=sys.stderr)
         return 0 if all_ok else 1
 
     if args.check:

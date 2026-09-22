@@ -27,7 +27,9 @@ class SimulatedTransport:
                    chunk_size: int = 64, delay: float = 0.0,
                    product_id: int = 0xA04A,
                    app_version: bytes = b"\x16\x41",
-                   flavor: str = "MPPT", boot_fails: bool = False) -> None:
+                   flavor: str = "MPPT", boot_fails: bool = False,
+                   parameter_error: bool | set[int] | list[int] | tuple | frozenset = False,
+                   parameter_error_registers: set[int] | list[int] | tuple | frozenset | None = None) -> None:
         from . import hex as _hex  # local import: keeps module import light
         self._hex = _hex
         self._stream = b"".join(text_chunks or [])
@@ -39,8 +41,27 @@ class SimulatedTransport:
         self.app_version = bytes(app_version)
         self.flavor = flavor.upper()
         self.boot_fails = bool(boot_fails)
+        # BlueSolar-HEX §1 / Orion-XS-HEX §1 reply flags: 0x01 Unknown Id,
+        # 0x02 Not supported, 0x04 Parameter Error. Parallels boot_fails:
+        # parameter_error=True fails every Get/Set with 0x04, or pass a
+        # collection of register ids (also via parameter_error_registers)
+        # to fail only those registers with 0x04.
+        self._parameter_error_all = parameter_error is True
+        _regs_set: set[int] = set()
+        if parameter_error is not True and parameter_error is not False \
+                and parameter_error is not None:
+            _regs_set.update(parameter_error)  # type: ignore[arg-type]
+        if parameter_error_registers:
+            _regs_set.update(parameter_error_registers)
+        self._parameter_error_registers = frozenset(_regs_set)
+        # Public mirror of the global flag (parallels boot_fails).
+        self.parameter_error = bool(self._parameter_error_all)
         self.written: list[bytes] = []
         self._pending_out = bytearray()
+
+    def _is_parameter_error(self, register_id: int) -> bool:
+        return (self._parameter_error_all
+                or register_id in self._parameter_error_registers)
 
     def _framing_error_reply(self) -> bytes:
         # Orion-XS §1 response 2 is :2AAAAFF; BlueSolar §1.3 invalid-frame
@@ -116,15 +137,23 @@ class SimulatedTransport:
                 rid = frame.register_id
                 flags = 0
                 reg = None
-                try:
-                    from . import registers as _regs
-                    reg = _regs.lookup(rid, flavor=self.flavor)
-                    if reg.access == "WRITE_ONLY":
-                        flags = self._hex.HEX_FLAG_NOT_SUPPORTED
-                except KeyError:
-                    reg = None
-                    if rid not in self._hex_replies:
-                        flags = self._hex.HEX_FLAG_UNKNOWN_ID
+                if self._is_parameter_error(rid):
+                    flags = self._hex.HEX_FLAG_PARAMETER_ERROR
+                    try:
+                        from . import registers as _regs
+                        reg = _regs.lookup(rid, flavor=self.flavor)
+                    except KeyError:
+                        reg = None
+                else:
+                    try:
+                        from . import registers as _regs
+                        reg = _regs.lookup(rid, flavor=self.flavor)
+                        if reg.access == "WRITE_ONLY":
+                            flags = self._hex.HEX_FLAG_NOT_SUPPORTED
+                    except KeyError:
+                        reg = None
+                        if rid not in self._hex_replies:
+                            flags = self._hex.HEX_FLAG_UNKNOWN_ID
                 if rid in self._hex_replies:
                     val = self._hex_replies[rid]
                 elif reg is not None:
@@ -138,15 +167,23 @@ class SimulatedTransport:
                 rid = frame.register_id
                 val = frame.data[3:]  # echo written value
                 flags = 0
-                try:
-                    from . import registers as _regs
-                    reg = _regs.lookup(rid, flavor=self.flavor)
-                    if reg.access in ("READ_ONLY", "CONSTANT"):
-                        flags = self._hex.HEX_FLAG_NOT_SUPPORTED
-                except KeyError:
-                    reg = None
-                    if rid not in self._hex_replies:
-                        flags = self._hex.HEX_FLAG_UNKNOWN_ID
+                if self._is_parameter_error(rid):
+                    flags = self._hex.HEX_FLAG_PARAMETER_ERROR
+                    try:
+                        from . import registers as _regs
+                        reg = _regs.lookup(rid, flavor=self.flavor)
+                    except KeyError:
+                        reg = None
+                else:
+                    try:
+                        from . import registers as _regs
+                        reg = _regs.lookup(rid, flavor=self.flavor)
+                        if reg.access in ("READ_ONLY", "CONSTANT"):
+                            flags = self._hex.HEX_FLAG_NOT_SUPPORTED
+                    except KeyError:
+                        reg = None
+                        if rid not in self._hex_replies:
+                            flags = self._hex.HEX_FLAG_UNKNOWN_ID
                 if not flags:
                     self._hex_replies[rid] = val
                 reply = self._hex.encode_frame(

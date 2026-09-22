@@ -536,6 +536,41 @@ class TestDevice(unittest.TestCase):
             self.assertEqual(bytes(f.data), b"\x00")
         run(go())
 
+    def test_sim_parameter_error_round_trip(self):
+        """Sim 0x04 Parameter Error (BlueSolar §1 / Orion-XS §1 flags) via hex_get."""
+        from ve_direct import hex as _H
+        from ve_direct.exceptions import RegisterError
+
+        async def go():
+            # Per-register trigger parallels boot_fails opt-in.
+            sim = SimulatedTransport(
+                text_chunks=[], flavor="MPPT",
+                hex_replies={0xEDBB: struct.pack("<H", 3130)},
+                parameter_error_registers={0xEDBB})
+            dev = AsyncVEDirect(sim.read_chunk, sim.write, flavor="MPPT")
+            with self.assertRaises(RegisterError) as cm:
+                await dev.hex_get("PANEL_VOLTAGE", timeout=2)
+            self.assertIn("parameter error", str(cm.exception))
+            # Raw wire reply carries flags 0x04.
+            sim2 = SimulatedTransport(
+                text_chunks=[], flavor="MPPT",
+                hex_replies={0xEDBB: struct.pack("<H", 3130)},
+                parameter_error_registers={0xEDBB})
+            await sim2.write(_H.build_get(0xEDBB))
+            f = _H.decode_line(bytes(sim2._pending_out))
+            self.assertEqual(f.flags, _H.HEX_FLAG_PARAMETER_ERROR)
+            # Global flag trigger, including Set path.
+            sim3 = SimulatedTransport(
+                text_chunks=[], flavor="MPPT", parameter_error=True)
+            dev3 = AsyncVEDirect(sim3.read_chunk, sim3.write, flavor="MPPT")
+            with self.assertRaises(RegisterError) as cm3:
+                await dev3.hex_get("PANEL_VOLTAGE", timeout=2)
+            self.assertIn("parameter error", str(cm3.exception))
+            with self.assertRaises(RegisterError) as cm4:
+                await dev3.hex_set("BAT_MAX_CURRENT", 35.0, timeout=2)
+            self.assertIn("parameter error", str(cm4.exception))
+        run(go())
+
     def test_truncated_async_rejected(self):
         """Truncated :A (id only, no flags/value) raises RegisterError."""
         from ve_direct import hex as _H

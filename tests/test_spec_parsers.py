@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import datetime
 import re
+import shutil
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -38,13 +40,16 @@ from spec_parser import (
 )
 import fetch_specs
 from fetch_specs import (
+    FRESHNESS_MANIFEST,
     check_specs,
+    content_gate_verdict,
     extract_text,
     fetch_remote_snapshot_text,
     normalize_snapshot_text,
     remote_last_modified,
     snapshot_freshness_status,
     snapshot_revision_info,
+    update_manifest_text,
     verify_remote_content,
 )
 import ve_direct.registers as R
@@ -93,19 +98,20 @@ def count_doc_field_labels(section: str) -> set[str]:
     (``\\s{2,}``) over a wider indent window. A single-space label row —
     missed by the parser's gap rule — is still counted here, so it fails
     loudly as a parser-vs-counter mismatch instead of passing ``len==63``
-    on both sides. The stoplist is shared only because the "Label" header
-    itself sits in the label column; verified: this yields exactly the 63
-    doc fields on the current snapshot with no prose false positives
-    (footnote prose at 25+ is outside 10-20)."""
-    stoplist = {
-        "Label", "Table", "The", "Note", "Victron", "General", "E-mail",
-        "When", "Both", "Available", "60x",
-    }
+    on both sides. The stoplist is deliberately NOT shared with the
+    parser: the parser's broad stoplist also screens prose tokens, but
+    this counter's narrow 10-20 indent window already excludes
+    prose/footnotes (25+), so only the literal "Label" column header needs
+    exclusion. A future doc label colliding with a parser stoplist word
+    ("Note", "When", ...) is therefore still counted here and fails loudly
+    against the parser instead of being missed by both. Verified: this
+    yields exactly the 63 doc fields on the current snapshot with no prose
+    false positives."""
     return {
         m.group(1)
         for line in section.splitlines()
         for m in [re.match(r"^\s{10,20}([A-Za-z0-9_#]+)\s+", line)]
-        if m and m.group(1) not in stoplist
+        if m and m.group(1) != "Label"
     }
 
 
@@ -142,6 +148,105 @@ def scrape_doc_ids(text: str) -> set[int]:
                     if 0 < b - a <= 1024:
                         ids.update(range(a, b + 1))
                     break
+    return ids
+
+
+def scrape_doc_cs_codes(section: str) -> dict[int, str]:
+    """Independent CS counter: name-plus-code prefix with NO tail requirement.
+
+    The parser anchors the trailing device-column marker (``\\s+(•|\\d)``),
+    so a row without trailing bullets is missed by the parser while the
+    suite stays green. This scraper anchors only the ``name code`` prefix
+    and ignores the tail entirely — a bullet-less row is still counted, so
+    it fails loudly as scraper-vs-parser mismatch. The leading-``[A-Za-z]``
+    rule excludes the "(1) Load search" footnote; verified exact against
+    the snapshot CS section (same ERR-header bound as the parser)."""
+    found: dict[int, str] = {}
+    for line in section.splitlines():
+        m = re.match(r"^\s*([A-Za-z][A-Za-z\s/()\-]*?)\s+(\d{1,3})\b", line)
+        if m:
+            found[int(m.group(2))] = m.group(1).strip()
+    return found
+
+
+def scrape_doc_error_codes(section: str) -> dict[int, str]:
+    """Independent error counter: EOL-anchored code with a permissive gap.
+
+    The parser requires a 2+-space gap before the code (``\\s{2,}``), so a
+    single-space row is missed with no counter to catch it. This scraper
+    tolerates ANY gap (``\\s+``) and anchors the code at end-of-line
+    instead — a single-space row is still counted and fails loudly as
+    scraper-vs-parser mismatch. Note prose ("Note1: ... will no longer be
+    reported.") ends in words, never in a bare code, so the EOL anchor
+    keeps it out; verified exact against the snapshot ERR section."""
+    found: dict[int, str] = {}
+    for line in section.splitlines():
+        m = re.match(r"^\s*([A-Za-z0-9][A-Za-z0-9\s/(),\-]*?)\s+(\d{1,3})\s*$", line)
+        if m:
+            found[int(m.group(2))] = m.group(1).strip()
+    return found
+
+
+def scrape_doc_capability_bits(text: str, marker: str, window: int) -> dict[int, str]:
+    """Independent capability-bit scraper with an OPEN name vocabulary.
+
+    The parser's closed name class (``[A-Za-z0-9_()./,\\-\\s]``) drops
+    names containing ``+``/``:`` etc. This scraper captures the name with
+    ``(.+?)`` and only strips the ``(0=no ...)`` suffix, keeping the
+    parser's "Bit"/"register" header guard — a future ``+``/``:`` name is
+    still scraped here and fails loudly as scraper-vs-parser mismatch.
+    Same marker/window as the parser (that bound is shared ground truth,
+    the line pattern is the independent axis); verified exact on both
+    snapshot capability tables."""
+    pos = text.find(marker)
+    section = text[pos : pos + window]
+    caps: dict[int, str] = {}
+    for line in section.splitlines():
+        m = re.match(r"^\s*(\d{1,2})\s+(.+?)(?:\s*\(0=no.*)?$", line)
+        if m:
+            name = m.group(2).strip()
+            if "Bit" not in name and "register" not in name:
+                caps[int(m.group(1))] = name
+    return caps
+
+
+def scrape_doc_pid_set(text: str) -> set[int]:
+    """Independent PID set: every EOL-anchored ``0xHHH[H][*]`` row of the
+    product-ID table. Count comparison (153 == 153) stays green under a
+    compensating miss+spurious pair; set-equality against the parser (the
+    fields check already does this — same pattern) does not."""
+    p0 = text.find("The product id:")
+    p1 = text.find("These models are phased out.")
+    found: set[int] = set()
+    for line in text[p0:p1].splitlines():
+        m = re.search(r"0x([0-9A-Fa-f]{3,4})\*?\s*$", line)
+        if m:
+            found.add(int(m.group(1), 16))
+    return found
+
+
+def scrape_decimal_ids(text: str) -> set[int]:
+    """Independent non-hex ID scan: bare decimal IDs and spaced hex typos.
+
+    Parser and scrape_doc_ids both anchor on the ``0x`` prefix (only the
+    "xEDE0" rescue escapes it), so a decimal-only row ("60961 ... un16")
+    or a spaced typo ("0 xEDF0") is missed by both. This scan uses the
+    disjoint assumption — a line-leading 4-5 digit decimal with a
+    table-shaped (dtype) tail, or ``0 xHHHH`` — and therefore fails loudly
+    where the hex strategies agree in silence. The 4-digit floor excludes
+    Bytes-layout sub-table offsets (single digits); verified: zero hits on
+    all four current HEX snapshots."""
+    ids: set[int] = set()
+    for line in text.splitlines():
+        m = re.match(
+            r"^\s*(\d{4,5})\s+[A-Z].*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            line,
+            re.IGNORECASE,
+        )
+        if m:
+            ids.add(int(m.group(1)))
+        for m2 in re.finditer(r"(?<!\w)0\s+x([0-9A-Fa-f]{4})\b", line):
+            ids.add(int(m2.group(1), 16))
     return ids
 
 
@@ -433,6 +538,29 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(daily_end, "0x106E")
         self.assertTrue(any(re.search(r"0x1050\s*\.\.\s*0x106E", line) for line in lines))
 
+    def test_decimal_id_scan_divergence(self):
+        """Proves the decimal scan is independent of the shared ``0x``
+        assumption: a synthetic decimal-only row is found by
+        scrape_decimal_ids yet missed by both the parser and
+        scrape_doc_ids, i.e. it would fail loudly as scraped-but-unparsed
+        instead of being missed by both. Control: zero decimal hits on all
+        four current HEX snapshots (only the "xEDE0" rescue escapes the
+        ``0x`` assumption, and it is explicitly allowlisted)."""
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), set())
+        synthetic = (
+            "0xEDD3     Battery foo               0.1         un16        V\n"
+            "60961      Future decimal register   0.1         un16        V\n"
+            "0 xEDF0    Spaced typo register      0.01        un16        A\n"
+        )
+        self.assertEqual(scrape_decimal_ids(synthetic), {60961, 0xEDF0})
+        parsed = BlueSolarHEXParser(synthetic).parse_registers()
+        self.assertNotIn(60961, parsed)
+        self.assertNotIn(0xEDF0, parsed)
+        self.assertNotIn(60961, scrape_doc_ids(synthetic))
+        self.assertNotIn(0xEDF0, scrape_doc_ids(synthetic))
+
     def test_multiline_scan_gap_divergence(self):
         """Proves the test-side multi-line scan is truly independent of the
         parser's tight 3-line window: a synthetic ``0xAAAA ...`` range
@@ -595,11 +723,47 @@ class TestSpecParsers(unittest.TestCase):
         when offline or otherwise unverifiable. Pinned EXPECTED_COUNTS
         alone would stay green against a new online revision; this gate
         closes that hole while staying green in offline environments
-        (network unreachable -> "unknown" -> skip)."""
+        (network unreachable -> "unknown" -> skip). The skip stays LOUD:
+        a visible warning names the unverifiable specs plus the last
+        online-verified manifest, so "green" is never mistaken for
+        "verified"."""
         status, detail = snapshot_freshness_status(self.specs_dir)
         if status == "unknown":
+            warnings.warn(
+                "spec freshness UNKNOWN (unverifiable, NOT verified fresh): "
+                f"{detail}; last-verified-online manifest: {FRESHNESS_MANIFEST}"
+            )
             self.skipTest(f"freshness unverifiable, skipping: {detail}")
         self.assertEqual(status, "fresh", f"online specs newer than snapshots: {detail}")
+
+    def test_snapshot_content_against_online(self):
+        """Second-stage content gate: header-only Last-Modified cannot see
+        a same-timestamp CDN re-upload, so when pdftotext AND network are
+        available the full-download verify_remote_content comparison runs
+        as well (DIFF -> FAIL). Offline or without pdftotext it SKIPs with
+        a clear reason; default runs stay fast (the header stage above
+        skips first when offline, so no download is even attempted)."""
+        if shutil.which("pdftotext") is None:
+            self.skipTest("content stage needs `pdftotext` in PATH; skipping")
+        results = verify_remote_content(self.specs_dir, timeout=30.0)
+        status, detail = content_gate_verdict(results)
+        if status == "unknown":
+            self.skipTest(f"remote content unverifiable, skipping: {detail}")
+        self.assertEqual(status, "fresh", f"remote content differs: {detail}")
+
+    def test_freshness_manifest_matches_snapshots(self):
+        """The checked-in last-verified manifest must track the snapshots'
+        own revision markers (offline check, no network): doc drift fails
+        here until re-verified online and refreshed via --sync."""
+        for key in fetch_specs.OFFICIAL_SPECS:
+            text = (self.specs_dir / f"{key}.txt").read_text(errors="ignore")
+            label, date = snapshot_revision_info(text)
+            entry = FRESHNESS_MANIFEST[key]
+            self.assertEqual(entry["label"], label, f"{key} manifest label drifted")
+            self.assertEqual(
+                entry["date"], date.isoformat() if date else None,
+                f"{key} manifest date drifted",
+            )
 
     def test_text_unknown_units_empty(self):
         """The snapshot's Units column vocabulary was enumerated directly
@@ -635,6 +799,31 @@ class TestSpecParsers(unittest.TestCase):
         # Control: known units never record.
         self.assertEqual(fields["V"].units, "mV")
 
+    def test_text_unknown_multiword_unit_recorded_loudly(self):
+        """Synthetic multi-word future unit: the old single-token shape
+        check let "kilo watt hours" leak into the description with
+        unknown_units==[]; the widened gate records the full pre-gap
+        candidate instead. Control: a long description leaking through an
+        accidental internal double space (> 32 chars) stays unrecorded —
+        the length cap keeps description sentences out of the unit sink."""
+        section = (
+            "The units used by the serial interface are as follows:\n"
+            "             KWz                 kilo watt hours          Some new quantity\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        parser = VEDirectTextParser(section)
+        fields = parser.parse_fields()
+        self.assertEqual(parser.unknown_units, [("KWz", "kilo watt hours")])
+        self.assertEqual(fields["KWz"].units, "")
+        long_desc = (
+            "The units used by the serial interface are as follows:\n"
+            "             LDz                 This is a very long description with  double spaces inside\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        parser2 = VEDirectTextParser(long_desc)
+        parser2.parse_fields()
+        self.assertEqual(parser2.unknown_units, [])
+
     def test_text_field_counter_gap_divergence(self):
         """Proves the independent counter is truly gap-permissive: a
         synthetic single-space label row is counted by
@@ -649,6 +838,53 @@ class TestSpecParsers(unittest.TestCase):
         )
         self.assertIn("QZ", count_doc_field_labels(section))
         self.assertNotIn("QZ", VEDirectTextParser(section).parse_fields())
+
+    def test_text_field_counter_stoplist_divergence(self):
+        """Proves the counter does not share the parser's exact stoplist: a
+        synthetic label colliding with a parser stoplist word ("Note") is
+        counted by count_doc_field_labels yet skipped by the parser, i.e.
+        it would fail loudly as a parser-vs-counter mismatch instead of
+        being missed by both."""
+        section = (
+            "The units used by the serial interface are as follows:\n"
+            "             V                   mV                       Main voltage\n"
+            "             Note                mV                       Some future note field\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        self.assertIn("Note", count_doc_field_labels(section))
+        self.assertNotIn("Note", VEDirectTextParser(section).parse_fields())
+
+    def test_text_device_bullet_overflow_fails_loudly(self):
+        """A bullet beyond the last known device column (synthetic 8th
+        column) must raise instead of silently merging into BuckBoost.
+        Control: a bullet under BuckBoost parses to BuckBoost."""
+        header_prev = " " * 80 + "MPPT"
+        header = (
+            " " * 50 + "60x" + " " * 7 + "70x" + " " * 5 + "SmartShunt"
+            + " " * 12 + "Inverter" + " " * 7 + "Charger" + " " * 6 + "BuckBoost"
+        )
+        last_start = header.find("BuckBoost")
+        self.assertGreater(last_start, 0)
+        row = "             V                   mV                       Main voltage"
+        # Control bullet inside the BuckBoost column.
+        ok_section = (
+            "The units used by the serial interface are as follows:\n"
+            f"{header_prev}\n{header}\n{row}{' ' * (last_start - len(row) + 2)}•\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        self.assertEqual(
+            VEDirectTextParser(ok_section).parse_fields()["V"].devices,
+            ["BuckBoost"],
+        )
+        # 8th-column bullet far right of every known column.
+        bad_row = row + " " * (last_start + 30 - len(row)) + "•"
+        bad_section = (
+            "The units used by the serial interface are as follows:\n"
+            f"{header_prev}\n{header}\n{bad_row}\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        with self.assertRaises(ValueError):
+            VEDirectTextParser(bad_section).parse_fields()
 
     def _continuation_section(self, indent: int) -> str:
         pad = " " * indent
@@ -721,6 +957,10 @@ class TestSpecParsers(unittest.TestCase):
         ]
         self.assertEqual(len(doc_pid_rows), EXPECTED_COUNTS["pids"])
         self.assertEqual(len(self.pids), EXPECTED_COUNTS["pids"])
+        # Set-equality, not just count-equality (the fields check above
+        # already does this — same pattern): a compensating miss+spurious
+        # pair keeps 153 == 153 green but breaks the set comparison.
+        self.assertEqual(set(self.pids), scrape_doc_pid_set(text))
 
         # All 16 "These models are phased out" *-marked rows (verified against
         # the snapshot PID table: 0x0300 + 6 MPPT + 9 Phoenix Inverter rows)
@@ -816,20 +1056,107 @@ class TestSpecParsers(unittest.TestCase):
         """parse_cs_states must cover the whole section incl. 11/245-248/252."""
         states = self.specs["text"].parse_cs_states()
         self.assertEqual(states, EXPECTED_CS)
+        # Independent doc-side counter (prefix-only strategy, no bullet-tail
+        # requirement): a bullet-less row missed by the parser still counts
+        # here, so parser-vs-counter set-equality fails loudly.
+        text = self.raw_texts["text"]
+        pos = text.find("The state of operation. See the table below")
+        tail = text[pos:]
+        m_end = re.search(r"^\s*ERR\s*$", tail, re.MULTILINE)
+        doc_states = scrape_doc_cs_codes(tail[: m_end.start()])
+        self.assertEqual(set(doc_states), set(states))
+        self.assertEqual(doc_states, states)
+
+    def test_cs_counter_bullet_gap_divergence(self):
+        """Proves the CS counter is truly tail-independent: a synthetic row
+        without trailing bullets is counted by scrape_doc_cs_codes yet
+        missed by the parser's ``\\s+(•|\\d)`` tail rule, i.e. it would fail
+        loudly as a counter-vs-parser mismatch instead of staying green."""
+        section = (
+            "The state of operation. See the table below\n"
+            "                        Off                                   0      •\n"
+            "                        Bulletless                            99\n"
+        )
+        self.assertIn(99, scrape_doc_cs_codes(section))
+        self.assertNotIn(99, VEDirectTextParser(section).parse_cs_states())
 
     def test_error_codes_full_coverage(self):
         """parse_errors must cover the whole section incl. 66/67/68/116/117/119."""
         errors = self.specs["text"].parse_errors()
         self.assertEqual(errors, EXPECTED_ERRORS)
+        # Independent doc-side counter (permissive-gap, EOL-anchored
+        # strategy): a single-space row missed by the parser's ``\\s{2,}``
+        # rule still counts here, so parser-vs-counter set-equality fails
+        # loudly.
+        text = self.raw_texts["text"]
+        pos = text.find("The error code of the device (relevant when the device is in the fault state)")
+        tail = text[pos:]
+        ends = [
+            m.start()
+            for pat in (r"^\s*HSDS\s*$", r"^Note1: Error 19")
+            for m in [re.search(pat, tail, re.MULTILINE)]
+            if m
+        ]
+        doc_errors = scrape_doc_error_codes(tail[: min(ends)])
+        self.assertEqual(set(doc_errors), set(errors))
+        self.assertEqual(doc_errors, errors)
+
+    def test_error_counter_single_space_divergence(self):
+        """Proves the error counter is truly gap-permissive: a synthetic
+        single-space row is counted by scrape_doc_error_codes yet missed by
+        the parser's ``\\s{2,}`` rule, i.e. it would fail loudly as a
+        counter-vs-parser mismatch instead of staying green."""
+        section = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        Single spaced 1\n"
+        )
+        self.assertIn(1, scrape_doc_error_codes(section))
+        self.assertNotIn(
+            1,
+            VEDirectTextParser(section).parse_errors(),
+        )
 
     def test_capabilities_against_doc(self):
         """Capability bits asserted against the doc maps (incl. Orion 28-31)."""
         self.assertEqual(self.specs["bluesolar"].parse_capabilities(), EXPECTED_CAPS_BS)
         self.assertEqual(self.specs["orion"].parse_capabilities(), EXPECTED_CAPS_ORION)
+        # Independent open-vocabulary scraper: names with ``+``/``:`` dropped
+        # by the parser's closed name class are still scraped here, so
+        # scraper-vs-parser set-equality fails loudly.
+        self.assertEqual(
+            scrape_doc_capability_bits(
+                self.raw_texts["bluesolar"], "Capabilities (register 0x0140)", 1500
+            ),
+            self.specs["bluesolar"].parse_capabilities(),
+        )
+        self.assertEqual(
+            scrape_doc_capability_bits(
+                self.raw_texts["orion"], "Capabilities1 (register 0x0140)", 1800
+            ),
+            self.specs["orion"].parse_capabilities(),
+        )
         # BlueSolar doc genuinely omits bits 22-24 (jumps 21 -> 25).
         self.assertNotIn(22, self.specs["bluesolar"].parse_capabilities())
         self.assertNotIn(23, self.specs["bluesolar"].parse_capabilities())
         self.assertNotIn(24, self.specs["bluesolar"].parse_capabilities())
+
+    def test_capability_scraper_open_vocabulary_divergence(self):
+        """Proves the capability scraper is truly open-vocabulary: a
+        synthetic ``+`` name is scraped by scrape_doc_capability_bits yet
+        dropped by the parser's closed name class, i.e. it would fail
+        loudly as a scraper-vs-parser mismatch instead of staying green."""
+        text = self.raw_texts["bluesolar"].replace(
+            "27        PAYGO support (0=no, 1=yes)",
+            "27        PAY+GO support (0=no, 1=yes)",
+        )
+        self.assertEqual(
+            scrape_doc_capability_bits(
+                text, "Capabilities (register 0x0140)", 1500
+            )[27],
+            "PAY+GO support",
+        )
+        self.assertNotIn(27, BlueSolarHEXParser(text).parse_capabilities())
 
     def test_phoenix_ble_header_typo(self):
         """The §2.2.5 'Capabilities BLE (register 0x0160)' heading is a doc
@@ -839,6 +1166,41 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(0x0160, self.ph_regs)
         self.assertIn(0x0150, self.ph_regs)
         self.assertEqual(self.ph_regs[0x0150].name, "VE_REG_CAPABILITIES_BLE")
+
+    def test_typo_evidence_preconditions_hold(self):
+        """Guards the typo allowlists: 0x0160 (Phoenix) and 0xEFF0
+        (BlueSolar/Orion) sit in NON_REGISTER_IDS on parser-evidence-only.
+        If Victron ever allocates either as a real register row, this fails
+        for re-triage instead of the reverse-coverage check passing on the
+        permanent denylist entry. Preconditions pinned against the
+        snapshots: 0x0160 occurs ONLY as the §2.2.5 section-header typo
+        (never a VE_REG_ table row), 0xEFF0 ONLY as the "(register 0xEFF0)"
+        prose typo for 0xEDF0 (never a table row)."""
+        phoenix = self.raw_texts["phoenix"]
+        headers = [
+            line for line in phoenix.splitlines()
+            if re.search(r"Capabilities BLE\s*\(register\s+0x0160\)", line)
+        ]
+        self.assertEqual(len(headers), 1, f"0x0160 header evidence changed: {headers}")
+        table_rows_0160 = [
+            line for line in phoenix.splitlines()
+            if re.match(r"^\s*0x0160\b", line)
+            or ("VE_REG_" in line and "0x0160" in line)
+        ]
+        self.assertEqual(table_rows_0160, [], f"0x0160 became a real table row: {table_rows_0160}")
+        for key in ("bluesolar", "orion"):
+            text = self.raw_texts[key]
+            self.assertTrue(
+                any("(register 0xEFF0)" in line for line in text.splitlines()),
+                f"{key}: (register 0xEFF0) prose typo evidence gone",
+            )
+            table_rows_eff0 = [
+                line for line in text.splitlines()
+                if re.match(r"^\s*0xEFF0\b", line)
+            ]
+            self.assertEqual(
+                table_rows_eff0, [], f"{key}: 0xEFF0 became a real table row: {table_rows_eff0}"
+            )
 
     def test_phoenix_hex_rev5_pids(self):
         """Phoenix-Inverter-HEX Rev 5 PIDs omitted from Text 3.34 must still decode."""
@@ -912,6 +1274,49 @@ class TestFetchSpecs(unittest.TestCase):
         )
         self.assertIsNone(label)
         self.assertEqual(date, datetime.date(2019, 9, 27))
+
+    def test_snapshot_revision_info_orion_initial_version_label(self):
+        """Orion-XS tail ("Changes: 16-06-2025 Initial version ...") must
+        yield a real label, not None: otherwise the label check is vacuous
+        and freshness is date-only."""
+        label, date = snapshot_revision_info(
+            "Doc\nChanges:\n\n16-06-2025\nInitial version derived from BlueSolar HEX protocol - rev 18.docx\n"
+        )
+        self.assertEqual(label, "Initial version 2025-06-16")
+        self.assertEqual(date, datetime.date(2025, 6, 16))
+        # Real snapshot agrees.
+        text = (Path(__file__).resolve().parent / "specs" / "Orion-XS-HEX-protocol.txt").read_text(errors="ignore")
+        self.assertEqual(
+            snapshot_revision_info(text),
+            ("Initial version 2025-06-16", datetime.date(2025, 6, 16)),
+        )
+
+    def test_snapshot_revision_info_month_first_format(self):
+        label, date = snapshot_revision_info(
+            "Doc\nRev 9\nRevision Log\nApril 14, 2025\nSome entry\n"
+        )
+        self.assertEqual(label, "Rev 9")
+        self.assertEqual(date, datetime.date(2025, 4, 14))
+
+    def test_snapshot_revision_info_ordinal_day_first_format(self):
+        label, date = snapshot_revision_info(
+            "Doc\nChanges:\n14th April 2025\nSome entry\n"
+        )
+        self.assertEqual(date, datetime.date(2025, 4, 14))
+
+    def test_snapshot_revision_info_ordinal_month_first_format(self):
+        label, date = snapshot_revision_info(
+            "Doc\nChanges:\nApril 2nd, 2023\nSome entry\n"
+        )
+        self.assertEqual(date, datetime.date(2023, 4, 2))
+
+    def test_snapshot_revision_info_unparseable_stays_unknown(self):
+        """Total date-mining failure must stay unknown (loud skip), never a
+        guessed date that could mask staleness."""
+        self.assertEqual(snapshot_revision_info("hello world"), (None, None))
+        self.assertEqual(
+            snapshot_revision_info("Doc\nChanges:\nsometime last spring\n"), (None, None)
+        )
 
     def test_snapshot_revision_info_no_markers(self):
         self.assertEqual(snapshot_revision_info("hello world"), (None, None))
@@ -1029,6 +1434,39 @@ class TestFetchSpecs(unittest.TestCase):
                 self.assertEqual(status, "stale")
                 self.assertIn("BlueSolar", detail)
 
+    def test_freshness_status_stale_wins_over_same_day_unknown(self):
+        """Regression for the first-failure short-circuit: an early
+        same-day ``unknown`` must not mask a later ``stale`` — all specs
+        are evaluated and the worst status wins."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            calls = {"n": 0}
+
+            def _fake(url, timeout=15.0):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    # First spec (BlueSolar): same-day -> unknown ...
+                    return datetime.datetime(2023, 2, 1, 18, 0, tzinfo=datetime.timezone.utc)
+                # ... but a later spec is outright stale.
+                return datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
+
+            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake):
+                status, detail = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "stale", detail)
+                self.assertEqual(calls["n"], len(fetch_specs.OFFICIAL_SPECS))
+                self.assertIn("same-day", detail)
+
+    def test_freshness_status_unknown_names_every_spec(self):
+        """When several specs are unverifiable, the detail names all of
+        them (loud skip), not just the first."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            with mock.patch.object(fetch_specs, "remote_last_modified", return_value=None):
+                status, detail = snapshot_freshness_status(Path(tmp))
+                self.assertEqual(status, "unknown")
+                for key in fetch_specs.OFFICIAL_SPECS:
+                    self.assertIn(key, detail)
+
     def test_freshness_status_same_day_is_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._write_dated_specs(Path(tmp))
@@ -1077,6 +1515,45 @@ class TestFetchSpecs(unittest.TestCase):
             ):
                 status, _ = snapshot_freshness_status(Path(tmp))
                 self.assertEqual(status, "unknown")
+
+    def test_freshness_manifest_matches_snapshots_offline(self):
+        """Manifest tested without network in TestSpecParsers; here the
+        --sync rewrite helper is covered as a pure function (offline)."""
+        source = (
+            "# FRESHNESS-MANIFEST-BEGIN\nFRESHNESS_MANIFEST = {\n}\n# FRESHNESS-MANIFEST-END\n"
+        )
+        manifest = {k: ("Rev 9", "2023-02-01") for k in fetch_specs.OFFICIAL_SPECS}
+        out = update_manifest_text(source, manifest, "2026-01-01")
+        for key in fetch_specs.OFFICIAL_SPECS:
+            self.assertIn(f'"{key}": {{"label": \'Rev 9\', "date": \'2023-02-01\'', out)
+        self.assertIn('"verified_on": \'2026-01-01\'', out)
+
+    def test_content_gate_verdict_fresh(self):
+        results = {k: True for k in fetch_specs.OFFICIAL_SPECS}
+        status, _ = content_gate_verdict(results)
+        self.assertEqual(status, "fresh")
+
+    def test_content_gate_verdict_diff_is_stale(self):
+        results = {k: True for k in fetch_specs.OFFICIAL_SPECS}
+        results["Orion-XS-HEX-protocol"] = False
+        status, detail = content_gate_verdict(results)
+        self.assertEqual(status, "stale")
+        self.assertIn("Orion-XS-HEX-protocol", detail)
+
+    def test_content_gate_verdict_all_unverifiable_is_unknown(self):
+        results = {k: None for k in fetch_specs.OFFICIAL_SPECS}
+        status, detail = content_gate_verdict(results)
+        self.assertEqual(status, "unknown")
+        self.assertIn("pdftotext", detail)
+
+    def test_content_gate_verdict_partial_unknown_is_unknown(self):
+        """Mixed match+unverifiable never passes on partial evidence: it
+        skips, naming the unverifiable specs."""
+        results = {k: True for k in fetch_specs.OFFICIAL_SPECS}
+        results["BMV-7xx-HEX-Protocol"] = None
+        status, detail = content_gate_verdict(results)
+        self.assertEqual(status, "unknown")
+        self.assertIn("BMV-7xx-HEX-Protocol", detail)
 
     def test_normalize_snapshot_text(self):
         self.assertEqual(

@@ -48,6 +48,11 @@ source) vs reverse-engineering. Code references are `file:line` (approx).
   standardized 4-byte `instance+pid+reserved` form; BMV Rev 7 and Phoenix Rev 5
   document 2-byte little-endian command responses.
   (`src/ve_direct/device.py:342-354`).
+  Orion doc-internal tension (no behavior change): Orion-XS-HEX §1.3 examples
+  answer `:451` with a 2-byte reply (`:1F0A3C1`), but the normative §1.1
+  product-id text says the 2-byte form "should be ignored" (incorrect
+  endianness on some builds). The code follows the normative text and rejects
+  2-byte replies for ORION; see the `get_product_id` docstring reasoning.
 - App-version 2-byte (top 2 bits fw type, minor hex digits) vs Orion 24-bit:
   BlueSolar-HEX §1 + Orion-XS-HEX §1 Note 1
   (`src/ve_direct/hex.py:54-73`, `decode_app_version`).
@@ -117,7 +122,12 @@ Fully and independently parsed and validated directly from official Victron spec
   neither the Phoenix Rev 5 snapshot nor any other snapshot; both were
   removed as phantom registers.)
 - Generic device control (§2.4): `0x0090` (BLE mode), `0xEC41` (settings changed) — shared `ANY` entries
-- Relay (§2.8): `0x034E` (relay control, shared `ANY`), `0x034F` (`INV_RELAY_MODE` override, values 0,2,3,4,5,6 — no 1)
+- Relay (§2.8): `0x034E` (relay control, shared `ANY`), `0x034F` (`INV_RELAY_MODE` override, values 0,2,3,4,5,6 — no 1).
+  No generic MPPT `0x034F` exists: the BlueSolar-HEX relay section documents
+  only `0xEDD9`/`0x0350-0x0353`/`0xEDBA`/`0xEDB9`/`0x100A` (verified by ID
+  search — no `0x034F` in the BlueSolar, Orion-XS, or Text snapshots), so the
+  former MPPT-scoped generic entry was removed following the `0x0209`/`0x020A`
+  phantom-removal precedent; only the INV/BMV overrides remain.
 - Product-info extra: `0xEDEF` (battery voltage, `INV`-read-only alias of the CHG `BAT_VOLTAGE`);
   operation (§2.5): `0xED8D` (DC channel 1 / battery voltage, shared `BMV`/`INV`/`MPPT_RS`)
 - AC output: `0x2200` (AC voltage), `0x2201` (AC current), `0x2202` (AC nominal voltage), `0x2203` (rated power),
@@ -163,7 +173,7 @@ Fully and independently parsed and validated directly from official Victron spec
 Header quote (`ve_reg_register.h`): "`UNKNOWN_` ... based off reverse
 engineering field observations" / "`U_` prefix ... data meaning is inferred
 ... but still there's no official docs". All `MULTI_RS` flavor
-(`src/ve_direct/registers/__init__.py:258-271`):
+(`src/ve_direct/registers/__init__.py:263-276`):
 
 | Name | ID |
 |---|---|
@@ -309,8 +319,14 @@ The following items from the independent audit and official specifications have 
 - `CLEAR_HISTORY 0x1030` and VE.Smart networking registers `0x2000..0x2015` are accessible under the `ORION` flavor.
 - Serial: `from_port()` configures `dtr=True, rts=False` for VE.Direct cable power.
 - Device: `device.boot()` wrapper sends `:0<51FA*5>`.
-- Product ID: 2-byte command replies are accepted only for BMV/BMV71/Phoenix;
-  MPPT/Orion require the standardized 4-byte representation.
+- Product ID: 2-byte command replies are accepted for BMV/BMV71/INV and for
+  MPPT (legacy pre-1.30 path: BlueSolar-HEX §1.1 Note 1 says product info is
+  2-byte since fw 1.12 and 4-byte only since fw 1.30, and §1.3 shows 2-byte
+  Done replies, so pre-1.30 MPPTs can never return the 4-byte form);
+  ORION/MULTI_RS/MPPT_RS require the standardized 4-byte representation
+  (Orion-XS §1.1 carries the same "should be ignored" note for the 2-byte
+  form). Unflavored 2-byte replies are rejected as unsafe without a flavor
+  (`src/ve_direct/device.py:get_product_id`).
 - Firmware Version: 24-bit Orion firmware version is decoded via `decode_app_version_24` and register `0x0102`.
 - Phoenix-Inverter-HEX Rev 5 and BMV-7xx-HEX Rev 7 are independently parsed and 100% verified via `tools/spec_parser.py` and `tests/test_spec_parsers.py`.
 - Shared-wire parsing is byte-state based and tested for bytewise reads,

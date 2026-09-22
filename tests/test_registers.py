@@ -137,11 +137,18 @@ class TestRegisters(unittest.TestCase):
         # Raw ints pass through unwidened, like every other ENUM register;
         # decoding them back surfaces unknown(n) instead of a wrong name.
         # Named lookup with flavor resolves to the BMV override as well.
-        self.assertEqual(R.lookup("RELAY_MODE", flavor="BMV").name, "BMV_RELAY_MODE")
-        # MPPT keeps the shared superset map (unchanged).
-        mppt = R.lookup(0x034F, flavor="MPPT")
-        self.assertEqual(mppt.name, "RELAY_MODE")
-        self.assertEqual(R.decode_value(mppt, b"\x00"), "warnings")
+        self.assertEqual(R.lookup("BMV_RELAY_MODE", flavor="BMV").name, "BMV_RELAY_MODE")
+        self.assertEqual(R.lookup(0x034F, flavor="BMV").name, "BMV_RELAY_MODE")
+        # No generic MPPT 0x034F: no official doc gives 0x034F to MPPT
+        # (BlueSolar-HEX relay § lists only 0xEDD9/0x0350-0x0353/0xEDBA/
+        # 0xEDB9/0x100A; 0x034F is Phoenix Rev 5 §2.8.1 + BMV Rev 7).
+        with self.assertRaises(KeyError):
+            R.lookup(0x034F, flavor="MPPT")
+        self.assertNotIn("RELAY_MODE", R.for_flavor("MPPT"))
+        self.assertNotIn("RELAY_MODE", R.REGISTERS)
+        # INV/BMV overrides survive independently.
+        self.assertEqual(R.lookup(0x034F, flavor="INV").name, "INV_RELAY_MODE")
+        self.assertIn("INV_RELAY_MODE", R.for_flavor("INV"))
 
     def test_inv_relay_mode_no_value_1(self):
         inv = R.lookup(0x034F, flavor="INV")
@@ -373,6 +380,94 @@ class TestRegisters(unittest.TestCase):
                 raw = _s.pack("<H", 17400)
                 self.assertAlmostEqual(R.decode_value(reg, raw), 174.0)
                 self.assertEqual(R.encode_value(reg, 174.0), raw)
+
+    # --- cycle-5 issue 1: shared 0x0201 state 255 is UNAVAILABLE ---
+    def test_device_state_255_unavailable(self):
+        # BlueSolar-HEX §1.1 Device-state-values + Orion-XS-HEX
+        # Device-state-values both list 255 as UNAVAILABLE (LINK 0x200C
+        # agrees); no snapshot defines 0x0201=255 differently.
+        self.assertEqual(R.DEVICE_STATE_MAP[0xFF], "unavailable")
+        self.assertEqual(
+            R.decode_value(R.lookup("DEVICE_STATE"), bytes([255])),
+            "unavailable")
+        self.assertEqual(
+            R.decode_value(R.lookup(0x0201, flavor="MPPT"), bytes([255])),
+            "unavailable")
+        # Family overrides resolve independently.
+        self.assertEqual(
+            R.decode_value(R.lookup(0x0201, flavor="ORION"), bytes([255])),
+            "unavailable")
+        self.assertEqual(R.DEVICE_STATE_ORION_MAP[255], "unavailable")
+        self.assertEqual(R.LINK_DEVICE_STATE_MAP[255], "unavailable")
+        # Phoenix Rev 5 §2.3.1 defines only 0,1,2,9: 255 stays unknown there.
+        self.assertEqual(
+            R.decode_value(R.lookup(0x0201, flavor="INV"), bytes([255])),
+            "unknown(255)")
+
+    # --- cycle-5 issue 2: BAT_VOLTAGE 0xEDEF raw 0 is Auto ---
+    def test_bat_voltage_zero_auto(self):
+        # BlueSolar-HEX Battery-voltage-setting values table covers
+        # registers 0xEDEF and 0xEDEA: 0 = Auto detection at startup.
+        # NUMERIC has no human-string channel (decode returns float), so
+        # the documented special value follows the _NONE_SENTINELS
+        # convention (cf. BMV 0=disabled): decode 0 -> None.
+        reg = R.lookup("BAT_VOLTAGE")
+        self.assertIsNone(R.decode_value(reg, b"\x00"))
+        self.assertEqual(R.encode_value(reg, None), b"\x00")
+        self.assertIsNone(R.decode_value(reg, R.encode_value(reg, None)))
+        # Nonzero behavior unchanged.
+        self.assertAlmostEqual(R.decode_value(reg, b"\x0c"), 12.0)
+        self.assertAlmostEqual(R.decode_value(reg, b"\x18"), 24.0)
+        self.assertEqual(R.encode_value(reg, 12), b"\x0c")
+        self.assertEqual(R.encode_value(reg, 24), b"\x18")
+        # Sibling ENUM still decodes 0 as auto_detect.
+        self.assertEqual(
+            R.decode_value(R.lookup("BAT_VOLTAGE_SETTING"), b"\x00"),
+            "auto_detect")
+
+    # --- cycle-5 issue 4: pluggable-display 0x0401-0x0404 enums ---
+    def test_display_pluggable_enums(self):
+        # BlueSolar-HEX Pluggable display settings (same values in the
+        # MPPT RS Internal display table for 0x0401/0x0402/0x0404).
+        cases = {
+            "DISPLAY_BACKLIGHT_INTENSITY": ({0: "off", 1: "on"}, "off", "on"),
+            "DISPLAY_SCROLL_SPEED": ({1: "slow", 5: "fast"}, "slow", "fast"),
+            "DISPLAY_SETUP_LOCK": ({0: "unlocked", 1: "locked"}, "unlocked", "locked"),
+            "DISPLAY_TEMPERATURE_UNIT": ({0: "celsius", 1: "fahrenheit"}, "celsius", "fahrenheit"),
+        }
+        for name, (mapping, first, last) in cases.items():
+            with self.subTest(name=name):
+                reg = R.lookup(name)
+                self.assertEqual(reg.cls, "ENUM")
+                self.assertEqual(reg.dtype, "uint8_t")
+                for raw, label in mapping.items():
+                    self.assertEqual(
+                        R.decode_value(reg, bytes([raw])), label)
+                    self.assertEqual(R.encode_value(reg, label), bytes([raw]))
+                    # Round-trip through the wire value.
+                    self.assertEqual(
+                        R.decode_value(reg, R.encode_value(reg, label)), label)
+        # Only the documented endpoints are named on 0x0402.
+        reg = R.lookup("DISPLAY_SCROLL_SPEED")
+        self.assertEqual(R.decode_value(reg, b"\x03"), "unknown(3)")
+        with self.assertRaises(ValueError):
+            R.encode_value(reg, "medium")
+        # Flavors unchanged (liberal ANY); MPPT flavor resolves by ID.
+        self.assertIn("ANY", R.lookup("DISPLAY_BACKLIGHT_INTENSITY").flavors)
+        self.assertEqual(
+            R.lookup(0x0401, flavor="MPPT").name, "DISPLAY_BACKLIGHT_INTENSITY")
+
+    # --- cycle-5 issue 5: MPPT off-reason bit 4 is Internal reason ---
+    def test_mppt_off_reason_internal_reason(self):
+        # BlueSolar-HEX §1.1 Device-off-reason table: Bit 4 Internal reason
+        # (ORION/INV maps already use "internal_reason").
+        self.assertEqual(R.OFF_REASON_MPPT_BITS[4], "internal_reason")
+        reg = R.lookup("DEVICE_OFF_REASON_2", flavor="MPPT")
+        self.assertEqual(
+            R.decode_value(reg, b"\x10\x00\x00\x00"), ["internal_reason"])
+        self.assertEqual(
+            R.encode_value(reg, ["internal_reason"]),
+            b"\x10\x00\x00\x00")
 
     # --- cycle-4 issue 1: shared 0x0201 state 0 is NOT_CHARGING ---
     def test_device_state_0_not_charging(self):

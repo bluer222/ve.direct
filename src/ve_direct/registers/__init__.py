@@ -31,7 +31,8 @@ hex_get_raw()/hex_set_raw() are always unambiguous (raw bytes).
 Flavor-specific enum overrides share the wire ID with the generic entry
 but carry the family-documented value names: 0x0200/0x0201 (generic vs
 Orion vs Phoenix DEVICE_MODE/DEVICE_STATE), 0x031C/0x031E (generic vs
-Phoenix WARNING_REASON), 0x034F (MPPT vs BMV vs Phoenix RELAY_MODE).
+Phoenix WARNING_REASON), 0x034F (BMV vs Phoenix RELAY_MODE — no generic
+entry: no official doc gives 0x034F to MPPT, see note at removal site).
 A flavor-qualified lookup (or hex_get/hex_set on a flavored device)
 selects the override; unflavored lookup(int) on these IDs raises
 AmbiguousRegisterError.
@@ -62,8 +63,9 @@ Sentinels decoded as None (encode None back to sentinel):
   SETTINGS_CHANGED_TIMESTAMP 0xEC41 0xFFFFFFFF (=Invalid/no settings ever
   modified, BMV Rev 7 p8),
   BMV alarm/relay temperature 0x032A-0x032D/0x035A-0x035D 0x0000
-  (=disabled, valid 174..372 K), history/cycle 0xFF/0xFFFF/
-  0xFFFFFFFF per-field.
+  (=disabled, valid 174..372 K), BAT_VOLTAGE 0xEDEF 0x00 (=Auto, shared
+  Battery-voltage-setting values table with 0xEDEA), history/cycle 0xFF/
+  0xFFFF/0xFFFFFFFF per-field.
 """
 from __future__ import annotations
 from ..tables import MON_MAP
@@ -146,9 +148,12 @@ for _reg in [
     # Un8 0..1 (OFF,ON)/(OPEN,CLSD) in the docs; BOOLEAN is intentional:
     # Python bool == 0/1, so wire values round-trip and truthiness is kept.
     _r("RELAY_CONTROL", 0x034E, "BOOLEAN", "READ_WRITE"),
-    # MPPT shares the Phoenix-family RELAY_MODE superset map (BlueSolar-HEX
-    # documents no 0x034F of its own); BMV and INV use flavor overrides below.
-    _r("RELAY_MODE", 0x034F, "ENUM", "READ_WRITE", flavors=("MPPT",), enum="RELAY_MODE"),
+    # NOTE: no generic 0x034F here (phantom-removal precedent, cf. 0x0209/
+    # 0x020A). BlueSolar-HEX Relay settings documents only 0xEDD9/0x0350-
+    # 0x0353/0xEDBA/0xEDB9/0x100A (verified by ID search: no 0x034F in the
+    # BlueSolar, Orion-XS, or Text snapshots); 0x034F is Phoenix Rev 5
+    # §2.8.1 (values 0,2,3,4,5,6, no 1) and BMV Rev 7 (0..2), kept as the
+    # INV/BMV overrides below.
     _r("RESTORE_DEFAULTS", 0x0004, "VOID", "WRITE_ONLY", flavors=("ANY",)),
     _r("DC_CHANNEL1_VOLTAGE", 0xED8D, "NUMERIC", "READ_ONLY", "int16_t", "V", 0.01, ("BMV", "INV", "MPPT_RS")),
     _r("DC_CHANNEL1_CURRENT", 0xED8F, "NUMERIC", "READ_ONLY", "int16_t", "A", 0.1, ("BMV", "MPPT_RS")),
@@ -307,10 +312,16 @@ for _reg in [
     _r("RELAY_PANEL_HIGH_CLEAR", 0xEDB9, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
     _r("RELAY_MIN_ENABLED_TIME", 0x100A, "NUMERIC", "READ_WRITE", "uint16_t", "min", 1.0, ("ANY",)),
     _r("DISPLAY_BACKLIGHT_MODE", 0x0400, "ENUM", "READ_WRITE", flavors=("MPPT", "MPPT_RS"), enum="DISPLAY_BACKLIGHT_MODE"),
-    _r("DISPLAY_BACKLIGHT_INTENSITY", 0x0401, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("ANY",)),
-    _r("DISPLAY_SCROLL_SPEED", 0x0402, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("ANY",)),
-    _r("DISPLAY_SETUP_LOCK", 0x0403, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("ANY",)),
-    _r("DISPLAY_TEMPERATURE_UNIT", 0x0404, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("ANY",)),
+    # Pluggable-display discrete values (BlueSolar-HEX Pluggable display
+    # settings; same values in the MPPT RS Internal display table for
+    # 0x0401/0x0402/0x0404): 0x0401 0=always off/1=on, 0x0402 1=slow/5=fast
+    # (2..4 decode unknown), 0x0403 0=unlocked/1=locked, 0x0404 0=Celsius/
+    # 1=Fahrenheit. ENUM like siblings 0x0400/0x0408; flavors stay ANY per
+    # the liberal-flavoring policy (LCD-models-only provenance in SOURCES).
+    _r("DISPLAY_BACKLIGHT_INTENSITY", 0x0401, "ENUM", "READ_WRITE", flavors=("ANY",), enum="DISPLAY_BACKLIGHT_INTENSITY"),
+    _r("DISPLAY_SCROLL_SPEED", 0x0402, "ENUM", "READ_WRITE", flavors=("ANY",), enum="DISPLAY_SCROLL_SPEED"),
+    _r("DISPLAY_SETUP_LOCK", 0x0403, "ENUM", "READ_WRITE", flavors=("ANY",), enum="DISPLAY_SETUP_LOCK"),
+    _r("DISPLAY_TEMPERATURE_UNIT", 0x0404, "ENUM", "READ_WRITE", flavors=("ANY",), enum="DISPLAY_TEMPERATURE_UNIT"),
     _r("DISPLAY_CONTRAST", 0x0406, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("MPPT_RS",)),
     _r("DISPLAY_BACKLIGHT_MODE_RS", 0x0408, "ENUM", "READ_WRITE", flavors=("MPPT_RS",), enum="DISPLAY_BACKLIGHT_MODE_RS"),
     # --- history (BlueSolar MPPT; STRUCT payloads, see decode helpers) ---
@@ -569,7 +580,10 @@ DEVICE_STATE_MAP = {0: "not_charging", 1: "low_power", 2: "fault", 3: "bulk", 4:
                     9: "inverting", 0x0A: "assisting", 0x0B: "power_supply",
                     0xF4: "sustain", 0xF5: "wake_up", 0xF6: "repeated_absorption",
                     0xF7: "auto_equalize", 0xF8: "battery_safe", 250: "blocked", 0xFC: "external_control",
-                    0xFF: "unknown"}
+                    # 255 is UNAVAILABLE per BlueSolar-HEX §1.1 Device-state-values
+                    # and Orion-XS-HEX Device-state-values (LINK 0x200C agrees;
+                    # Phoenix Rev 5 §2.3.1 defines only 0,1,2,9 so no conflict).
+                    0xFF: "unavailable"}
 # 0x200C LINK map: 250 BLOCKED exists only in the 0x0201 tables — both the
 # BlueSolar-HEX and Orion-XS-HEX Link-device-state (0x200C) tables list
 # 0,2,3,4,5,6,7,11,245,246,247,248,249,252,255 with no 250, so 250 decodes
@@ -581,6 +595,9 @@ LINK_DEVICE_STATE_MAP = {0: "not_charging", 2: "fault", 3: "bulk", 4: "absorptio
                          252: "external_control", 255: "unavailable"}
 MPPT_TRACKER_MODE_MAP = {0: "off", 1: "v_i_limited", 2: "mppt"}
 RELAY_MODE_MAP = {0: "warnings", 1: "charger", 2: "remote", 3: "disabled", 4: "normal", 5: "battery_low", 6: "fan"}
+# Retained for back-compat (ENUM_MAPS["RELAY_MODE"]): no register binds it
+# since the generic MPPT 0x034F entry was removed (see note above); the
+# INV/BMV overrides use RELAY_MODE_INV/RELAY_MODE_BMV.
 # BMV-7xx-HEX Rev 7 Relay settings: Un8 0..2 (DFLT, CHRG, REM). Separate map
 # so BMV value 0 decodes as documented ("default") instead of the
 # Phoenix-family "warnings", and values 3..6 are rejected on encode.
@@ -657,7 +674,7 @@ WARNING_REASON_INV_BITS = {0: "low_battery_voltage", 1: "high_battery_voltage",
                            10: "low_ac_out_voltage", 11: "high_ac_out_voltage"}
 OFF_REASON_MPPT_BITS = {
     0: "no_input_power", 1: "physical_power_switch", 2: "soft_power_switch",
-    3: "remote_input", 4: "internal_alarm", 5: "paygo", 6: "bms_shutdown",
+    3: "remote_input", 4: "internal_reason", 5: "paygo", 6: "bms_shutdown",
     # BlueSolar-HEX §1.1: bits 7..8 Reserved, bit 9 Battery temperature too
     # low. (No bit 7 "engine" — that name belongs to the Orion map below.)
     9: "battery_temperature",
@@ -715,6 +732,14 @@ RX_PORT_MODE_MAP = {0: "remote_on_off", 1: "load_config", 2: "load_on_off_invert
                     3: "load_on_off"}
 DISPLAY_BACKLIGHT_MODE_MAP = {0: "keypress", 1: "on", 2: "auto"}
 DISPLAY_BACKLIGHT_MODE_RS_MAP = {0: "off", 1: "on", 2: "auto"}
+# Pluggable-display discrete values (BlueSolar-HEX Pluggable display
+# settings): 0x0401 0 always off / 1 on; 0x0402 1 slow / 5 fast (only the
+# documented endpoints are named); 0x0403 0 unlocked / 1 locked; 0x0404
+# 0 Celsius / 1 Fahrenheit (same names as BMV_TEMPERATURE_UNIT).
+DISPLAY_BACKLIGHT_INTENSITY_MAP = {0: "off", 1: "on"}
+DISPLAY_SCROLL_SPEED_MAP = {1: "slow", 5: "fast"}
+DISPLAY_SETUP_LOCK_MAP = {0: "unlocked", 1: "locked"}
+DISPLAY_TEMPERATURE_UNIT_MAP = {0: "celsius", 1: "fahrenheit"}
 REMOTE_COMMAND_MAP = {1: "start_equalise", 2: "stop_equalise", 3: "sync_ui", 4: "sync_day"}
 NETWORK_INFO_MAP = {0: "bms_controlled", 1: "vset_remote", 2: "charge_slave",
                     3: "charge_master", 4: "using_icharge", 5: "using_isense",
@@ -778,6 +803,10 @@ ENUM_MAPS: dict[str, dict[int, str]] = {
     "RX_PORT_MODE": RX_PORT_MODE_MAP,
     "DISPLAY_BACKLIGHT_MODE": DISPLAY_BACKLIGHT_MODE_MAP,
     "DISPLAY_BACKLIGHT_MODE_RS": DISPLAY_BACKLIGHT_MODE_RS_MAP,
+    "DISPLAY_BACKLIGHT_INTENSITY": DISPLAY_BACKLIGHT_INTENSITY_MAP,
+    "DISPLAY_SCROLL_SPEED": DISPLAY_SCROLL_SPEED_MAP,
+    "DISPLAY_SETUP_LOCK": DISPLAY_SETUP_LOCK_MAP,
+    "DISPLAY_TEMPERATURE_UNIT": DISPLAY_TEMPERATURE_UNIT_MAP,
     "REMOTE_COMMAND": REMOTE_COMMAND_MAP,
     "NETWORK_INFO": NETWORK_INFO_MAP,
     "NETWORK_MODE": NETWORK_MODE_MAP,
@@ -793,6 +822,16 @@ _DTYPE_STRUCT: dict[str, str] = {
 _NONE_SENTINELS: dict[int, set[int]] = {
     0xEDEC: {0xFFFF},
     0xEDE6: {0xFFFF},  # LOW_TEMP_CHARGE_CURRENT: 0xFFFF = use maximum charge current
+    # BAT_VOLTAGE 0xEDEF: 0 = Auto per the BlueSolar-HEX Battery-voltage-
+    # setting values table (registers 0xEDEF and 0xEDEA). NUMERIC has no
+    # human-string channel (decode returns float), so the documented special
+    # value follows the _NONE_SENTINELS convention (cf. BMV 0=disabled):
+    # decode 0 -> None, encode None -> 0; nonzero behavior unchanged.
+    # Readback normally returns the operational voltage (Note 1), and the
+    # Orion-XS-HEX table lists 12/24/48 only (Orion never reports 0) — the
+    # shared-ID INV_BAT_VOLTAGE alias decodes 0 as None too (0 V is
+    # non-physical there).
+    0xEDEF: {0},
     0x2031: {0xFFFF},
     0x2002: {0xFFFF},
     0x2003: {0x7FFF},
