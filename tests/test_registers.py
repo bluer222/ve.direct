@@ -80,7 +80,8 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(m[114], "cpu_temperature_high")
         self.assertGreater(len(m), 50)
         self.assertEqual(R.DEVICE_STATE_MAP[250], "blocked")
-        self.assertEqual(R.LINK_DEVICE_STATE_MAP[250], "blocked")
+        self.assertNotIn(250, R.LINK_DEVICE_STATE_MAP)
+        self.assertEqual(R.DEVICE_STATE_MAP[0xF5], "wake_up")
         self.assertEqual(R.RELAY_MODE_MAP[1], "charger")
 
     def test_bmv71_flavor(self):
@@ -164,7 +165,7 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.decode_value(st, b"\x03"), "bulk")
         # Generic map is unchanged for other families.
         self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), b"\x00"), "off")
-        self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), bytes([245])), "starting_up")
+        self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), bytes([245])), "wake_up")
 
     def test_orion_device_mode_override(self):
         mo = R.lookup(0x0200, flavor="ORION")
@@ -279,6 +280,50 @@ class TestRegisters(unittest.TestCase):
 
     def test_bmv_temperature_coefficient_unit(self):
         self.assertEqual(R.lookup("BMV_TEMPERATURE_COEFFICIENT").unit, "%CAP/degC")
+
+    # --- ADJUSTABLE_VOLTAGE_MIN/MAX visible under MPPT (BlueSolar-HEX §1.1
+    # Charger-data Note 6: fw 1.30, no RS-only marker) ---
+    def test_adjustable_voltage_mppt_flavor(self):
+        for name in ("ADJUSTABLE_VOLTAGE_MIN", "ADJUSTABLE_VOLTAGE_MAX"):
+            reg = R.lookup(name)
+            self.assertIn("MPPT", reg.flavors)
+            self.assertIn("MPPT_RS", reg.flavors)
+        mppt = R.for_flavor("MPPT")
+        self.assertIn("ADJUSTABLE_VOLTAGE_MIN", mppt)
+        self.assertIn("ADJUSTABLE_VOLTAGE_MAX", mppt)
+        self.assertIn("ADJUSTABLE_VOLTAGE_MIN", R.for_flavor("MPPT_RS"))
+        self.assertEqual(R.lookup(0x2211, flavor="MPPT").name, "ADJUSTABLE_VOLTAGE_MIN")
+        self.assertEqual(R.lookup(0x2211, flavor="INV").name, "VOLTAGE_RANGE_MIN")
+
+    # --- shared 0x0201 state 245 is WAKE-UP; INV override unaffected ---
+    def test_device_state_245_wake_up(self):
+        self.assertEqual(R.DEVICE_STATE_MAP[0xF5], "wake_up")
+        self.assertEqual(
+            R.decode_value(R.lookup("DEVICE_STATE"), bytes([245])), "wake_up")
+        # Orion override agrees; Phoenix defines only 0,1,2,9 so 245 stays unknown.
+        self.assertEqual(
+            R.decode_value(R.lookup(0x0201, flavor="ORION"), bytes([245])), "wake_up")
+        self.assertEqual(
+            R.decode_value(R.lookup(0x0201, flavor="INV"), bytes([245])), "unknown(245)")
+
+    # --- 0x200C LINK map has no 250 (absent from both 0x200C tables) ---
+    def test_link_device_state_no_250(self):
+        self.assertNotIn(250, R.LINK_DEVICE_STATE_MAP)
+        link = R.lookup("LINK_DEVICE_STATE")
+        self.assertEqual(R.decode_value(link, bytes([250])), "unknown(250)")
+        # 250 BLOCKED survives only in the 0x0201 maps.
+        self.assertEqual(R.DEVICE_STATE_MAP[250], "blocked")
+        self.assertEqual(R.DEVICE_STATE_ORION_MAP[250], "blocked")
+
+    # --- BAT_TYPE small-charger limitation (no small-charger flavor) ---
+    def test_bat_type_small_charger_limitation(self):
+        # Helper decodes small models correctly...
+        self.assertEqual(R.decode_bat_type(1, "small"), "type_2")
+        self.assertEqual(R.decode_bat_type(1, "large"), "type_1")
+        # ...but the generic register binds the large table, so value 1 on a
+        # 10/15/20A model reads type_1 via hex_get (documented limitation).
+        self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\x01"), "type_1")
+        self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\xFF"), "user")
 
 
 if __name__ == "__main__":

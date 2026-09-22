@@ -256,14 +256,16 @@ class TestDevice(unittest.TestCase):
             dev6 = AsyncVEDirect(sim6.read_chunk, sim6.write, flavor="ORION")
             info6 = await dev6.get_app_version_info(timeout=2)
             self.assertEqual(info6["version"], "1.02")
-            # Non-Orion fallback: :3 answers Unknown -> Get 0x0102.
+            # Non-Orion has no 0x0102 (BlueSolar §1.1 lists only
+            # 0x0100/0x0104/0x010A/0x010B/0x0140): :3 Unknown propagates
+            # as RegisterError with no undocumented 0x0102 fallback.
             sim6b = SimulatedTransport(
                 text_chunks=[], flavor="ORION",
                 hex_replies={0x0102: bytes.fromhex("FF0201")})
             dev6b = AsyncVEDirect(sim6b.read_chunk, sim6b.write,
-                                  flavor="MPPT")
-            info6b = await dev6b.get_app_version_info(timeout=2)
-            self.assertEqual(info6b["version"], "1.02")
+                                   flavor="MPPT")
+            with self.assertRaises(RegisterError):
+                await dev6b.get_app_version_info(timeout=2)
             # Error :4AAAA framing-error routing into _handle_hex.
             from ve_direct.exceptions import ChecksumError
             fut2 = loop.create_future()
@@ -487,6 +489,88 @@ class TestDevice(unittest.TestCase):
             info = await dev.get_app_version_info()
             self.assertEqual(info["version"], "1.02")
             self.assertEqual(info["type"], "release")
+        run(go())
+
+    def test_non_orion_app_version_unknown_propagates(self):
+        """Non-Orion :3 Unknown must not fall back to 0x0102 (BlueSolar §1.1)."""
+        import asyncio as _aio
+        from ve_direct import hex as _H
+        from ve_direct.exceptions import RegisterError
+
+        async def go():
+            for flavor in ("MPPT", None):
+                dev = AsyncVEDirect(
+                    lambda n: _aio.sleep(10), lambda d: None, flavor=flavor)
+                loop = _aio.get_running_loop()
+                fut = loop.create_future()
+                fut.set_exception(RegisterError("device reports Unknown"))
+                dev.get_app_version = lambda timeout=2.0, _f=fut: _f
+                called = []
+                orig = dev.hex_get_raw
+                async def fail_get(rid, timeout=2.0):
+                    called.append(rid)
+                    raise AssertionError("0x0102 fallback must not run")
+                dev.hex_get_raw = fail_get
+                with self.assertRaises(RegisterError):
+                    await dev.get_app_version_info(timeout=0.1)
+                self.assertEqual(called, [])
+                dev.hex_get_raw = orig
+        run(go())
+
+    def test_sim_boot_failure_reply(self):
+        """boot_fails=True emits documented :40051 (Error payload 0x00)."""
+        from ve_direct import hex as _H
+
+        async def go():
+            # Success default: silence.
+            sim = SimulatedTransport(text_chunks=[], flavor="MPPT")
+            await sim.write(_H.build_boot())
+            self.assertEqual(bytes(sim._pending_out), b"")
+            # Failure opt-in: :4 payload 0x00.
+            sim2 = SimulatedTransport(
+                text_chunks=[], flavor="MPPT", boot_fails=True)
+            await sim2.write(_H.build_boot())
+            self.assertEqual(bytes(sim2._pending_out), b":40051\n")
+            f = _H.decode_line(bytes(sim2._pending_out))
+            self.assertEqual(f.cmd, _H.CMD_ERROR)
+            self.assertEqual(bytes(f.data), b"\x00")
+        run(go())
+
+    def test_truncated_async_rejected(self):
+        """Truncated :A (id only, no flags/value) raises RegisterError."""
+        from ve_direct import hex as _H
+        from ve_direct.exceptions import RegisterError
+        dev, _ = self._dev()
+        for payload in (bytes.fromhex("0102"), bytes.fromhex("01")):
+            frame = _H.decode_line(_H.encode_frame(_H.CMD_ASYNC, payload))
+            with self.assertRaises(RegisterError, msg=payload.hex()):
+                dev.decode_async_frame(frame, flavor="MPPT")
+
+    def test_product_id_rs_rejects_two_byte(self):
+        """MPPT_RS/ORION 2-byte PID rejected (BlueSolar §1.1: ignore)."""
+        import asyncio as _aio
+        from ve_direct import hex as _H
+        from ve_direct.exceptions import RegisterError
+
+        async def go():
+            loop = _aio.get_running_loop()
+            for flavor in ("MPPT_RS", "MULTI_RS", "ORION"):
+                dev = AsyncVEDirect(
+                    lambda n: _aio.sleep(10), lambda d: None, flavor=flavor)
+                fut = loop.create_future()
+                fut.set_result(_H.decode_line(
+                    _H.encode_frame(_H.CMD_DONE, bytes.fromhex("42A0"))))
+                dev._command_transact = lambda cmd, expected, t: fut
+                with self.assertRaises(RegisterError, msg=flavor):
+                    await dev.get_product_id(timeout=0.1)
+            # MPPT 2-byte legacy still accepted.
+            dev = AsyncVEDirect(
+                lambda n: _aio.sleep(10), lambda d: None, flavor="MPPT")
+            fut = loop.create_future()
+            fut.set_result(_H.decode_line(
+                _H.encode_frame(_H.CMD_DONE, bytes.fromhex("42A0"))))
+            dev._command_transact = lambda cmd, expected, t: fut
+            self.assertEqual(await dev.get_product_id(timeout=0.1), 0xA042)
         run(go())
 
     def test_close_flag(self):

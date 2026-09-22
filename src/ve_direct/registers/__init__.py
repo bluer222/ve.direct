@@ -177,12 +177,18 @@ for _reg in [
     _r("EQUALISATION_CURRENT_LEVEL", 0xEDE4, "NUMERIC", "READ_WRITE", "uint8_t", "%", 1.0, ("CHG",)),
     _r("AUTO_EQUALISE_STOP_ON_VOLTAGE", 0xEDE5, "BOOLEAN", "READ_WRITE", flavors=("CHG",)),
     _r("LOW_TEMP_CHARGE_CURRENT", 0xEDE6, "NUMERIC", "READ_WRITE", "uint16_t", "A", 0.1, ("CHG",)),
-    _r("TAIL_CURRENT", 0xEDE7, "NUMERIC", "READ_WRITE", "uint16_t", "A", 0.1, ("CHG",)),
+    _r("TAIL_CURRENT", 0xEDE7, "NUMERIC", "READ_WRITE", "uint16_t", "", 0.1, ("CHG",)),
     _r("BMS_PRESENT", 0xEDE8, "BOOLEAN", "READ_WRITE", flavors=("CHG",)),
     _r("BAT_VOLTAGE_SETTING", 0xEDEA, "ENUM", "READ_WRITE", flavors=("CHG",), enum="BAT_VOLTAGE_SETTING"),
     _r("BAT_VOLTAGE", 0xEDEF, "NUMERIC", "READ_WRITE", "uint8_t", "V", 1.0, ("CHG",)),
     _r("BAT_MAX_CURRENT", 0xEDF0, "NUMERIC", "READ_WRITE", "uint16_t", "A", 0.1, ("CHG",)),
     _r("BAT_TYPE", 0xEDF1, "ENUM", "READ_WRITE", flavors=("CHG",), enum="BAT_TYPE_LARGE"),
+    # Small-charger limitation (BlueSolar-HEX Battery-type-values table):
+    # 10A/15A/20A models (no rotary) define value 1 as TYPE_2, but there is
+    # no small-charger flavor, so this register binds the large (30A+ rotary)
+    # table where 1 is TYPE_1. Value 1 read via hex_get() on a 10/15/20A
+    # model is therefore misread as type_1 — use
+    # decode_bat_type(value, charger="small") for those models.
     _r("BAT_TEMPERATURE_COMPENSATION", 0xEDF2, "NUMERIC", "READ_WRITE", "int16_t", "mV/K", 0.01, ("CHG",)),
     _r("BAT_EQUALISATION_VOLTAGE", 0xEDF4, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("CHG",)),
     # Provenance: ABSENT from the BlueSolar-HEX Rev 18 §1.1 battery-settings
@@ -257,8 +263,11 @@ for _reg in [
     _r("PANEL_MAXIMUM_CURRENT", 0xEDBF, "NUMERIC", "CONSTANT", "uint16_t", "A", 0.1, ("MPPT_RS",)),
     _r("EQUALISE_CURRENT_MAXIMUM", 0xEDC7, "NUMERIC", "READ_ONLY", "uint8_t", "%", 1.0, ("MPPT_RS",)),
     _r("EQUALISE_VOLTAGE_MAXIMUM", 0xEDC6, "NUMERIC", "READ_ONLY", "uint16_t", "V", 0.01, ("MPPT_RS",)),
-    _r("ADJUSTABLE_VOLTAGE_MIN", 0x2211, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("MPPT_RS",)),
-    _r("ADJUSTABLE_VOLTAGE_MAX", 0x2212, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("MPPT_RS",)),
+    # BlueSolar-HEX §1.1 Charger-data table lists these with Note 6 (fw 1.30)
+    # and no RS-only marker — unlike 0xEDC6/0xEDC7 (Note 8 "MPPT RS models
+    # only") — so they stay visible under MPPT as well as MPPT_RS.
+    _r("ADJUSTABLE_VOLTAGE_MIN", 0x2211, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("MPPT", "MPPT_RS")),
+    _r("ADJUSTABLE_VOLTAGE_MAX", 0x2212, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("MPPT", "MPPT_RS")),
     # --- relay / display (ANY: relay/display option per model) ---
     # Liberal ANY flavoring by design (see module docstring): BlueSolar-HEX
     # scopes 0x0400-0x0404 to pluggable-LCD models, but narrowing would break
@@ -520,16 +529,24 @@ DEVICE_MODE_ORION_MAP = {0: "off", 1: "on", 3: "on", 4: "off"}
 DEVICE_MODE_INV_MAP = {2: "inverter_on", 3: "device_on", 4: "device_off",
                        5: "eco", 0xFD: "hibernate"}
 DEVICE_FUNCTION_MAP = {0: "charger", 1: "psu"}
+# Generic HEX 0x0201 map. 245 is WAKE-UP per BlueSolar-HEX §1.1 device-state
+# values and Orion-XS-HEX device-state values (the LINK_DEVICE_STATE and
+# ORION override maps agree); Text-3.34 CS "Starting-up" is a separate
+# Text-mode map (tables.py) and does not apply here.
 DEVICE_STATE_MAP = {0: "off", 1: "low_power", 2: "fault", 3: "bulk", 4: "absorption",
                     5: "floating", 6: "storage", 7: "equalize_manual", 8: "passthru",
                     9: "inverting", 0x0A: "assisting", 0x0B: "power_supply",
-                    0xF4: "sustain", 0xF5: "starting_up", 0xF6: "repeated_absorption",
+                    0xF4: "sustain", 0xF5: "wake_up", 0xF6: "repeated_absorption",
                     0xF7: "auto_equalize", 0xF8: "battery_safe", 250: "blocked", 0xFC: "external_control",
                     0xFF: "unknown"}
+# 0x200C LINK map: 250 BLOCKED exists only in the 0x0201 tables — both the
+# BlueSolar-HEX and Orion-XS-HEX Link-device-state (0x200C) tables list
+# 0,2,3,4,5,6,7,11,245,246,247,248,249,252,255 with no 250, so 250 decodes
+# unknown(250) here.
 LINK_DEVICE_STATE_MAP = {0: "not_charging", 2: "fault", 3: "bulk", 4: "absorption",
                          5: "float", 6: "storage", 7: "manual_equalise",
                          11: "power_supply", 245: "wake_up", 246: "repeated_absorption",
-                         247: "auto_equalize", 248: "battery_safe", 249: "load_detect", 250: "blocked",
+                         247: "auto_equalize", 248: "battery_safe", 249: "load_detect",
                          252: "external_control", 255: "unavailable"}
 MPPT_TRACKER_MODE_MAP = {0: "off", 1: "v_i_limited", 2: "mppt"}
 RELAY_MODE_MAP = {0: "warnings", 1: "charger", 2: "remote", 3: "disabled", 4: "normal", 5: "battery_low", 6: "fan"}

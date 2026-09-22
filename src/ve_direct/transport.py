@@ -27,7 +27,7 @@ class SimulatedTransport:
                    chunk_size: int = 64, delay: float = 0.0,
                    product_id: int = 0xA04A,
                    app_version: bytes = b"\x16\x41",
-                   flavor: str = "MPPT") -> None:
+                   flavor: str = "MPPT", boot_fails: bool = False) -> None:
         from . import hex as _hex  # local import: keeps module import light
         self._hex = _hex
         self._stream = b"".join(text_chunks or [])
@@ -38,6 +38,7 @@ class SimulatedTransport:
         # BlueSolar-HEX §1.3 example is 0x4116 application (not bootloader).
         self.app_version = bytes(app_version)
         self.flavor = flavor.upper()
+        self.boot_fails = bool(boot_fails)
         self.written: list[bytes] = []
         self._pending_out = bytearray()
 
@@ -178,11 +179,17 @@ class SimulatedTransport:
                 reply = self._hex.encode_frame(
                     self._hex.CMD_DONE, payload)
                 self._pending_out += reply
-            elif frame.cmd in (self._hex.CMD_RESTART, self._hex.CMD_BOOT):
+            elif frame.cmd == self._hex.CMD_BOOT:
+                # Boot :0 with magic 51FA*5 reboots into bootloader with no
+                # HEX reply on success. With boot_fails=True emit the
+                # documented Error payload 0x00 = "unable to enter
+                # bootloader" (BlueSolar §1 response 4; Orion-XS §1
+                # response 4): :40051.
+                if self.boot_fails:
+                    self._pending_out += self._hex.encode_frame(
+                        self._hex.CMD_ERROR, b"\x00")
+            elif frame.cmd == self._hex.CMD_RESTART:
                 # Restart :64F sends no response (BlueSolar §1 / Orion §1).
-                # Boot :0 likewise reboots into bootloader with no HEX reply
-                # awaited by the client; handle explicitly so it never falls
-                # into the Unknown branch below.
                 pass
             else:
                 # Reserved/unknown commands (2,5,9,B-F, ...) -> Unknown

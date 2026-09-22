@@ -166,8 +166,7 @@ def _decode_label(label: str, raw: str) -> TypedValue:
             elif label == "MON":
                 human = MON_MAP.get(value, f"Unknown monitor ({value})")
             elif label in ("AR", "WARN"):
-                bits = decode_ar(value)
-                human = ", ".join(bits) if bits else "No alarm"
+                human = ", ".join(decode_ar(value))
             elif label == "OR":
                 human = ", ".join(decode_or(value))
             elif label == "CAP_BLE":

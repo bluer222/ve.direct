@@ -339,6 +339,12 @@ class AsyncVEDirect:
         """Decode one unsolicited ``:A`` frame using product metadata."""
         if frame.cmd != _hex.CMD_ASYNC:
             raise RegisterError(f"expected Async frame, got {frame.name}")
+        # BlueSolar-HEX §1 / Orion-XS-HEX §1 Async = u16 id + u8 flags
+        # + value. A shorter payload is truncated: reject instead of
+        # surfacing id bytes as value with masked flags=0.
+        if len(bytes(frame.data)) < 3:
+            raise RegisterError(
+                f"truncated Async frame, want id+flags+value: {frame.raw!r}")
         rid = frame.register_id
         if rid is None:
             raise RegisterError("Async frame has no register id")
@@ -415,17 +421,16 @@ class AsyncVEDirect:
         """Decode application version info.
 
         For Orion XS (which uses 24-bit version encoding where command :3 is
-        deprecated), reads register 0x0102. For other products, sends :352.
+        deprecated), reads register 0x0102 (Orion-XS §1.1). BlueSolar
+        product-info (§1.1: 0x0100/0x0104/0x010A/0x010B/0x0140) has no
+        0x0102, so non-Orion flavors use :352 only and any Unknown
+        propagates as RegisterError (no undocumented 0x0102 fallback).
         """
         if self.flavor == "ORION":
             frame = await self.hex_get_raw(0x0102, timeout=timeout)
             return _hex.decode_app_version_24(frame.value_bytes)
-        try:
-            raw = await self.get_app_version(timeout)
-            return _hex.decode_app_version(raw)
-        except RegisterError:
-            frame = await self.hex_get_raw(0x0102, timeout=timeout)
-            return _hex.decode_app_version_24(frame.value_bytes)
+        raw = await self.get_app_version(timeout)
+        return _hex.decode_app_version(raw)
 
     async def get_product_id(self, timeout: float = 2.0) -> int:
         """``:451`` — returns product id as int.
@@ -437,7 +442,11 @@ class AsyncVEDirect:
         2-byte since fw 1.12 and 4-byte only since fw 1.30, and §1.3 shows
         2-byte Done replies (e.g. ``:1000351``). Pre-1.30 MPPTs can never
         return the 4-byte form, so a 2-byte reply is accepted as the PID
-        for MPPT-family flavors (and BMV/INV, whose specs use 2-byte LE).
+        for MPPT (and BMV/INV, whose specs use 2-byte LE). MPPT_RS is
+        excluded: RS content needs much newer fw than 1.30 so real RS
+        hardware can never send pre-1.30 2-byte, and §1.1 says the
+        2-byte form "should be ignored". ORION/MULTI_RS likewise excluded
+        (Orion-XS §1.1 carries the same "should be ignored" note).
         """
         import struct as _s
         frame = await self._command_transact(
@@ -450,7 +459,7 @@ class AsyncVEDirect:
                     f"{frame.raw!r}")
             return _s.unpack("<H", data[1:3])[0]
         if len(data) == 2 and self.flavor in (
-                "BMV", "BMV71", "INV", "MPPT", "MPPT_RS"):
+                "BMV", "BMV71", "INV", "MPPT"):
             return _s.unpack("<H", data)[0]
         if len(data) == 2 and self.flavor is None:
             raise RegisterError(

@@ -115,7 +115,15 @@ class TestFullHex(unittest.TestCase):
         self.assertTrue(undoc["type"].startswith("unknown"))
 
     def test_boot_name(self):
-        self.assertEqual(H.decode_line(H.encode_frame(0, H.BOOT_MAGIC)).name, "Boot")
+        # Nibbles 0x0/0x6 are requests only (neither doc defines
+        # Boot/Restart responses; both send no reply).
+        f = H.decode_line(H.encode_frame(0, H.BOOT_MAGIC))
+        self.assertEqual(f.request_name, "Boot")
+        self.assertEqual(f.name, "Cmd(0)")
+        self.assertEqual(H.command_name(0, is_request=True), "Boot")
+        r = H.decode_line(H.encode_frame(6, b""))
+        self.assertEqual(r.request_name, "Restart")
+        self.assertEqual(r.name, "Cmd(6)")
 
     def test_product_information_structures(self):
         product = R.decode_value(

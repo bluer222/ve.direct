@@ -79,6 +79,21 @@ class TestHex(unittest.TestCase):
         self.assertEqual(rc["version"], "1.01-RCD")
         self.assertEqual(rc["type"], "release_candidate")
 
+    def test_ping_ff1f_falls_through_to_version(self):
+        # 0x?FFF with Y=0x1 is not a documented Orion ping (Orion-XS §1
+        # response 5 allows only Y in {3,7,B,F}); must fall through to
+        # normal BlueSolar version decode, not version-None.
+        d = H.decode_ping_version(bytes.fromhex("FF1F"))
+        self.assertIsNotNone(d["version"])
+        self.assertEqual(d, H.decode_app_version(bytes.fromhex("FF1F")))
+        self.assertEqual(d["type"], "bootloader")
+        # Documented Orion pings still decode as no-version.
+        for hx, want in (("FF3F", "bootloader"), ("FF7F", "application"),
+                         ("FFBF", "tester"), ("FFFF", "release_candidate")):
+            p = H.decode_ping_version(bytes.fromhex(hx))
+            self.assertIsNone(p["version"], hx)
+            self.assertEqual(p["type"], want, hx)
+
     def test_app_version_24_undocumented_ll(self):
         d = H.decode_app_version_24(bytes.fromhex("00030201"))
         self.assertIsNone(d["version"])

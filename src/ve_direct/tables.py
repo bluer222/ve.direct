@@ -373,7 +373,13 @@ def pid_name(pid: int) -> str:
 
 def decode_ar(value: int) -> list[str]:
     """Decode AR/WARN bitmask sum into active alarm names."""
-    return [name for bit, name in sorted(AR_MAP.items()) if value & bit]
+    out = [name for bit, name in sorted(AR_MAP.items()) if value & bit]
+    if out:
+        unknown = value & ~sum(AR_MAP)
+        if unknown:
+            out.append(f"Unknown bits 0x{unknown:08X}")
+        return out
+    return ["No alarm"] if value == 0 else [f"Unknown bits 0x{value:08X}"]
 
 
 def decode_or(value: int) -> list[str]:

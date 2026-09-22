@@ -44,14 +44,17 @@ HEX_FLAG_DESCRIPTIONS = {
 # nibble 0x4 is ProductId (request) vs Error (response) — see
 # BlueSolar-HEX §1 command/response tables and Orion-XS-HEX §1.
 # A single dict cannot label both directions, so keep separate maps.
+# Nibbles 0x0 (Boot) and 0x6 (Restart) are requests only: neither doc
+# defines Boot/Restart responses (both send no reply), so they appear
+# only in REQUEST_NAMES. 0xA (Async) is device-originated and listed
+# under commands in both docs, but it is handled on the receive path
+# so it is kept in RESPONSE_NAMES for display of incoming frames.
 RESPONSE_NAMES = {
-    CMD_BOOT: "Boot",
     CMD_DONE: "Done",
     CMD_CHECKSUM_ERROR: "ChecksumError",
     CMD_UNKNOWN: "Unknown",
     CMD_ERROR: "Error",
     CMD_PING: "PingResp",
-    CMD_RESTART: "Restart",
     CMD_GET: "Get",
     CMD_SET: "Set",
     CMD_ASYNC: "Async",
@@ -143,19 +146,23 @@ def decode_app_version(raw: bytes) -> dict:
 def decode_ping_version(raw: bytes) -> dict:
     """Decode Ping response (BlueSolar-HEX §1 response 5, Orion-XS-HEX §1).
 
-    Orion XS ping returns ``0xYFFF`` (no version; Y = fw type); BlueSolar
+    Orion XS ping returns ``0xYFFF`` (no version) with Y restricted to
+    0b0011/0b0111/0b1011/0b1111 (Orion-XS-HEX §1 response 5). BlueSolar
     ping carries a version in the same 2-byte encoding as AppVersion.
+    Any other 0x?FFF payload (e.g. FF1F, Y=0x1) is not a documented
+    Orion ping and falls through to normal BlueSolar version decode.
     """
     h = bytes(raw).hex().upper()
     if len(bytes(raw)) == 2:
         v = int.from_bytes(bytes(raw)[:2], "little")
-        # Orion XS Ping: 0xYFFF where lower 12 bits are 0xFFF (no version).
+        # Orion XS Ping: 0xYFFF where lower 12 bits are 0xFFF (no version),
+        # Y limited to the four documented fw-type values.
         if (v & 0x0FFF) == 0x0FFF:
             y = (v >> 12) & 0x0F
             orion_types = {0b0011: "bootloader", 0b0111: "application",
                            0b1011: "tester", 0b1111: "release_candidate"}
-            tname = orion_types.get(y, f"unknown_{y:X}")
-            return {"version": None, "type": tname, "raw": h}
+            if y in orion_types:
+                return {"version": None, "type": orion_types[y], "raw": h}
     return decode_app_version(raw)
 
 

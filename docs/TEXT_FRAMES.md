@@ -10,26 +10,26 @@ BMV/SmartShunt sends alternating PID-block + history-block. In code: frame[label
 
 | Label | Wire unit | SI in to_si() | Devices (typical) | Description |
 |---|---|---|---|---|
-| PID | — | — | MPPT, Inverter, Charger, BMV/SmartShunt, OrionXS/BuckBoost | Product ID (hex, e.g. 0xA04A) |
-| FW | — | — | MPPT, Inverter, Charger, BMV/SmartShunt, OrionXS/BuckBoost | Firmware version 16-bit (208 = v2.08, C208 = RC) |
-| FWE | — | — | see spec matrix | Firmware version 24-bit (e.g. 0208FF = v2.08 release) |
-| SER# | — | — | MPPT, Inverter, Charger, BMV/SmartShunt, OrionXS/BuckBoost | Serial number (LLYYMMSSSSS) |
+| PID | — | — | BMV-70x, BMV-71x/SmartShunt, MPPT, Inverter, Charger, OrionXS/BuckBoost (no BMV-60x) | Product ID (hex, e.g. 0xA04A) |
+| FW | — | — | BMV/SmartShunt (60x, 70x, 71x), MPPT, Inverter (Charger/BuckBoost use FWE) | Firmware version 16-bit (208 = v2.08, C208 = RC) |
+| FWE | — | — | Charger, OrionXS/BuckBoost | Firmware version 24-bit (e.g. 0208FF = v2.08 release) |
+| SER# | — | — | MPPT, Inverter, Charger, OrionXS/BuckBoost | Serial number (LLYYMMSSSSS) |
 | BMV | — | — | BMV/SmartShunt | Model description (deprecated, use PID) |
 | V | mV | V ÷1000 | MPPT, Inverter, Charger, BMV/SmartShunt, OrionXS/BuckBoost | Main / channel 1 (battery) voltage |
 | V2 | mV | V ÷1000 | Charger | Channel 2 (battery) voltage |
 | V3 | mV | V ÷1000 | Charger | Channel 3 (battery) voltage |
 | VS | mV | V ÷1000 | BMV/SmartShunt | Auxiliary (starter) voltage |
-| VM | mV | V ÷1000 | BMV/SmartShunt | Mid-point voltage of the battery bank |
-| DM | ‰ | % ÷10 | BMV/SmartShunt | Mid-point deviation of the battery bank |
+| VM | mV | V ÷1000 | BMV-70x, BMV-71x/SmartShunt | Mid-point voltage of the battery bank |
+| DM | ‰ | % ÷10 | BMV-70x, BMV-71x/SmartShunt | Mid-point deviation of the battery bank |
 | VPV | mV | V ÷1000 | MPPT | Panel voltage |
 | PPV | W | as-is | MPPT | Panel power |
-| I | mA | A ÷1000 | MPPT, Inverter, Charger, BMV/SmartShunt, OrionXS/BuckBoost | Main / channel 1 battery current (>0 = charging) |
+| I | mA | A ÷1000 | MPPT, Charger, BMV/SmartShunt, OrionXS/BuckBoost | Main / channel 1 battery current (>0 = charging) |
 | I2 | mA | A ÷1000 | Charger | Channel 2 battery current |
 | I3 | mA | A ÷1000 | Charger | Channel 3 battery current |
 | IL | mA | A ÷1000 | MPPT | Load current |
 | LOAD | — | — | MPPT | Load output state (ON/OFF) |
 | T | °C | as-is | see spec matrix | Battery temperature (--- = no sensor) |
-| P | W | as-is | BMV/SmartShunt, OrionXS/BuckBoost | Instantaneous power |
+| P | W | as-is | BMV-70x, BMV-71x/SmartShunt, OrionXS/BuckBoost | Instantaneous power |
 | CE | mAh | Ah ÷1000 | BMV/SmartShunt | Consumed Amp Hours (--- if unsynced / DC-monitor) |
 | SOC | ‰ | % ÷10 | BMV/SmartShunt | State of charge (1000 = 100.0%) |
 | TTG | min | as-is | BMV/SmartShunt | Time-to-go (-1 = infinite, not discharging) |
@@ -42,7 +42,7 @@ BMV/SmartShunt sends alternating PID-block + history-block. In code: frame[label
 | ERR | — | — | MPPT, Charger, OrionXS/BuckBoost | Error code |
 | MODE | — | — | Inverter, Charger, OrionXS/BuckBoost | Device mode |
 | MPPT | — | — | MPPT | Tracker operation mode |
-| MON | — | — | BMV/SmartShunt | DC monitor mode |
+| MON | — | — | BMV-71x/SmartShunt | DC monitor mode |
 | HSDS | — | — | MPPT | Day sequence number (0..364, new day = history rollover) |
 | H1 | mAh | Ah ÷1000 | BMV/SmartShunt | Depth of the deepest discharge |
 | H2 | mAh | Ah ÷1000 | BMV/SmartShunt | Depth of the last discharge |
@@ -60,8 +60,8 @@ BMV/SmartShunt sends alternating PID-block + history-block. In code: frame[label
 | H14 | — | — | see spec matrix | Number of high auxiliary voltage alarms |
 | H15 | mV | V ÷1000 | BMV/SmartShunt | Minimum auxiliary (battery) voltage |
 | H16 | mV | V ÷1000 | BMV/SmartShunt | Maximum auxiliary (battery) voltage |
-| H17 | 0.01kWh | kWh ÷100 | BMV/SmartShunt | Discharged energy (BMV) / produced energy (DC monitor) |
-| H18 | 0.01kWh | kWh ÷100 | BMV/SmartShunt | Charged energy (BMV) / consumed energy (DC monitor) |
+| H17 | 0.01kWh | kWh ÷100 | BMV-70x, BMV-71x/SmartShunt | Discharged energy (BMV) / produced energy (DC monitor) |
+| H18 | 0.01kWh | kWh ÷100 | BMV-70x, BMV-71x/SmartShunt | Charged energy (BMV) / consumed energy (DC monitor) |
 | H19 | 0.01kWh | kWh ÷100 | MPPT | Yield total (user resettable) |
 | H20 | 0.01kWh | kWh ÷100 | MPPT | Yield today |
 | H21 | W | as-is | MPPT | Maximum power today |

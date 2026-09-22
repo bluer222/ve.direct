@@ -209,6 +209,19 @@ class TestText(unittest.TestCase):
         self.assertEqual(f["H13"].value, 2)
         self.assertEqual(f["H14"].value, 3)
 
+    def test_ar_unknown_bits_not_no_alarm(self):
+        # Spec AR table defines bits 1..8192; AR=16384 is out-of-range and
+        # must not decode as "No alarm".
+        from ve_direct.tables import decode_ar
+        self.assertEqual(decode_ar(0), ["No alarm"])
+        self.assertEqual(decode_ar(16384), ["Unknown bits 0x00004000"])
+        mixed = decode_ar(1 | 16384)
+        self.assertIn("Low voltage", mixed)
+        self.assertTrue(any("Unknown bits" in s for s in mixed))
+        f = TextParser().feed(make_text_block({"AR": "16384"}))[0]
+        self.assertIn("Unknown bits", f["AR"].human)
+        self.assertNotIn("No alarm", f["AR"].human)
+
     def test_oversized_input_safety(self):
         # Spec guideline: 9B label, 33B value, max 22 fields/block; parser is
         # liberal but caps buffered input at 8 KiB.

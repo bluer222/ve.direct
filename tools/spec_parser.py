@@ -63,12 +63,114 @@ class ParsedPID:
 DOC_TYPO_REGISTER_IDS = frozenset({0xEFF0})
 
 #: Descriptions implying command-only (write) semantics for ID-only rows.
-_WRITE_HINTS = ("restore", "clear history", "zero current", "synchronize")
+#: Verbs taken from the docs' own write-only markers: the BMV spec marks
+#: command rows explicitly as "(write only)" ("Zero Current", "Synchronize",
+#: "Restore Defaults", "Clear History"), and BlueSolar/Orion use the same
+#: command verbs in their ID+description tables ("Restore default",
+#: "Clear history"). "reset counter(s)" covers reset-command rows (e.g. a
+#: "Reset counters" row); it is a full phrase so a readable register such as
+#: BlueSolar 0xEDDC "User yield (resettable)" never matches. "(write only)"
+#: itself is included so any row carrying the doc's literal marker is caught.
+_WRITE_HINTS = ("restore", "clear history", "zero current", "synchronize", "reset counter", "(write only)")
 
 #: Device columns of the VE.Direct Text Mode fields tables, left to right.
 TEXT_DEVICES = ["BMV60x", "BMV70x", "BMV71x", "MPPT", "PhoenixInverter", "PhoenixCharger", "BuckBoost"]
 
 _DTYPE_RE = re.compile(r"^(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)$", re.IGNORECASE)
+
+#: Footnote-only "dtype" cells (BlueSolar 0xEDD1/0xEDD3 "(*4)"): the doc
+#: prints a footnote reference where the wire width belongs (the width
+#: depends on firmware version, per the doc's own revision note on vregs
+#: 0xEDD3/0xEDD1), i.e. no single width is given.
+_FOOTNOTE_DTYPE_RE = re.compile(r"^\(\*\d+\)$")
+
+#: A scale-column token: a decimal factor or "-" (doc gives no factor).
+_SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:\.\d+)?|-)$")
+
+#: A bare register-ID token (Orion-XS allows the doc-typo form "xHHHH").
+_ID_TOKEN_RE = re.compile(r"^0x[0-9A-Fa-f]{4}$")
+_ID_TOKEN_BARE_X_RE = re.compile(r"^x[0-9A-Fa-f]{4}$")
+
+
+def _normalize_dtype(raw: str) -> Tuple[str, str]:
+    """Normalize a dtype-column token to the module convention.
+
+    Returns ``(dtype, note)``. Known wire widths pass through lowercased
+    (matching is case-insensitive, so ``UN16``/``Un32`` normalize); a bare
+    ``-`` or footnote-contaminated cell such as BlueSolar ``(*4)`` (no
+    single wire width in the doc) normalizes to ``unknown`` with the raw
+    cell preserved in the note.
+    """
+    t = raw.strip()
+    if _DTYPE_RE.match(t):
+        return t.lower(), ""
+    if t in ("-", ""):
+        return "unknown", ""
+    return "unknown", f"doc dtype cell {t!r} gives no single wire width"
+
+
+def _split_typed_row(line: str, allow_bare_x_prefix: bool = False) -> Optional[Tuple[int, str, Optional[str], str, Optional[str], bool]]:
+    """Token-split one HEX table row into ``(rid, desc, scale_token, dtype_token, unit, typo)``.
+
+    Column gaps may be single spaces (cf. BlueSolar 0xEDE0/0xEDCA single
+    space after the ID, Phoenix 0xEB99 single-spaced throughout) and dtype
+    matching is case-insensitive, so the split anchors on the scale/dtype
+    tokens instead of ``\\s{2,}`` gaps: descriptions may themselves contain
+    spaces and numbers. Returns ``None`` when the line is not a typed table
+    row (prose mentions, product-ID rows, range headers). ``unit`` is the
+    raw remainder (may be ``-`` or contain sentinels, as the callers expect).
+    """
+    tokens = line.split()
+    if len(tokens) < 3:
+        return None
+    idtok = tokens[0]
+    typo = False
+    if _ID_TOKEN_RE.match(idtok):
+        rid = int(idtok, 16)
+    elif allow_bare_x_prefix and _ID_TOKEN_BARE_X_RE.match(idtok):
+        # Doc typo: "xEDE0 Battery low temperature level" (missing leading
+        # 0; cf. BlueSolar-HEX 0xEDE0 with identical metadata).
+        rid = int(idtok[1:], 16)
+        typo = True
+    else:
+        return None
+    if tokens[1] == "=":
+        # Product-ID prose ("0xA3F0 = Orion XS ..."), not a table row.
+        return None
+    rest = tokens[1:]
+
+    def is_dtype_like(tok: str) -> bool:
+        return bool(_DTYPE_RE.match(tok) or _FOOTNOTE_DTYPE_RE.match(tok))
+
+    # Scale-anchored: "<desc...> <scale> <dtype> [unit...]". Footnote cells
+    # ("(*4)") only anchor when no real wire width follows: a footnote
+    # inside the description (e.g. "Display ... (*2) un8") must not split it.
+    for footnote_ok in (False, True):
+        for i, tok in enumerate(rest):
+            if not _SCALE_TOKEN_RE.match(tok) or i + 1 >= len(rest):
+                continue
+            nxt = rest[i + 1]
+            if _DTYPE_RE.match(nxt) or (
+                footnote_ok
+                and _FOOTNOTE_DTYPE_RE.match(nxt)
+                and not any(_DTYPE_RE.match(t) for t in rest[i + 2:])
+            ):
+                desc = " ".join(rest[:i]).strip()
+                if not desc:
+                    return None
+                unit = " ".join(rest[i + 2:]).strip() or None
+                return rid, desc, tok, nxt, unit, typo
+    # Dtype-anchored (scaleless display/mode rows): "<desc...> <dtype>
+    # [unit...]". Real widths win over footnotes for the same reason.
+    for footnote_ok in (False, True):
+        for i, tok in enumerate(rest):
+            if (_DTYPE_RE.match(tok) or (footnote_ok and _FOOTNOTE_DTYPE_RE.match(tok))):
+                desc = " ".join(rest[:i]).strip()
+                if not desc:
+                    return None
+                unit = " ".join(rest[i + 1:]).strip() or None
+                return rid, desc, None, tok, unit, typo
+    return None
 
 
 def _register_name(desc: str) -> str:
@@ -115,61 +217,37 @@ class BlueSolarHEXParser:
     def _parse_section_tables(self, regs: Dict[int, ParsedRegister]) -> None:
         section = self._section_text()
 
-        pattern_std = re.compile(
-            r"^\s*(0x[0-9A-Fa-f]{4})\s+([A-Za-z0-9_()./,\-\s\*\#]+?)\s{2,}([0-9.]+|\-)\s+([a-z0-9*()]+)\s*(\S.*)?$"
-        )
-        pattern_display = re.compile(
-            r"^\s*(0x[0-9A-Fa-f]{4})\s+([A-Za-z0-9_()./,\-\s\*\#=]+?)\s{2,}(un8|un16|un32|sn16|sn32|string)\s*(\S.*)?$"
-        )
-
         for line in section.splitlines():
             if not re.match(r"^\s*0x[0-9A-Fa-f]{4}\b", line):
                 continue
             if any(skip in line for skip in ["0xEDEF will always", "A VE.Direct TX", "firmware version"]):
                 continue
 
-            m = pattern_std.match(line)
-            if m:
-                rid = int(m.group(1), 16)
-                desc = m.group(2).strip()
-                scale_str = m.group(3).strip()
-                dtype = m.group(4).strip()
-                unit_str = m.group(5).strip() if m.group(5) else None
-
-                scale = float(scale_str) if scale_str != "-" else None
-                sentinels = set()
-                if unit_str and "0xFFFF" in unit_str:
-                    sentinels.add(0xFFFF)
-
-                regs[rid] = ParsedRegister(
-                    id=rid,
-                    name=_register_name(desc),
-                    description=desc,
-                    scale=scale,
-                    data_type=dtype,
-                    unit=unit_str,
-                    source="BlueSolar-HEX",
-                    sentinels=sentinels,
-                )
+            # Token-anchored split (not \s{2,} gaps): tolerates single-space
+            # columns and any-case dtypes; footnote dtypes ("(*4)") fall out
+            # of _normalize_dtype as unknown with the cell kept in notes.
+            row = _split_typed_row(line)
+            if row is None:
                 continue
+            rid, desc, scale_str, dtype_raw, unit_str, _typo = row
 
-            m_disp = pattern_display.match(line)
-            if m_disp:
-                rid = int(m_disp.group(1), 16)
-                desc = m_disp.group(2).strip()
-                dtype = m_disp.group(3).strip()
-                unit_str = m_disp.group(4).strip() if m_disp.group(4) else None
+            scale = None if scale_str in (None, "-") else float(scale_str)
+            dtype, dtype_note = _normalize_dtype(dtype_raw)
+            sentinels = set()
+            if unit_str and "0xFFFF" in unit_str:
+                sentinels.add(0xFFFF)
 
-                regs[rid] = ParsedRegister(
-                    id=rid,
-                    name=_register_name(desc),
-                    description=desc,
-                    scale=None,
-                    data_type=dtype,
-                    unit=unit_str,
-                    source="BlueSolar-HEX",
-                )
-                continue
+            regs[rid] = ParsedRegister(
+                id=rid,
+                name=_register_name(desc),
+                description=desc,
+                scale=scale,
+                data_type=dtype,
+                unit=unit_str,
+                source="BlueSolar-HEX",
+                notes=dtype_note,
+                sentinels=sentinels,
+            )
 
     def _parse_id_ranges(self, regs: Dict[int, ParsedRegister]) -> None:
         """Expand multi-line ``0xAAAA ...`` / bare ``0xBBBB`` pairs (timer
@@ -346,38 +424,31 @@ class OrionXSHEXParser:
         end = self.text.find("1.2 Asynchronous items")
         section = self.text[start:end] if end > start else self.text[start:]
 
-        pattern = re.compile(
-            r"^\s*(?:0x|x)([0-9A-Fa-f]{4})\s+([A-Za-z0-9_()./,\-\s\*\#]+?)\s{2,}([0-9.]+|\-)\s+([a-z0-9]+)\s*(\S.*)?$"
-        )
-
         for line in section.splitlines():
-            m = pattern.match(line)
-            if m:
-                rid = int(m.group(1), 16)
-                # Doc typo: "xEDE0 Battery low temperature level" (missing
-                # leading 0; cf. BlueSolar-HEX 0xEDE0 with identical metadata).
-                typo = line.lstrip().startswith("x") and not line.lstrip().startswith("0x")
-                desc = m.group(2).strip()
-                scale_str = m.group(3).strip()
-                dtype = m.group(4).strip()
-                unit_str = m.group(5).strip() if m.group(5) else None
+            # Token-anchored split (not \s{2,} gaps): tolerates single-space
+            # columns and any-case dtypes, like the BlueSolar tables.
+            row = _split_typed_row(line, allow_bare_x_prefix=True)
+            if row is None:
+                continue
+            rid, desc, scale_str, dtype_raw, unit_str, typo = row
 
-                scale = float(scale_str) if scale_str != "-" else None
-                sentinels = set()
-                if unit_str and "0xFFFF" in unit_str:
-                    sentinels.add(0xFFFF)
+            scale = None if scale_str in (None, "-") else float(scale_str)
+            dtype, dtype_note = _normalize_dtype(dtype_raw)
+            sentinels = set()
+            if unit_str and "0xFFFF" in unit_str:
+                sentinels.add(0xFFFF)
 
-                regs[rid] = ParsedRegister(
-                    id=rid,
-                    name=_register_name(desc),
-                    description=desc,
-                    scale=scale,
-                    data_type=dtype,
-                    unit=unit_str,
-                    source="Orion-XS-HEX",
-                    sentinels=sentinels,
-                    notes="doc-typo: ID printed as xEDE0, read as 0xEDE0" if typo else "",
-                )
+            regs[rid] = ParsedRegister(
+                id=rid,
+                name=_register_name(desc),
+                description=desc,
+                scale=scale,
+                data_type=dtype,
+                unit=unit_str,
+                source="Orion-XS-HEX",
+                sentinels=sentinels,
+                notes="doc-typo: ID printed as xEDE0, read as 0xEDE0" if typo else dtype_note,
+            )
 
     def _parse_id_ranges(self, regs: Dict[int, ParsedRegister]) -> None:
         """Expand inline ``0x1070..0x1098`` cycle-history ranges."""
@@ -547,52 +618,97 @@ class BMV7xxHEXParser:
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
         for line in self.text.splitlines():
-            if not re.match(r"^\s*0x[0-9A-Fa-f]{4}\b", line):
+            # Token-anchored split (not 2+-whitespace gaps): rows such as the
+            # monitor short-layout lines may use single spaces between
+            # columns, and dtypes print capitalized (Un32/Sn16). The Type
+            # column anchors the split: Display is the token before it, the
+            # description is everything between the ID and Display.
+            tokens = line.split()
+            if len(tokens) < 3 or not _ID_TOKEN_RE.match(tokens[0]):
+                continue
+            if tokens[1] == "=":
+                # Product-ID prose ("0xA381 = BMV712"), not a table row.
                 continue
             if any(skip in line for skip in ["talking to", "BMV712 = 0xA381", "0xA381 = BMV712"]):
                 continue
 
-            parts = re.split(r"\s{2,}", line.strip())
-            if not parts or not re.match(r"^0x[0-9A-Fa-f]{4}$", parts[0]):
-                continue
-
-            rid = int(parts[0], 16)
-            desc = parts[1] if len(parts) > 1 else ""
+            rid = int(tokens[0], 16)
+            anchor = next(
+                (i for i, t in enumerate(tokens) if i >= 2 and _DTYPE_RE.match(t)),
+                None,
+            )
             dtype = "unknown"
+            if anchor is None:
+                # Write-only command rows ("... (write only) ... - - - -"):
+                # no Type width; the Type column is "-" followed by "-"s. The
+                # Display column is numeric (or "-"); if the token before the
+                # dash run is not Display-shaped it belongs to the
+                # description instead (e.g. 0x031F "Alarm Acknowledge - ...").
+                dash = next(
+                    (i for i, t in enumerate(tokens)
+                     if i >= 2 and t == "-" and all(u == "-" for u in tokens[i + 1:])),
+                    None,
+                )
+                if dash is None:
+                    continue
+                if dash >= 3 and re.fullmatch(r"\d+|-|MAIN|AUX|MID|SOC|[A-H]", tokens[dash - 1]):
+                    display_idx, desc_toks = dash - 1, tokens[1:dash - 1]
+                else:
+                    display_idx, desc_toks = dash, tokens[1:dash]
+                rest = []
+            else:
+                if anchor < 3:
+                    continue
+                dtype = tokens[anchor].lower()
+                display_idx, desc_toks, rest = anchor - 1, tokens[1:anchor - 1], tokens[anchor + 1:]
+            if not desc_toks:
+                continue
+            desc = " ".join(desc_toks)
+            display = tokens[display_idx]
+            _ = display  # Display column carries no register semantics.
             scale: Optional[float] = None
             unit: Optional[str] = None
 
-            for p in parts[2:]:
-                if _DTYPE_RE.match(p.strip()):
-                    dtype = p.strip().lower()
-                    break
-
-            # Settings layout: ID, Description, Display, Type, Range(a..b),
-            # Default, Step, Unit. The scale factor is the Step column
-            # (including integer steps such as "1", which carry scale 1.0).
-            range_idx = next((i for i, p in enumerate(parts) if i >= 2 and ".." in p), None)
-            if range_idx is not None and len(parts) > range_idx + 2:
-                step = parts[range_idx + 2].strip()
+            range_idx = next((i for i, p in enumerate(rest) if ".." in p), None)
+            if range_idx is not None and len(rest) > range_idx + 2:
+                # Settings layout: ID, Description, Display, Type, Range(a..b),
+                # Default, Step, Unit. The Range cell may carry parenthesized
+                # options ("0..1 (OFF, ON)"), token-split across gaps: skip a
+                # "(...)" group after Range to find Default/Step/Unit. The
+                # scale factor is the Step column (including integer steps
+                # such as "1", which carry scale 1.0).
+                col = range_idx + 1
+                if col < len(rest) and rest[col].startswith("("):
+                    while col < len(rest) and not rest[col].endswith(")"):
+                        col += 1
+                    col += 1
+                step = rest[col + 1].strip() if len(rest) > col + 1 else ""
                 if re.fullmatch(r"\d+(\.\d+)?", step):
                     scale = float(step)
-                if len(parts) > range_idx + 3:
-                    u = parts[range_idx + 3].strip()
+                if len(rest) > col + 2:
+                    u = " ".join(rest[col + 2:]).strip()
                     if u == "-" or "(" in u:
                         unit = None
                     else:
                         unit = u or None
-            else:
+            elif anchor is not None:
                 # Short layout (product info / monitor / historic): the scale
                 # is embedded in the Unit column ("0.01 V", "0.001A").
                 is_write_only = "(write only)" in desc.lower()
-                for p in parts[2:]:
+                for j, p in enumerate(rest):
                     p_clean = p.strip()
-                    if not is_write_only and re.match(r"^(0?\.\d+)\s*([A-Za-z%°]+)?$", p_clean):
-                        sm = re.match(r"^(0?\.\d+)\s*([A-Za-z%°]+)?$", p_clean)
+                    if not is_write_only:
+                        # Unit column holds the factor ("0.01 V" split across
+                        # tokens by single-space gaps, or combined "0.001A").
+                        sm = re.match(r"^(0?\.\d+)([A-Za-z%°]+)?$", p_clean)
                         if sm:
                             scale = float(sm.group(1))
-                            unit = sm.group(2)
-                    elif p_clean in ["V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"]:
+                            if sm.group(2):
+                                unit = sm.group(2)
+                            elif j + 1 < len(rest) and re.fullmatch(r"[A-Za-z%°]+", rest[j + 1].strip()):
+                                unit = rest[j + 1].strip()
+                            continue
+                    if p_clean in ["V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"]:
                         unit = p_clean
 
             if "(write only)" in desc.lower():

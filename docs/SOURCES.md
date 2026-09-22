@@ -110,12 +110,16 @@ Fully and independently parsed and validated directly from official Victron spec
   (Note: `0x0209`/`0x020A` appeared in an earlier draft of this DB but in
   neither the Phoenix Rev 5 snapshot nor any other snapshot; both were
   removed as phantom registers.)
+- Generic device control (§2.4): `0x0090` (BLE mode), `0xEC41` (settings changed) — shared `ANY` entries
+- Relay (§2.8): `0x034E` (relay control, shared `ANY`), `0x034F` (`INV_RELAY_MODE` override, values 0,2,3,4,5,6 — no 1)
+- Product-info extra: `0xEDEF` (battery voltage, `INV`-read-only alias of the CHG `BAT_VOLTAGE`);
+  operation (§2.5): `0xED8D` (DC channel 1 / battery voltage, shared `BMV`/`INV`/`MPPT_RS`)
 - AC output: `0x2200` (AC voltage), `0x2201` (AC current), `0x2202` (AC nominal voltage), `0x2203` (rated power),
   `0x2205` (apparent power), `0x2206` (load sense threshold), `0x2207` (load sense clear),
   `0x2210` (shutdown low-voltage set), `0x2211` (voltage range min), `0x2212` (voltage range max)
 - Non-volatile memory: `0xEB99` (`INV_NVM_COMMAND`: 1=Save, 2=Revert, 3=Backup, 4=Default), `0x0004` (restore defaults)
 - Eco mode & dynamic cut-off: `0xEB03` (50Hz/60Hz), `0xEB04` (eco min current), `0xEB06` (eco retry time),
-  `0xEB10` (load detect periods), `0xEBBA` (dyn cutoff enable), `0xEBB1..0xEBB7` (dyn cutoff parameters)
+  `0xEB10` (load detect periods), `0xEBBA` (dyn cutoff enable), `0xEBB1`/`0xEBB2`/`0xEBB3`/`0xEBB5`/`0xEBB7` (dyn cutoff parameters; `0xEBB4`/`0xEBB6` do not exist)
 - Internal & diagnostics: `0xEB4E` (loop current), `0x031C` (warning reason), `0x031E` (alarm reason)
 - History: `0x1040` (history time), `0x1041` (history energy)
 
@@ -194,7 +198,9 @@ product's scale, width, enum, or access mode:
 - `0xED8E`: `DC_CHANNEL1_POWER` (BMV, int16, 1W) vs `OUTPUT_POWER`
   (Orion, uint32, 0.01W)
 - `0x2211/0x2212`: `VOLTAGE_RANGE_MIN/MAX` (INV) vs `ADJUSTABLE_VOLTAGE_*`
-  (MPPT_RS) — same scale
+  (MPPT/MPPT_RS) — same scale
+- `0xEDEF`: `BAT_VOLTAGE` (CHG, READ_WRITE) vs `INV_BAT_VOLTAGE` (INV,
+  READ_ONLY, Phoenix section 2.1 product-info table) — same scale
 
 ### Liberal flavoring policy (by design, not an error)
 
@@ -226,8 +232,11 @@ no wire-behavior contradiction:
   (load §), `TX_PORT_MODE`/`RX_PORT_MODE` (ports §), `REMOTE_COMMAND`/
   `NETWORK_INFO`/`NETWORK_MODE`/`LINK_DEVICE_STATE` (networking §),
   `DEVICE_FUNCTION` (Orion), `TIMER_ANCHOR` (lighting §),
-  `BAT_TYPE_SMALL/LARGE/ORION/RS` + `decode_bat_type()` (product-specific
-  battery-type tables),
+   `BAT_TYPE_SMALL/LARGE/ORION/RS` + `decode_bat_type()` (product-specific
+   battery-type tables; limitation: no small-charger flavor exists, so the
+   generic `BAT_TYPE` register binds the large table — value 1 on 10/15/20A
+   models reads `type_1` via `hex_get` instead of the documented `type_2`,
+   use `decode_bat_type(v, charger="small")` there),
   `CAPABILITIES` full bits 9-15/18-20/25-26 (BlueSolar capabilities §),
   Orion error/warning additions (120, 150/151, 160-162),
   Phoenix `0x0207` off-reason bits 0/2/3/4/5 (HEX Rev 5 §2.3.2).
@@ -267,7 +276,12 @@ The following items from the independent audit and official specifications have 
 - Response `0x2` (`CMD_CHECKSUM_ERROR`) and framing error `0xAAAA` are handled in `device.py` and immediately raise `ChecksumError`.
 - Orion capabilities bits 28-31 (`hibernate`, `ac_apparent_power`, `psu_function`, `needs_battery_to_shutdown`) are in `CAPABILITIES_MAP`.
 - BLE capabilities bits 0-8 (`ble_mode`, `permanent_off`, `ble_off_recovery_time`, `recovery_time_zero_permanent`, `service_mode`, `trends`, `ad_key`, `soc_sync_via_trend`, `settings_lock`) are in `CAPABILITIES_BLE_MAP`.
-- `DEVICE_STATE` 250 `BLOCKED` is mapped in `DEVICE_STATE_MAP` and `LINK_DEVICE_STATE_MAP`.
+- `DEVICE_STATE` 250 `BLOCKED` is mapped in `DEVICE_STATE_MAP` (and the Orion
+  `0x0201` override). It is deliberately absent from `LINK_DEVICE_STATE_MAP`:
+  both the BlueSolar-HEX and Orion-XS-HEX Link-device-state (`0x200C`)
+  tables list 0,2,3,4,5,6,7,11,245,246,247,248,249,252,255 with no 250
+  (250 `BLOCKED` exists only in the `0x0201` tables), so 250 decodes
+  `unknown(250)` there.
 - `CLEAR_HISTORY 0x1030` and VE.Smart networking registers `0x2000..0x2015` are accessible under the `ORION` flavor.
 - Serial: `from_port()` configures `dtr=True, rts=False` for VE.Direct cable power.
 - Device: `device.boot()` wrapper sends `:0<51FA*5>`.

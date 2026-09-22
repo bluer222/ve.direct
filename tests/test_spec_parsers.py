@@ -59,12 +59,16 @@ EXPECTED_COUNTS = {
 
 def scrape_doc_ids(text: str) -> set[int]:
     """Independent crude ID collector: every 0xHHHH occurrence plus ".."
-    range expansion (span-guarded). Deliberately dumber than the parser so
-    parser drops show up as scraped-but-unparsed IDs."""
+    range expansion. Deliberately dumber than the parser so parser drops
+    show up as scraped-but-unparsed IDs. The span guard here is
+    intentionally far more permissive than the parser's 64-register
+    `_expand_id_range` cap (a shared cap would hide the same blind spot on
+    both sides, e.g. a 0x1000..0x10FF span missed by both): only absurd
+    spans such as the BMV Range-column bound 0x0000..0xFFFF are excluded."""
     ids = {int(x, 16) for x in re.findall(r"0x([0-9A-Fa-f]{4})\b", text)}
     for m in re.finditer(r"0x([0-9A-Fa-f]{4})\s*\.\.\s*0x([0-9A-Fa-f]{4})", text):
         a, b = int(m.group(1), 16), int(m.group(2), 16)
-        if 0 < b - a <= 64:
+        if 0 < b - a <= 1024:
             ids.update(range(a, b + 1))
     lines = text.splitlines()
     for i, line in enumerate(lines):
@@ -74,7 +78,7 @@ def scrape_doc_ids(text: str) -> set[int]:
                 m2 = re.match(r"^\s*(0x[0-9A-Fa-f]{4})\s*$", nxt)
                 if m2:
                     b = int(m2.group(1), 16)
-                    if 0 < b - a <= 64:
+                    if 0 < b - a <= 1024:
                         ids.update(range(a, b + 1))
                     break
     return ids
@@ -176,8 +180,9 @@ SCALE_NONE_ALLOW = {
 
 # Registers whose doc genuinely gives no single wire width: struct records
 # (byte-field layouts), write-only commands (Type "-"), firmware-dependent
-# widths (0xEDD1/0xEDD3 "(*4)": un32 <= v1.12, un16 above), and Orion
-# detail-only IDs (Value tables / prose without widths).
+# widths (0xEDD1/0xEDD3 "(*4)": un32 <= v1.12, un16 above; parser normalizes
+# the footnote cell to unknown, provenance in notes), and Orion detail-only
+# IDs (Value tables / prose without widths).
 DTYPE_UNKNOWN_ALLOW = {
     "bluesolar": frozenset({0x0004, 0x1030, 0x104F, 0xEDD1, 0xEDD3})
     | frozenset(range(0x1050, 0x106F))
@@ -386,6 +391,31 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(scale_mismatches, [], f"Scale factor mismatches: {scale_mismatches}")
         self.assertEqual(dtype_mismatches, [], f"Data type mismatches: {dtype_mismatches}")
 
+    def test_parser_dtype_vocabulary(self):
+        """Parser dtypes must use the module convention (known wire widths,
+        struct, write_only, unknown): a verbatim doc cell such as BlueSolar
+        0xEDD1/0xEDD3 "(*4)" normalizes to unknown with the footnote kept in
+        notes, never leaking through even for allowlisted IDs."""
+        vocab = re.compile(
+            r"^(un8|un16|un24|un32|sn8|sn16|sn32|string\d*|unknown|struct|write_only)$",
+            re.IGNORECASE,
+        )
+        reg_dicts = {
+            "bluesolar": self.bs_regs, "orion": self.or_regs,
+            "bmv": self.bmv_regs, "phoenix": self.ph_regs,
+        }
+        bad = [
+            f"{key} 0x{rid:04X}: {r.data_type!r}"
+            for key, reg_dict in reg_dicts.items()
+            for rid, r in reg_dict.items()
+            if not vocab.match(r.data_type)
+        ]
+        self.assertEqual(bad, [], f"Non-convention dtypes leaked: {bad}")
+        # Footnote-contaminated cells keep their provenance in notes.
+        for rid in (0xEDD1, 0xEDD3):
+            self.assertEqual(self.bs_regs[rid].data_type, "unknown")
+            self.assertIn("(*4)", self.bs_regs[rid].notes)
+
     def test_aliased_ids_disambiguation(self):
         """Verify aliased IDs raise AmbiguousRegisterError without flavor and resolve safely with flavor."""
         # 0xED8E: BMV DC_CHANNEL1_POWER (int16, 1W) vs Orion OUTPUT_POWER (uint32, 0.01W)
@@ -418,7 +448,10 @@ class TestSpecParsers(unittest.TestCase):
         missing_pids = [f"0x{pid:04X} ({p.model_name})" for pid, p in self.pids.items() if pid not in T.PID_MAP]
         self.assertEqual(missing_pids, [], f"Parsed PIDs missing from PID_MAP: {missing_pids}")
 
-        # Doc totals against the snapshot (not just parser-vs-code).
+        # Doc totals against the snapshot (not just parser-vs-code). The indent
+        # window here is intentionally wider than the parser's ^\s{10,25} so
+        # a shared-indent blind spot (e.g. an 8-space label row missed by
+        # both) fails loudly as a parser-vs-counter mismatch instead.
         text = self.raw_texts["text"]
         start = text.find("The units used by the serial interface are as follows:")
         end = text.find("Table I Supported Text-mode fields")
@@ -430,7 +463,7 @@ class TestSpecParsers(unittest.TestCase):
         doc_fields = {
             m.group(1)
             for line in section.splitlines()
-            for m in [re.match(r"^\s{10,25}([A-Za-z0-9_#]+)\s{2,}", line)]
+            for m in [re.match(r"^\s{4,40}([A-Za-z0-9_#]+)\s{2,}", line)]
             if m and m.group(1) not in stoplist
         }
         self.assertEqual(len(doc_fields), EXPECTED_COUNTS["fields"])

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import email.utils
+import re
 import shutil
 import subprocess
 import sys
@@ -88,6 +89,58 @@ def remote_last_modified(url: str, timeout: float = 15.0):
     return dt
 
 
+def snapshot_revision_info(text: str):
+    """Parse the document's own revision/date markers out of snapshot text.
+
+    Returns ``(label, date)``: ``label`` like ``"Rev 18"`` / ``"v3.34"`` and
+    ``date`` the latest entry of the Revision Log / Document history /
+    Changes section. Either is ``None`` when the snapshot carries no
+    parseable marker. Content-based (never file mtimes): a fresh checkout
+    mtime is always newer than the remote document, so mtimes prove nothing.
+    """
+    label = None
+    m = re.search(r"(?m)^\s*Rev\s+(\d+)\s*$", text)
+    if m:
+        label = f"Rev {m.group(1)}"
+    else:
+        versions = re.findall(r"(?m)^\s*(3\.\d+)\s+\d{1,2}\s+\w+\s+\d{4}", text)
+        if versions:
+            label = f"v{versions[-1]}"
+
+    # Scope date mining to the revision section (last occurrence: the TOC
+    # may mention "Revision Log"/"Document history" pages much earlier).
+    tail = text
+    marks = [text.rfind(s) for s in ("Revision Log", "Document history", "Changes:")]
+    cut = max(marks)
+    if cut >= 0:
+        tail = text[cut:]
+
+    months = (
+        "January", "February", "March", "April", "May", "June", "July",
+        "August", "September", "October", "November", "December",
+    )
+    dates = []
+    for d, mo, y in re.findall(r"(\d{2})-(\d{2})-(\d{4})", tail):
+        try:
+            dates.append(datetime.date(int(y), int(mo), int(d)))
+        except ValueError:
+            continue
+    for y, mo, d in re.findall(r"(\d{4})-(\d{1,2})-(\d{1,2})", tail):
+        try:
+            dates.append(datetime.date(int(y), int(mo), int(d)))
+        except ValueError:
+            continue
+    for d, mon, y in re.findall(
+        r"(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+        tail,
+    ):
+        try:
+            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+        except ValueError:
+            continue
+    return label, (max(dates) if dates else None)
+
+
 def check_specs(specs_dir: Path) -> bool:
     print(f"Checking specifications in {specs_dir}:")
     all_ok = True
@@ -99,37 +152,45 @@ def check_specs(specs_dir: Path) -> bool:
             print(f"  [MISSING] {key}.txt - {info['description']}")
             all_ok = False
 
-    # Without `pdftotext` snapshots cannot be re-extracted, so mere
-    # existence/size proves nothing about freshness: compare local mtimes
-    # against the online Last-Modified headers (headers only, stdlib-only).
-    # Unverifiable freshness is a failure, not a silent pass.
-    if shutil.which("pdftotext") is None:
-        print("  WARNING: `pdftotext` not found in PATH; snapshots cannot be re-extracted.")
-        print("  Verifying snapshot freshness against online Last-Modified headers...")
-        for key, info in OFFICIAL_SPECS.items():
-            if not all_ok:
-                break
-            try:
-                remote_dt = remote_last_modified(info["url"])
-            except Exception as e:
-                print(f"  [STALE-UNKNOWN] {key}.txt - cannot verify freshness ({e})")
-                all_ok = False
-                continue
-            if remote_dt is None:
-                print(f"  [STALE-UNKNOWN] {key}.txt - server gave no Last-Modified header; freshness unverifiable")
-                all_ok = False
-                continue
-            local_dt = datetime.datetime.fromtimestamp(
-                (specs_dir / f"{key}.txt").stat().st_mtime, tz=datetime.timezone.utc
+    # Freshness is always verified from content, never from file mtimes: a
+    # fresh checkout mtime (2026) is always newer than the remote document
+    # (2023/2025), so an mtime-vs-Last-Modified comparison returns FRESH
+    # without comparing content. Instead each snapshot's own revision/date
+    # markers are compared against the online Last-Modified headers (headers
+    # only, stdlib-only). Unverifiable freshness is a failure, not a pass.
+    print("  Verifying snapshot freshness (content revision vs online Last-Modified)...")
+    for key, info in OFFICIAL_SPECS.items():
+        txt_path = specs_dir / f"{key}.txt"
+        if not txt_path.is_file() or txt_path.stat().st_size == 0:
+            continue  # already reported MISSING above
+        try:
+            label, local_date = snapshot_revision_info(txt_path.read_text(errors="ignore"))
+        except Exception as e:
+            print(f"  [STALE-UNKNOWN] {key}.txt - cannot parse local revision markers ({e})")
+            all_ok = False
+            continue
+        local_mark = f"{label or 'unlabelled'} {local_date.isoformat() if local_date else 'undated'}"
+        try:
+            remote_dt = remote_last_modified(info["url"])
+        except Exception as e:
+            print(f"  [STALE-UNKNOWN] {key}.txt ({local_mark}) - cannot verify freshness ({e})")
+            all_ok = False
+            continue
+        if remote_dt is None or local_date is None:
+            print(
+                f"  [STALE-UNKNOWN] {key}.txt ({local_mark}) - freshness unverifiable "
+                f"(server gave no Last-Modified header)"
             )
-            if remote_dt > local_dt:
-                print(
-                    f"  [STALE] {key}.txt - online copy newer "
-                    f"(remote {remote_dt:%Y-%m-%d}, local {local_dt:%Y-%m-%d}); re-run without --check"
-                )
-                all_ok = False
-            else:
-                print(f"  [FRESH] {key}.txt - up to date with online copy ({remote_dt:%Y-%m-%d})")
+            all_ok = False
+            continue
+        if remote_dt.date() > local_date:
+            print(
+                f"  [STALE] {key}.txt ({local_mark}) - online copy newer "
+                f"(remote {remote_dt:%Y-%m-%d}); re-run without --check"
+            )
+            all_ok = False
+        else:
+            print(f"  [FRESH] {key}.txt ({local_mark}) - up to date with online copy ({remote_dt:%Y-%m-%d})")
     return all_ok
 
 
