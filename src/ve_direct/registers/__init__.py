@@ -39,18 +39,26 @@ AmbiguousRegisterError.
 Flavor policy (deliberately liberal): flavor tags are a superset of the
 strict doc provenance. Registers documented for one family stay visible
 under ANY (or a wider flavor) where another family plausibly shares the
-wire ID — e.g. pluggable-display 0x0400-0x0404 (BlueSolar-HEX: LCD models
+wire ID — e.g. pluggable-display 0x0401-0x0404 (BlueSolar-HEX: LCD models
 only), per-tracker history 0x10A0-0x10BE (BlueSolar-HEX Note 2: MPPT RS
 only, also listed under MPPT), and generic ANY control/status IDs visible
 in the BMV view although absent from BMV-7xx-HEX. Narrowing them would
 break for_flavor() consumers with no wire-behavior contradiction, so the
-stricter provenance lives in docs/SOURCES.md instead.
+stricter provenance lives in docs/SOURCES.md instead. 0x0400 is the
+exception: BMV Rev 7 defines it as Backlight Always On (BOOLEAN) while
+BlueSolar-HEX defines it as Display backlight mode (ENUM), so
+DISPLAY_BACKLIGHT_MODE is scoped to (MPPT, MPPT_RS) and only
+BMV_BACKLIGHT_ALWAYS_ON is visible to BMV/BMV71.
 
 Sentinels decoded as None (encode None back to sentinel):
 - BAT_TEMPERATURE 0xEDEC 0xFFFF, TIME_OF_DAY 0x2031 0xFFFF,
   BATTERY_VOLTAGE_SENSE 0x2002 0xFFFF, BATTERY_TEMPERATURE_SENSE 0x2003
   0x7FFF, ORION_BATTERY_VOLTAGE 0xD18D 0x7FFFFFFF,
-  LOW_TEMP_CHARGE_CURRENT 0xEDE6 0xFFFF (=use max), history/cycle 0xFF/0xFFFF/
+  LOW_TEMP_CHARGE_CURRENT 0xEDE6 0xFFFF (=use max),
+  SETTINGS_CHANGED_TIMESTAMP 0xEC41 0xFFFFFFFF (=Invalid/no settings ever
+  modified, BMV Rev 7 p8),
+  BMV alarm/relay temperature 0x032A-0x032D/0x035A-0x035D 0x0000
+  (=disabled, valid 174..372 K), history/cycle 0xFF/0xFFFF/
   0xFFFFFFFF per-field.
 """
 from __future__ import annotations
@@ -270,8 +278,12 @@ for _reg in [
     _r("ADJUSTABLE_VOLTAGE_MAX", 0x2212, "NUMERIC", "CONSTANT", "uint16_t", "V", 0.01, ("MPPT", "MPPT_RS")),
     # --- relay / display (ANY: relay/display option per model) ---
     # Liberal ANY flavoring by design (see module docstring): BlueSolar-HEX
-    # scopes 0x0400-0x0404 to pluggable-LCD models, but narrowing would break
-    # for_flavor() consumers with no wire contradiction.
+    # scopes 0x0401-0x0404 to pluggable-LCD models, but narrowing would break
+    # for_flavor() consumers with no wire contradiction. 0x0400 is the
+    # exception: BMV Rev 7 defines it as Backlight Always On (Un8 0..1
+    # OFF/ON) while BlueSolar-HEX defines it as Display backlight mode
+    # (0=keypress/1=on/2=auto), so it is scoped to (MPPT, MPPT_RS) so each
+    # flavor resolves to exactly one 0x0400 meaning.
     _r("RELAY_OPERATION_MODE", 0xEDD9, "ENUM", "READ_WRITE", flavors=("ANY",), enum="RELAY_OPERATION_MODE"),
     _r("RELAY_BAT_LOW_SET", 0x0350, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
     _r("RELAY_BAT_LOW_CLEAR", 0x0351, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
@@ -280,7 +292,7 @@ for _reg in [
     _r("RELAY_PANEL_HIGH_SET", 0xEDBA, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
     _r("RELAY_PANEL_HIGH_CLEAR", 0xEDB9, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("ANY",)),
     _r("RELAY_MIN_ENABLED_TIME", 0x100A, "NUMERIC", "READ_WRITE", "uint16_t", "min", 1.0, ("ANY",)),
-    _r("DISPLAY_BACKLIGHT_MODE", 0x0400, "ENUM", "READ_WRITE", flavors=("ANY",), enum="DISPLAY_BACKLIGHT_MODE"),
+    _r("DISPLAY_BACKLIGHT_MODE", 0x0400, "ENUM", "READ_WRITE", flavors=("MPPT", "MPPT_RS"), enum="DISPLAY_BACKLIGHT_MODE"),
     _r("DISPLAY_BACKLIGHT_INTENSITY", 0x0401, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("ANY",)),
     _r("DISPLAY_SCROLL_SPEED", 0x0402, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("ANY",)),
     _r("DISPLAY_SETUP_LOCK", 0x0403, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("ANY",)),
@@ -758,6 +770,15 @@ _NONE_SENTINELS: dict[int, set[int]] = {
     0x2003: {0x7FFF},
     0xD18D: {0x7FFFFFFF},
     0xEC41: {0xFFFFFFFF},
+    # BMV Rev 7 Monitor/Relay tables: 0=disabled (valid 174..372 K).
+    0x032A: {0},
+    0x032B: {0},
+    0x032C: {0},
+    0x032D: {0},
+    0x035A: {0},
+    0x035B: {0},
+    0x035C: {0},
+    0x035D: {0},
 }
 
 

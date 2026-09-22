@@ -92,18 +92,17 @@ def decode_app_version_24(raw: bytes | int | object) -> dict:
     else:
         raw_b = bytes(raw)
     h = raw_b.hex().upper()
-    if len(raw_b) >= 4:
-        identifier = raw_b[0]
-        ll = raw_b[1]
-        mm = raw_b[2]
-        hh = raw_b[3]
-    elif len(raw_b) == 3:
-        identifier = 0
-        ll = raw_b[0]
-        mm = raw_b[1]
-        hh = raw_b[2]
-    else:
+    # Orion-XS §1.1 register 0x0102 is un32: byte0 identifier 0x00 +
+    # 0xHHMMLL. Require the documented 4-byte shape; anything else
+    # (incl. 3-byte id-less input) is undocumented: unknown, never decoded.
+    if len(raw_b) != 4:
         return {"version": None, "type": "unknown", "raw": h}
+    if raw_b[0] != 0x00:
+        return {"version": None, "type": "unknown", "raw": h}
+    identifier = raw_b[0]
+    ll = raw_b[1]
+    mm = raw_b[2]
+    hh = raw_b[3]
 
     major = f"{hh}"
     minor = f"{mm:02X}"

@@ -220,8 +220,16 @@ class BlueSolarHEXParser:
         for line in section.splitlines():
             if not re.match(r"^\s*0x[0-9A-Fa-f]{4}\b", line):
                 continue
-            if any(skip in line for skip in ["0xEDEF will always", "A VE.Direct TX", "firmware version"]):
-                continue
+            # Skip known prose-note lines that happen to start with a
+            # register-looking ID. Each pattern is anchored to its exact note
+            # text: a bare "firmware version" substring would also drop any
+            # future table row whose description mentions firmware versions.
+            if re.match(r"^\s*0xEDEF will always\b", line):
+                continue  # Note 4 continuation on 0xEDEA ("will always reports ...")
+            if re.match(r"^\s*0xA046 and higher\)", line):
+                continue  # Note 3 continuation ("0xA046 and higher). A VE.Direct TX ...")
+            if re.match(r"^\s*0x0300\)", line):
+                continue  # History intro ("0x0300). The history registers are ...")
 
             # Token-anchored split (not \s{2,} gaps): tolerates single-space
             # columns and any-case dtypes; footnote dtypes ("(*4)") fall out
@@ -759,6 +767,11 @@ class PhoenixInverterHEXParser:
             rid = int(tokens[0], 16)
             name = tokens[1].strip()
             access = tokens[2].strip()
+            if access == "R/(W)":
+                # 0x0150 BLE capabilities prints "R/(W)" (parenthesised W =
+                # conditional write); the library models CAPABILITIES_BLE as
+                # read-only, so the read side is the comparable access.
+                access = "R"
             dtype = "unknown"
             if len(tokens) >= 4 and re.match(r"^(un8|un16|un24|un32|sn8|sn16|sn32|string\d*|-)$", tokens[3], re.IGNORECASE):
                 dtype = tokens[3].strip().lower()
@@ -770,8 +783,13 @@ class PhoenixInverterHEXParser:
             if len(tokens) >= 5:
                 p4 = tokens[4].strip()
                 if not p4.endswith(")") and p4 != "-":
+                    # Trailing-slash scale cell (0xEB10 "0.02/ s", with the
+                    # 60 Hz sibling "0.016" on the next layout line; Note 4
+                    # expresses the period count for 50 or 60 Hz AC-out): the
+                    # slash marks the 50/60 Hz alternation, the numeric part
+                    # is the doc's scale factor, not a missing value.
                     try:
-                        scale = float(p4)
+                        scale = float(p4.rstrip("/"))
                     except ValueError:
                         scale = None
             if len(tokens) >= 6:
@@ -810,6 +828,66 @@ class PhoenixInverterHEXParser:
                     "(known Victron typo, not a second register)"
                 )
         return evidence
+
+
+#: Units vocabulary printed in the Text-mode fields tables' Units column
+#: (doc-derived: mV/mA/W/mAh/°C/‰/Minutes/Seconds bare units, "0.01 kWh"
+#: energy counters, "0.01 V"/"0.1 A" AC/DC rows, "VA" apparent power, "1W"
+#: DC input power). The lookahead keeps a description starting with "W"
+#: (e.g. "Warning reason") from matching the "W" unit. Anything else
+#: starting a row's remainder is the description (Units column empty:
+#: Alarm/Relay/AR/OR/ERR/CS/LOAD/FW/...).
+_TEXT_UNITS_RE = re.compile(
+    r"^(0\.01 kWh|0\.01 V|0\.1 A|mAh|mV|mA|VA|1W|W|°C|‰|Minutes|Seconds)(?=$|[\s\d])"
+)
+
+#: Footnote reference glued after the units cell (doc footnotes 1..20 are
+#: defined below the tables): "mAh11", "mV3", "‰10,11",
+#: "Minutes10, 11,12", "°C 8", "mAh 10,11", or a bare "11" where the Units
+#: column is empty (H4/H5/H10). ParsedTextField has no footnote slot, so
+#: these references are stripped, never stored.
+_TEXT_FOOTNOTE_RE = re.compile(r"^\s*\d[\d\s,]*")
+
+#: Lines that can never be a description continuation (page furniture and
+#: the device-column header of the next table).
+_TEXT_CONT_EXCLUDE = ("60x", "Victron Energy", "General phone", "www.victronenergy", "Label")
+
+
+def _split_text_units_desc(rest: str) -> Tuple[str, str]:
+    """Split a fields-table row remainder into ``(units, description)``.
+
+    Strips footnote references and the device-bullet tail (bullets belong to
+    the device columns, parsed separately). Returns ``("", "")`` when the
+    row carries only units+footnote (H1) or a bare footnote (H4/H5/H10):
+    the description then lives on the continuation line. No description in
+    the doc starts with a digit, so a leading digit run is always a
+    footnote, never description text.
+    """
+    units = ""
+    m = _TEXT_UNITS_RE.match(rest)
+    if m:
+        units = m.group(1)
+        rest = rest[m.end():]
+        fm = _TEXT_FOOTNOTE_RE.match(rest)
+        if fm:
+            rest = rest[fm.end():]
+    elif re.fullmatch(r"\d[\d\s,]*", rest.strip()):
+        return "", ""  # bare footnote cell, description on continuation line
+    return units, rest.split("•", 1)[0].strip()
+
+
+def _is_desc_continuation(line: str) -> bool:
+    """True for description-column continuation lines (indent >= 40).
+
+    Footnote prose (indent <= ~27), page furniture (indent 0) and the
+    next table's device-column header never qualify.
+    """
+    s = line.strip()
+    if not s:
+        return False
+    if len(line) - len(line.lstrip(" ")) < 40:
+        return False
+    return not any(x in line for x in _TEXT_CONT_EXCLUDE)
 
 
 class VEDirectTextParser:
@@ -854,9 +932,7 @@ class VEDirectTextParser:
         lines = section.splitlines()
         tables = self._device_column_starts(lines)
 
-        label_re = re.compile(
-            r"^\s{10,25}([A-Za-z0-9_#]+)\s{2,}([A-Za-z0-9/%#\-\.\s]+?)\s{2,}(.+)$"
-        )
+        label_re = re.compile(r"^\s{10,25}([A-Za-z0-9_#]+)\s{2,}(.*?)\s*$")
         stoplist = {
             "Label", "Table", "The", "Note", "Victron", "General", "E-mail",
             "When", "Both", "Available", "60x",
@@ -901,9 +977,17 @@ class VEDirectTextParser:
                     pending = None
                     continue
                 flush(idx)
-                pending = [label, m.group(2).strip(), m.group(3).strip(), [line]]
+                units, desc = _split_text_units_desc(m.group(2))
+                pending = [label, units, desc, [line]]
             elif pending is not None:
                 pending[3].append(line)
+                # Continuation description: rows whose remainder held only a
+                # footnote (H1/H4/H5/H10) carry the description on the next
+                # description-column line; H17/H18 split "...(BMV) /" across
+                # two lines. Other lines only extend the device-bullet scan.
+                if (pending[2] == "" or pending[2].endswith("/")) and _is_desc_continuation(line):
+                    cont = line.split("•", 1)[0].strip()
+                    pending[2] = cont if pending[2] == "" else pending[2] + " " + cont
         flush(len(lines))
         return fields
 

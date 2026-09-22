@@ -192,8 +192,10 @@ also re-resolved by wire ID so generic names cannot silently use another
 product's scale, width, enum, or access mode:
 
 - `0x0320/0x0321`: `ALARM_LOW_VOLTAGE_SET/CLEAR` (INV, 0.01V) vs
-  `INPUT_VOLTAGE_LOCKOUT/RESTART` (Orion, 0.1V)
-- `0xEDBB/0xEDBD/0xEDBC/0xED8D/0xED8F`: `PANEL_*`/`DC_CHANNEL1_*` (MPPT/BMV)
+  `INPUT_VOLTAGE_LOCKOUT/RESTART` (Orion, 0.1V) vs
+  `BMV_ALARM_LOW_VOLTAGE/CLEAR` (BMV, 0.1V)
+- `0xEDBB/0xEDBD/0xEDBC/0xED8D/0xED8F`: `PANEL_*`/`DC_CHANNEL1_*` (MPPT/BMV,
+  plus INV for 0xED8D per Phoenix Rev 5 section 2.5)
   vs `INPUT_*/OUTPUT_*` (Orion) — same scale, different names
 - `0xED8E`: `DC_CHANNEL1_POWER` (BMV, int16, 1W) vs `OUTPUT_POWER`
   (Orion, uint32, 0.01W)
@@ -208,13 +210,18 @@ Flavor tags are a superset of strict doc provenance and are intentionally
 not narrowed, because narrowing would break `for_flavor()` consumers with
 no wire-behavior contradiction:
 
-- Display `0x0400-0x0404` are `ANY` although BlueSolar-HEX scopes them to
+- Display `0x0401-0x0404` are `ANY` although BlueSolar-HEX scopes them to
   pluggable-LCD models; `0x0406`/`0x0408` stay `MPPT_RS` (internal display).
+  `0x0400` is the exception: BMV Rev 7 defines it as Backlight Always On
+  (Un8 0..1 OFF/ON) while BlueSolar-HEX defines it as Display backlight
+  mode (0=keypress/1=on/2=auto), so `DISPLAY_BACKLIGHT_MODE` is scoped to
+  (`MPPT`, `MPPT_RS`) and only `BMV_BACKLIGHT_ALWAYS_ON` is visible to
+  `BMV`/`BMV71`.
 - `MPPT_HISTORY_*` (`0x10A0-0x10BE`) carry `MPPT` as well as `MPPT_RS`
   although BlueSolar-HEX Note 2 restricts them to multi-tracker units.
 - Generic `ANY` control/status IDs (`APP_VER 0x0102`, `GROUP_ID`,
   `CAPABILITIES`, `DEVICE_MODE`/`DEVICE_STATE`, `WARNING`/`ALARM_REASON`,
-  `RELAY_OPERATION_MODE`, `RELAY_PANEL_HIGH_*`, `DISPLAY_*`) are visible in
+  `RELAY_OPERATION_MODE`, `RELAY_PANEL_HIGH_*`, `DISPLAY_0x0401-0x0404`) are visible in
   the BMV view although BMV-7xx-HEX Rev 7 defines no such registers (verified
   by ID search of the snapshot: `0x0102`/`0x0104`/`0x0140`/`0x031C`/`0x031E`/
   `0xEDD9`/`0xEDBA`/`0xEDB9`/`0x0401`-`0x0404` never occur there, and

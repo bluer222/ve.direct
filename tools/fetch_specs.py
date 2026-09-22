@@ -189,8 +189,17 @@ def check_specs(specs_dir: Path) -> bool:
                 f"(remote {remote_dt:%Y-%m-%d}); re-run without --check"
             )
             all_ok = False
-        else:
+        elif remote_dt.date() < local_date:
             print(f"  [FRESH] {key}.txt ({local_mark}) - up to date with online copy ({remote_dt:%Y-%m-%d})")
+        else:
+            # Same calendar day: the local marker is day-granularity while
+            # the remote Last-Modified header carries intraday time, so an
+            # intraday remote revision is unorderable. Unverifiable, not fresh.
+            print(
+                f"  [STALE-UNKNOWN] {key}.txt ({local_mark}) - remote revision "
+                f"is same-day ({remote_dt:%Y-%m-%d}); freshness unverifiable"
+            )
+            all_ok = False
     return all_ok
 
 

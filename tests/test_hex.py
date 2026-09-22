@@ -118,6 +118,22 @@ class TestHex(unittest.TestCase):
         get = H.decode_line(H.build_get(0xEDBB))
         self.assertEqual(get.register_id, 0xEDBB)
 
+    def test_app_version_24_requires_4byte_shape(self):
+        # Orion-XS §1.1 reg 0x0102 is un32 (byte0 id 0x00 + 0xHHMMLL).
+        # 3-byte input is undocumented: unknown, never a decoded version.
+        d3 = H.decode_app_version_24(bytes.fromhex("FF0201"))
+        self.assertIsNone(d3["version"])
+        self.assertEqual(d3["type"], "unknown")
+        # Documented 4-byte shape decodes.
+        d4 = H.decode_app_version_24(bytes.fromhex("00FF0201"))
+        self.assertEqual(d4["version"], "1.02")
+        self.assertEqual(d4["type"], "release")
+        # Non-zero identifier is undocumented: unknown (register path
+        # requires byte0 == 0x00 before calling this decoder).
+        bad_id = H.decode_app_version_24(bytes.fromhex("01FF0201"))
+        self.assertIsNone(bad_id["version"])
+        self.assertEqual(bad_id["type"], "unknown")
+
     def test_unknown_encoding_doc_typo(self):
         # Orion-XS §1.3 prints :30300F4 but it fails checksum; :303004F is right.
         self.assertEqual(H.encode_frame(0x3, b"\x03\x00"), b":303004F\n")

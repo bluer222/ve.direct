@@ -16,10 +16,13 @@ instead of merely asserting what the parser already found.
 
 from __future__ import annotations
 
+import datetime
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Make `python3 -m unittest discover -s tests` work in a bare checkout without
 # PYTHONPATH (other test modules rely on import-order side effects for this).
@@ -28,6 +31,8 @@ sys.path.insert(0, str(project_root / "src"))
 sys.path.insert(0, str(project_root / "tools"))
 
 from spec_parser import load_all_specs
+import fetch_specs
+from fetch_specs import check_specs, extract_text, remote_last_modified, snapshot_revision_info
 import ve_direct.registers as R
 from ve_direct.exceptions import AmbiguousRegisterError
 import ve_direct.tables as T
@@ -90,12 +95,16 @@ def scrape_doc_ids(text: str) -> set[int]:
 NON_REGISTER_IDS = {
     # BlueSolar: 0x0064/0x0096 message-example values; 0x0101 firmware-version
     # illustration ("0x0101 is version 1.01", no such register); 0x0300 and
-    # 0xA040..0xA117 are product IDs here (0x0300 is a BMV history register,
-    # not a BlueSolar HEX register); 0x4116 app-version example; 0xD101
-    # release-candidate illustration; 0x7FFF/0xFFFF reserved/sentinel values;
-    # 0xAAAA framing error; 0xEFF0 typo for 0xEDF0.
+    # 0xA040..0xA07E + 0xA102..0xA117 are product IDs here (0x0300 is a BMV
+    # history register, not a BlueSolar HEX register); the product-ID
+    # appendix jumps from 0xA07E to 0xA102, so the 0xA07F..0xA101 gap (131
+    # IDs) is never scraped and stays out of the denylist; 0x4116
+    # app-version example; 0xD101 release-candidate illustration;
+    # 0x7FFF/0xFFFF reserved/sentinel values; 0xAAAA framing error; 0xEFF0
+    # typo for 0xEDF0.
     "bluesolar": frozenset({0x0064, 0x0096, 0x0101, 0x0300, 0x4116, 0x7FFF, 0xAAAA, 0xD101, 0xEFF0, 0xFFFF})
-    | frozenset(range(0xA040, 0xA118)),
+    | frozenset(range(0xA040, 0xA07F))  # appendix 0xA040..0xA07E
+    | frozenset(range(0xA102, 0xA118)),  # appendix 0xA102..0xA117
     # Orion: 0x0064/0x01F4 example values; 0x7FFF ping-response illustration;
     # 0xA3F0/0xA3F1 product IDs; rest as above.
     "orion": frozenset({0x0064, 0x01F4, 0x7FFF, 0xAAAA, 0xEFF0, 0xFFFF, 0xA3F0, 0xA3F1}),
@@ -168,14 +177,29 @@ SCALE_NONE_ALLOW = {
         0xEEF9,  # SW version, Step "-" (HEX AA.BB format)
     }),
     # Phoenix: product info/caps, mode/state/off/warn/alarm/relay (0/1-style,
-    # no factor), 50/60Hz select, eco retry (note-garbled "0.02/" scale cell),
-    # NVM command, dynamic-cutoff factor/enable cells without factors,
-    # settings-changed timestamp, restore-defaults.
+    # no factor), 50/60Hz select, NVM command, dynamic-cutoff factor/enable
+    # cells without factors, settings-changed timestamp, restore-defaults.
+    # 0xEB10 prints "0.02/" (50 Hz period, 60 Hz sibling "0.016" on the next
+    # layout line): a real factor parsed as 0.02, so it is not allowlisted
+    # here; its DB-vs-doc value difference is a documented exception, see
+    # SCALE_VALUE_EXCEPTIONS below.
     "phoenix": frozenset({
         0x0004, 0x0090, 0x0100, 0x0101, 0x0102, 0x010A, 0x010B, 0x0140, 0x0150,
         0x0200, 0x0201, 0x0207, 0x031C, 0x031E, 0x034E, 0x034F,
-        0xEB03, 0xEB10, 0xEB99, 0xEBB2, 0xEBB3, 0xEBB5, 0xEBB7, 0xEBBA, 0xEC41,
+        0xEB03, 0xEB99, 0xEBB2, 0xEBB3, 0xEBB5, 0xEBB7, 0xEBBA, 0xEC41,
     }),
+}
+
+# Registers where the doc's printed factor is deliberately NOT the DB scale
+# (explicitly justified per entry; the comparison below asserts the DB value
+# instead of the printed factor, so drift on either side still fails).
+SCALE_VALUE_EXCEPTIONS = {
+    # Phoenix 0xEB10: Scale cell "0.02/" (50 Hz period; "0.016" for 60 Hz on
+    # the next layout line), Unit "s" — but Note 4 defines the wire value as
+    # a COUNT of AC-out periods, so no single constant is a correct scale
+    # (hardcoding 0.02 would misdecode 60 Hz units by 25%). The DB stores raw
+    # counts (scale 1.0, unit ""), documented at the register definition.
+    ("phoenix", 0xEB10): 1.0,
 }
 
 # Registers whose doc genuinely gives no single wire width: struct records
@@ -369,9 +393,11 @@ class TestSpecParsers(unittest.TestCase):
 
                 # 3. Scale factor compliance
                 if spec_reg.scale is not None:
-                    if reg.scale is None or abs(reg.scale - spec_reg.scale) > 1e-5:
+                    expected_scale = SCALE_VALUE_EXCEPTIONS.get(
+                        (key, rid), spec_reg.scale)
+                    if reg.scale is None or abs(reg.scale - expected_scale) > 1e-5:
                         actual = reg.scale if reg else "NOT_FOUND"
-                        scale_mismatches.append(f"{doc_name} 0x{rid:04X} ({spec_reg.name}): expected scale {spec_reg.scale}, got {actual}")
+                        scale_mismatches.append(f"{doc_name} 0x{rid:04X} ({spec_reg.name}): expected scale {expected_scale}, got {actual}")
 
                 # 4. Strict data type compliance (no skipping empty dtypes)
                 expected = expected_dtype(spec_reg.data_type)
@@ -478,9 +504,18 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(len(doc_pid_rows), EXPECTED_COUNTS["pids"])
         self.assertEqual(len(self.pids), EXPECTED_COUNTS["pids"])
 
-        # The phased-out BlueSolar MPPT 70|15 row must be present and flagged.
-        self.assertIn(0x0300, self.pids)
-        self.assertTrue(self.pids[0x0300].phased_out, "0x0300 must be flagged phased-out")
+        # All 16 "These models are phased out" *-marked rows (verified against
+        # the snapshot PID table: 0x0300 + 6 MPPT + 9 Phoenix Inverter rows)
+        # must parse as phased_out.
+        for pid in (
+            0x0300,
+            0xA040, 0xA041, 0xA044, 0xA045, 0xA051, 0xA052,
+            0xA201, 0xA202, 0xA204,
+            0xA211, 0xA212, 0xA214,
+            0xA221, 0xA222, 0xA224,
+        ):
+            self.assertIn(pid, self.pids, f"0x{pid:04X} missing from parsed PIDs")
+            self.assertTrue(self.pids[pid].phased_out, f"0x{pid:04X} must be flagged phased-out")
 
     def test_text_field_devices(self):
         """Device columns must be parsed (never empty) and spot-check against the doc."""
@@ -502,6 +537,62 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(self.text_fields["MON"].devices, ["BMV71x"])
         for label in ("DC_IN_V", "DC_IN_I", "DC_IN_P"):
             self.assertEqual(self.text_fields[label].devices, ["BuckBoost"], label)
+
+    def test_text_field_units_and_descriptions(self):
+        """Units/descriptions for footnote-split, continuation-line and
+        empty-Units rows (doc truth from the Text 3.34 fields tables, not
+        parser output: "Consumed" keeps the doc's own typo)."""
+        expected = {
+            # Footnote glued into the Units cell ("mAh 10,11", "‰10,11",
+            # "Minutes10, 11,12").
+            "CE": ("mAh", "Consumed Amp Hours"),
+            "SOC": ("‰", "State-of-charge"),
+            "TTG": ("Minutes", "Time-to-go"),
+            # Footnote glued without space ("mAh11", "mV3", "Seconds11").
+            "H2": ("mAh", "Depth of the last discharge"),
+            "H3": ("mAh", "Depth of the average discharge"),
+            "H6": ("mAh", "Cumulative Amp Hours drawn"),
+            "H9": ("Seconds", "Number of seconds since last full charge"),
+            "H15": ("mV", "Minimum auxiliary (battery) voltage"),
+            "H16": ("mV", "Maximum auxiliary (battery) voltage"),
+            # Description on the continuation line (bare "11" footnote or
+            # "mAh 11" units+footnote row).
+            "H1": ("mAh", "Depth of the deepest discharge"),
+            "H4": ("", "Number of charge cycles"),
+            "H5": ("", "Number of full discharges"),
+            "H10": ("", "Number of automatic synchronizations"),
+            # Split "...(BMV) /" description joined across two lines.
+            "H17": ("0.01 kWh", "Amount of discharged energy (BMV) / Amount of produced energy (DC monitor)"),
+            "H18": ("0.01 kWh", "Amount of charged energy (BMV) / Amount of consumed energy (DC monitor)"),
+            # Empty Units column: description leaked into units before.
+            "AR": ("", "Alarm reason"),
+            "Alarm": ("", "Alarm condition active"),
+            "Relay": ("", "Relay state"),
+            "OR": ("", "Off reason"),
+            "ERR": ("", "Error code"),
+            "CS": ("", "State of operation"),
+            "LOAD": ("", "Load output state (ON/OFF)"),
+            "HSDS": ("", "Day sequence number (0..364)"),
+            "H11": ("", "Number of low main voltage alarms"),
+            # Non-ASCII units previously dropped to empty/footnote-only.
+            "T": ("°C", "Battery temperature"),
+            "DM": ("‰", "Mid-point deviation of the battery bank"),
+            "V": ("mV", "Main or channel 1 (battery) voltage"),
+        }
+        for label, (units, desc) in expected.items():
+            with self.subTest(label=label):
+                self.assertIn(label, self.text_fields)
+                self.assertEqual(self.text_fields[label].units, units)
+                self.assertEqual(self.text_fields[label].description, desc)
+        # Device bullets belong to the device columns, never to text.
+        leaked = [label for label, f in self.text_fields.items() if "•" in f.description]
+        self.assertEqual(leaked, [], f"Descriptions leaking device bullets: {leaked}")
+        # Footnote digits must not glue onto units ("mAh11", "mV3",
+        # "mAh 10,11"): legit digit-bearing units ("0.01 kWh", "0.1 A",
+        # "1W") never have a letter directly followed by a digit or a comma.
+        glued = [label for label, f in self.text_fields.items()
+                 if re.search(r",|[A-Za-z‰°]\d", f.units)]
+        self.assertEqual(glued, [], f"Units with glued footnotes: {glued}")
 
     def test_cs_states_full_coverage(self):
         """parse_cs_states must cover the whole section incl. 11/245-248/252."""
@@ -545,6 +636,11 @@ class TestSpecParsers(unittest.TestCase):
 
     def test_access_and_product_specific_semantics(self):
         access_map = {"R": "READ_ONLY", "W": "WRITE_ONLY", "R/W": "READ_WRITE"}
+        # Doc "R/(W)" on 0x0150 normalizes to the read side so this check
+        # asserts it instead of skipping (expected=None); doc "0.02/" on
+        # 0xEB10 normalizes to its numeric factor.
+        self.assertEqual(self.ph_regs[0x0150].access, "R")
+        self.assertEqual(self.ph_regs[0xEB10].scale, 0.02)
         mismatches = []
         for rid, spec_reg in self.ph_regs.items():
             expected = access_map.get(spec_reg.access)
@@ -571,6 +667,125 @@ class TestSpecParsers(unittest.TestCase):
         with self.assertRaises(KeyError):
             R.lookup(0x0160, flavor="INV")
         self.assertIn(0xFFFFFFFF, R._NONE_SENTINELS[0xEC41])
+
+
+class TestFetchSpecs(unittest.TestCase):
+    """Cover the fetch_specs branches the parser suite never touches (all
+    network/subprocess touchpoints mocked; synthetic inputs only)."""
+
+    def test_snapshot_revision_info_rev_format(self):
+        label, date = snapshot_revision_info(
+            "Title\nRev 18\n\nRevision Log\n\n15-11-2021 some change\n"
+        )
+        self.assertEqual(label, "Rev 18")
+        self.assertEqual(date, datetime.date(2021, 11, 15))
+
+    def test_snapshot_revision_info_version_history_format(self):
+        label, date = snapshot_revision_info(
+            "Doc\nDocument history\n3.33             06 June 2023\n"
+            "3.34             14 April 2025\n"
+        )
+        self.assertEqual(label, "v3.34")
+        self.assertEqual(date, datetime.date(2025, 4, 14))
+
+    def test_snapshot_revision_info_iso_format(self):
+        label, date = snapshot_revision_info(
+            "Doc\nChanges:\n3) 2018-11-22\n4) 2019-09-27\n"
+        )
+        self.assertIsNone(label)
+        self.assertEqual(date, datetime.date(2019, 9, 27))
+
+    def test_snapshot_revision_info_no_markers(self):
+        self.assertEqual(snapshot_revision_info("hello world"), (None, None))
+
+    def test_remote_last_modified_ok(self):
+        with mock.patch("urllib.request.urlopen") as mu:
+            mu.return_value.__enter__.return_value.headers = {
+                "Last-Modified": "Wed, 21 Oct 2015 07:28:00 GMT"
+            }
+            dt = remote_last_modified("http://example/x.pdf")
+        self.assertEqual(dt, datetime.datetime(2015, 10, 21, 7, 28, tzinfo=datetime.timezone.utc))
+
+    def test_remote_last_modified_naive_assumes_utc(self):
+        with mock.patch("urllib.request.urlopen") as mu:
+            mu.return_value.__enter__.return_value.headers = {
+                "Last-Modified": "21 Oct 2015 07:28:00"
+            }
+            dt = remote_last_modified("http://example/x.pdf")
+        self.assertIsNotNone(dt)
+        self.assertIsNotNone(dt.tzinfo)
+
+    def test_remote_last_modified_no_header(self):
+        with mock.patch("urllib.request.urlopen") as mu:
+            mu.return_value.__enter__.return_value.headers = {}
+            self.assertIsNone(remote_last_modified("http://example/x.pdf"))
+
+    def test_remote_last_modified_bad_date(self):
+        with mock.patch("urllib.request.urlopen") as mu:
+            mu.return_value.__enter__.return_value.headers = {
+                "Last-Modified": "not a date"
+            }
+            self.assertIsNone(remote_last_modified("http://example/x.pdf"))
+
+    def test_extract_text_without_pdftotext(self):
+        with mock.patch("shutil.which", return_value=None):
+            self.assertFalse(extract_text(Path("a.pdf"), Path("a.txt")))
+
+    def _write_all_specs(self, tmp: Path, text: str) -> None:
+        for key in fetch_specs.OFFICIAL_SPECS:
+            (tmp / f"{key}.txt").write_text(text)
+
+    def test_check_specs_fresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
+            ):
+                self.assertTrue(check_specs(Path(tmp)))
+
+    def test_check_specs_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+            ):
+                self.assertFalse(check_specs(Path(tmp)))
+
+    def test_check_specs_same_day_is_unknown_not_fresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2023, 2, 1, 18, 0, tzinfo=datetime.timezone.utc),
+            ):
+                self.assertFalse(check_specs(Path(tmp)))
+
+    def test_check_specs_unverifiable_remote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
+            with mock.patch.object(fetch_specs, "remote_last_modified", return_value=None):
+                self.assertFalse(check_specs(Path(tmp)))
+
+    def test_check_specs_undated_local(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "no markers here\n")
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
+            ):
+                self.assertFalse(check_specs(Path(tmp)))
+
+    def test_check_specs_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
+            (Path(tmp) / "BlueSolar-HEX-protocol.txt").unlink()
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
+            ):
+                self.assertFalse(check_specs(Path(tmp)))
 
 
 if __name__ == "__main__":

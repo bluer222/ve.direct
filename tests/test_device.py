@@ -252,7 +252,7 @@ class TestDevice(unittest.TestCase):
             # Orion deprecated :3 -> Unknown incl. fallback to 0x0102.
             sim6 = SimulatedTransport(
                 text_chunks=[], flavor="ORION",
-                hex_replies={0x0102: bytes.fromhex("FF0201")})
+                hex_replies={0x0102: bytes.fromhex("00FF0201")})
             dev6 = AsyncVEDirect(sim6.read_chunk, sim6.write, flavor="ORION")
             info6 = await dev6.get_app_version_info(timeout=2)
             self.assertEqual(info6["version"], "1.02")
@@ -261,7 +261,7 @@ class TestDevice(unittest.TestCase):
             # as RegisterError with no undocumented 0x0102 fallback.
             sim6b = SimulatedTransport(
                 text_chunks=[], flavor="ORION",
-                hex_replies={0x0102: bytes.fromhex("FF0201")})
+                hex_replies={0x0102: bytes.fromhex("00FF0201")})
             dev6b = AsyncVEDirect(sim6b.read_chunk, sim6b.write,
                                    flavor="MPPT")
             with self.assertRaises(RegisterError):
@@ -483,7 +483,7 @@ class TestDevice(unittest.TestCase):
             dev = AsyncVEDirect(lambda n: _aio.sleep(10), lambda d: None, flavor="ORION")
             fut = _aio.get_running_loop().create_future()
             # Register 0x0102 reply: 4 bytes payload: 00 FF 02 01 (release v1.02)
-            frame = _H.decode_line(_H.encode_frame(_H.CMD_GET, bytes.fromhex("020100FF0201")))
+            frame = _H.decode_line(_H.encode_frame(_H.CMD_GET, bytes.fromhex("02010000FF0201")))
             fut.set_result(frame)
             dev.hex_get_raw = lambda reg_id, timeout=2.0: fut
             info = await dev.get_app_version_info()
@@ -545,6 +545,76 @@ class TestDevice(unittest.TestCase):
             frame = _H.decode_line(_H.encode_frame(_H.CMD_ASYNC, payload))
             with self.assertRaises(RegisterError, msg=payload.hex()):
                 dev.decode_async_frame(frame, flavor="MPPT")
+
+    def test_truncated_get_set_does_not_resolve(self):
+        """2-byte id-only Get/Set (e.g. id 0xEDBB) must not resolve waiter."""
+        import asyncio as _aio
+        from ve_direct import hex as _H
+        from ve_direct.exceptions import RegisterError
+
+        async def go():
+            loop = _aio.get_running_loop()
+            for cmd in (_H.CMD_GET, _H.CMD_SET):
+                dev, _ = self._dev()
+                fut = loop.create_future()
+                dev._register_waiter = (0xEDBB, cmd, fut)
+                frame = _H.decode_line(_H.encode_frame(cmd, bytes.fromhex("BBED")))
+                with self.assertRaises(RegisterError, msg=hex(cmd)):
+                    dev._handle_hex(frame)
+                self.assertFalse(fut.done(), msg=hex(cmd))
+                fut.cancel()
+        run(go())
+
+    def test_empty_done_rejected(self):
+        """Empty/short Done must fail waiter; get_app_version() raises."""
+        import asyncio as _aio
+        from ve_direct import hex as _H
+        from ve_direct.exceptions import RegisterError
+
+        async def go():
+            loop = _aio.get_running_loop()
+            for payload in (b"", b"\x00"):
+                dev, _ = self._dev()
+                fut = loop.create_future()
+                dev._command_waiter = (_H.CMD_DONE, fut)
+                frame = _H.decode_line(_H.encode_frame(_H.CMD_DONE, payload))
+                dev._handle_hex(frame)
+                self.assertTrue(fut.done())
+                with self.assertRaises(RegisterError, msg=payload.hex()):
+                    fut.result()
+            # Accessor layer also rejects (mocked transact bypassing _handle_hex).
+            dev2, _ = self._dev()
+            fut2 = loop.create_future()
+            fut2.set_result(_H.decode_line(_H.encode_frame(_H.CMD_DONE, b"")))
+            dev2._command_transact = lambda cmd, expected, t: fut2
+            with self.assertRaises(RegisterError):
+                await dev2.get_app_version(timeout=0.1)
+        run(go())
+
+    def test_empty_ping_rejected(self):
+        """Empty/short PingResp must fail waiter; ping() raises."""
+        import asyncio as _aio
+        from ve_direct import hex as _H
+        from ve_direct.exceptions import RegisterError
+
+        async def go():
+            loop = _aio.get_running_loop()
+            for payload in (b"", b"\x00"):
+                dev, _ = self._dev()
+                fut = loop.create_future()
+                dev._command_waiter = (_H.CMD_PING, fut)
+                frame = _H.decode_line(_H.encode_frame(_H.CMD_PING, payload))
+                dev._handle_hex(frame)
+                self.assertTrue(fut.done())
+                with self.assertRaises(RegisterError, msg=payload.hex()):
+                    fut.result()
+            dev2, _ = self._dev()
+            fut2 = loop.create_future()
+            fut2.set_result(_H.decode_line(_H.encode_frame(_H.CMD_PING, b"")))
+            dev2._command_transact = lambda cmd, expected, t: fut2
+            with self.assertRaises(RegisterError):
+                await dev2.ping(timeout=0.1)
+        run(go())
 
     def test_product_id_rs_rejects_two_byte(self):
         """MPPT_RS/ORION 2-byte PID rejected (BlueSolar §1.1: ignore)."""

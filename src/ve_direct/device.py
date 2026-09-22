@@ -198,6 +198,15 @@ class AsyncVEDirect:
             self.async_frames.put_nowait(frame)
             return
         if frame.cmd in (_hex.CMD_GET, _hex.CMD_SET):
+            # BlueSolar-HEX §1 / Orion-XS-HEX §1 Get/Set response =
+            # u16 id + u8 flags + value (minimum 3 bytes). A shorter
+            # payload (e.g. 2-byte id-only) has flags None->0 and would
+            # otherwise resolve with id bytes as a bogus value: reject
+            # as malformed without touching the waiter (caller times out).
+            if len(bytes(frame.data)) < 3:
+                raise RegisterError(
+                    f"truncated {frame.name} response, want id+flags+value: "
+                    f"{frame.raw!r}")
             rid = frame.register_id
             waiter = self._register_waiter
             if (waiter is not None and rid == waiter[0]
@@ -214,6 +223,21 @@ class AsyncVEDirect:
                     fut.set_result(frame)
             return
         if frame.cmd in (_hex.CMD_DONE, _hex.CMD_PING):
+            # Both docs define these responses with fixed content
+            # (BlueSolar §1 resp 5 = 2-byte version; resp 1 carries
+            # version/product-id; Orion §1 resp 5 = 0xYFFF 2 bytes).
+            # Empty/short payloads are malformed: fail the waiter with
+            # a typed error instead of resolving with b"" / unknown.
+            if len(bytes(frame.data)) < 2:
+                exc = RegisterError(
+                    f"truncated {frame.name} response, want >=2 bytes: "
+                    f"{frame.raw!r}")
+                waiter = self._command_waiter
+                if (waiter is not None and frame.cmd == waiter[0]
+                        and not waiter[1].done()):
+                    waiter[1].set_exception(exc)
+                    return
+                raise exc
             waiter = self._command_waiter
             if (waiter is not None and frame.cmd == waiter[0]
                     and not waiter[1].done()):
@@ -404,8 +428,12 @@ class AsyncVEDirect:
                     self._command_waiter = None
 
     async def ping(self, timeout: float = 2.0) -> HexFrame:
-        return await self._command_transact(
+        frame = await self._command_transact(
             _hex.build_ping(), _hex.CMD_PING, timeout)
+        if len(bytes(frame.data)) < 2:
+            raise RegisterError(
+                f"truncated PingResp, want >=2 bytes: {frame.raw!r}")
+        return frame
 
     async def get_app_version(self, timeout: float = 2.0) -> bytes:
         """``:352`` — returns raw version bytes (e.g. b'\\x16\\x41' = v1.16).
@@ -415,6 +443,9 @@ class AsyncVEDirect:
         """
         frame = await self._command_transact(
             _hex.build_app_version(), _hex.CMD_DONE, timeout)
+        if len(bytes(frame.data)) < 2:
+            raise RegisterError(
+                f"truncated Done (app version), want >=2 bytes: {frame.raw!r}")
         return frame.data
 
     async def get_app_version_info(self, timeout: float = 2.0) -> dict:

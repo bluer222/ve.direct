@@ -325,6 +325,55 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\x01"), "type_1")
         self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\xFF"), "user")
 
+    # --- 0x0400 semantic collision (BlueSolar ENUM vs BMV BOOLEAN) ---
+    def test_0400_flavor_disambiguation(self):
+        from ve_direct.exceptions import AmbiguousRegisterError
+        # BMV flavor resolves to exactly one meaning (BOOLEAN).
+        bmv = R.lookup(0x0400, flavor="BMV")
+        self.assertEqual(bmv.name, "BMV_BACKLIGHT_ALWAYS_ON")
+        # Named lookup with BMV flavor re-resolves by ID to the BMV register.
+        self.assertEqual(
+            R.lookup("DISPLAY_BACKLIGHT_MODE", flavor="BMV").name,
+            "BMV_BACKLIGHT_ALWAYS_ON",
+        )
+        self.assertNotIn("DISPLAY_BACKLIGHT_MODE", R.for_flavor("BMV"))
+        self.assertIn("BMV_BACKLIGHT_ALWAYS_ON", R.for_flavor("BMV"))
+        # MPPT flavor resolves to the mode enum (BlueSolar-HEX 0=keypress/1=on/2=auto).
+        mppt = R.lookup(0x0400, flavor="MPPT")
+        self.assertEqual(mppt.name, "DISPLAY_BACKLIGHT_MODE")
+        self.assertEqual(R.decode_value(mppt, b"\x01"), "on")
+        self.assertIn("DISPLAY_BACKLIGHT_MODE", R.for_flavor("MPPT"))
+        self.assertIn("DISPLAY_BACKLIGHT_MODE", R.for_flavor("MPPT_RS"))
+        # Unflavored int lookup stays ambiguous.
+        with self.assertRaises(AmbiguousRegisterError):
+            R.lookup(0x0400)
+
+    # --- BMV temp 0=disabled (0x032A-032D/0x035A-035D, valid 174..372 K) ---
+    def test_bmv_temp_zero_disabled(self):
+        for name in [
+            "BMV_ALARM_LOW_TEMPERATURE",
+            "BMV_ALARM_LOW_TEMPERATURE_CLEAR",
+            "BMV_ALARM_HIGH_TEMPERATURE",
+            "BMV_ALARM_HIGH_TEMPERATURE_CLEAR",
+            "BMV_RELAY_LOW_TEMPERATURE",
+            "BMV_RELAY_LOW_TEMPERATURE_CLEAR",
+            "BMV_RELAY_HIGH_TEMPERATURE",
+            "BMV_RELAY_HIGH_TEMPERATURE_CLEAR",
+        ]:
+            with self.subTest(name=name):
+                reg = R.lookup(name)
+                self.assertIsNone(R.decode_value(reg, bytes.fromhex("0000")))
+                self.assertEqual(
+                    R.encode_value(reg, None), bytes.fromhex("0000"))
+                # Round-trip disabled state.
+                self.assertIsNone(
+                    R.decode_value(reg, R.encode_value(reg, None)))
+                # Nonzero behavior unchanged (174 K = 17400 raw).
+                import struct as _s
+                raw = _s.pack("<H", 17400)
+                self.assertAlmostEqual(R.decode_value(reg, raw), 174.0)
+                self.assertEqual(R.encode_value(reg, 174.0), raw)
+
 
 if __name__ == "__main__":
     unittest.main()
