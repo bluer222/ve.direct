@@ -107,8 +107,15 @@ _FOOTNOTE_DTYPE_RE = re.compile(r"^\(\*\d+\)$")
 _SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:\.\d+)?|-)$")
 
 #: A bare register-ID token (Orion-XS allows the doc-typo form "xHHHH").
-_ID_TOKEN_RE = re.compile(r"^0x[0-9A-Fa-f]{4}$")
-_ID_TOKEN_BARE_X_RE = re.compile(r"^x[0-9A-Fa-f]{4}$")
+#: The 0X prefix is uppercase-X rescue (e.g. "0XEDF0" for 0xEDF0, "XEDE0"
+#: for xEDE0): the docs print hex both ways, and the crude scrapers share
+#: the same blind spot, so all three must be case-insensitive for the X
+#: (rescue-style like the existing xEDE0 handling). Verified zero-diff:
+#: no "0XHHHH"/"XHHHH" occurrence in any current snapshot, so no prose
+#: false positives; a future uppercase row is now rescued instead of
+#: missed by both sides while counts stay green.
+_ID_TOKEN_RE = re.compile(r"^0[xX][0-9A-Fa-f]{4}$")
+_ID_TOKEN_BARE_X_RE = re.compile(r"^[xX][0-9A-Fa-f]{4}$")
 
 
 def _normalize_dtype(raw: str) -> Tuple[str, str]:
@@ -237,17 +244,17 @@ class BlueSolarHEXParser:
         section = self._section_text()
 
         for line in section.splitlines():
-            if not re.match(r"^\s*0x[0-9A-Fa-f]{4}\b", line):
+            if not re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\b", line):
                 continue
             # Skip known prose-note lines that happen to start with a
             # register-looking ID. Each pattern is anchored to its exact note
             # text: a bare "firmware version" substring would also drop any
             # future table row whose description mentions firmware versions.
-            if re.match(r"^\s*0xEDEF will always\b", line):
+            if re.match(r"^\s*0[xX]EDEF will always\b", line):
                 continue  # Note 4 continuation on 0xEDEA ("will always reports ...")
-            if re.match(r"^\s*0xA046 and higher\)", line):
+            if re.match(r"^\s*0[xX]A046 and higher\)", line):
                 continue  # Note 3 continuation ("0xA046 and higher). A VE.Direct TX ...")
-            if re.match(r"^\s*0x0300\)", line):
+            if re.match(r"^\s*0[xX]0300\)", line):
                 continue  # History intro ("0x0300). The history registers are ...")
 
             # Token-anchored split (not \s{2,} gaps): tolerates single-space
@@ -261,7 +268,8 @@ class BlueSolarHEXParser:
             scale = None if scale_str in (None, "-") else float(scale_str)
             dtype, dtype_note = _normalize_dtype(dtype_raw)
             sentinels = set()
-            if unit_str and "0xFFFF" in unit_str:
+            # Sentinel may print uppercase 0XFFFF; case-insensitive like IDs.
+            if unit_str and "0XFFFF" in unit_str.upper():
                 sentinels.add(0xFFFF)
 
             regs[rid] = ParsedRegister(
@@ -292,11 +300,11 @@ class BlueSolarHEXParser:
         unioning them."""
         lines = self.text.splitlines()
         for i, line in enumerate(lines):
-            for m in re.finditer(r"0x([0-9A-Fa-f]{4})\s*\.\.\s*0x([0-9A-Fa-f]{4})", line):
+            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", line):
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
                 # Only register-listing contexts (history/timer/cycle/vreg
                 # headers); never settings Range columns.
-                if not re.search(r"[Rr]egister|vreg|history|History|Timer|Cycle|0x104F|0x1050", line):
+                if not re.search(r"[Rr]egister|vreg|history|History|Timer|Cycle|0[xX]104F|0[xX]1050", line):
                     continue
                 for rid in _expand_id_range(a, b):
                     if rid not in regs:
@@ -311,11 +319,11 @@ class BlueSolarHEXParser:
                             source="BlueSolar-HEX",
                             notes=f"range-expanded from 0x{a:04X}..0x{b:04X}; byte-field layout, no single wire type",
                         )
-            m = re.match(r"^\s*0x([0-9A-Fa-f]{4})\s*\.\.\.\s*$", line)
+            m = re.match(r"^\s*0[xX]([0-9A-Fa-f]{4})\s*\.\.\.\s*$", line)
             if m:
                 a = int(m.group(1), 16)
                 for j in range(i + 1, min(i + 4, len(lines))):
-                    m2 = re.match(r"^\s*0x([0-9A-Fa-f]{4})\s*$", lines[j])
+                    m2 = re.match(r"^\s*0[xX]([0-9A-Fa-f]{4})\s*$", lines[j])
                     if m2:
                         b = int(m2.group(1), 16)
                         kind = "Timer event" if 0xEDA0 <= a <= b <= 0xEDA5 else "History record"
@@ -342,13 +350,13 @@ class BlueSolarHEXParser:
         inherit scale/dtype/unit from the referenced base register."""
         for line in self.text.splitlines():
             m = re.match(
-                r"^\s*([A-Za-z][A-Za-z0-9 _\-/()]*?)\(see\s+(0x[0-9A-Fa-f]{4})\)\s+((?:0x[0-9A-Fa-f]{4}\s*)+)\s*$",
+                r"^\s*([A-Za-z][A-Za-z0-9 _\-/()]*?)\(see\s+(0[xX][0-9A-Fa-f]{4})\)\s+((?:0[xX][0-9A-Fa-f]{4}\s*)+)\s*$",
                 line,
             )
             if not m:
                 continue
             base_id = int(m.group(2), 16)
-            ids = [int(x, 16) for x in re.findall(r"0x[0-9A-Fa-f]{4}", m.group(3))]
+            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}", m.group(3))]
             base = regs.get(base_id)
             for idx, rid in enumerate(ids, start=1):
                 if rid in regs:
@@ -375,7 +383,7 @@ class BlueSolarHEXParser:
         for line in region.splitlines():
             if "..." in line or ".." in line or "|" in line or "=" in line:
                 continue
-            m = re.match(r"^\s*(0x[0-9A-Fa-f]{4})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+            m = re.match(r"^\s*(0[xX][0-9A-Fa-f]{4})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
             if not m:
                 continue
             rid = int(m.group(1), 16)
@@ -401,10 +409,10 @@ class BlueSolarHEXParser:
         """Collect IDs referenced as ``(register 0xXXXX)`` detail headers so
         nothing described outside the 1.1 table is silently dropped."""
         for m in re.finditer(
-            r"[Rr]egisters?\s+0x[0-9A-Fa-f]{4}(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0x[0-9A-Fa-f]{4})*",
+            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{4}(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{4})*",
             self.text,
         ):
-            ids = [int(x, 16) for x in re.findall(r"0x[0-9A-Fa-f]{4}", m.group(0))]
+            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}", m.group(0))]
             for rid in ids:
                 if rid in regs or rid in DOC_TYPO_REGISTER_IDS:
                     continue
@@ -475,7 +483,8 @@ class OrionXSHEXParser:
             scale = None if scale_str in (None, "-") else float(scale_str)
             dtype, dtype_note = _normalize_dtype(dtype_raw)
             sentinels = set()
-            if unit_str and "0xFFFF" in unit_str:
+            # Sentinel may print uppercase 0XFFFF; case-insensitive like IDs.
+            if unit_str and "0XFFFF" in unit_str.upper():
                 sentinels.add(0xFFFF)
 
             regs[rid] = ParsedRegister(
@@ -493,7 +502,7 @@ class OrionXSHEXParser:
     def _parse_id_ranges(self, regs: Dict[int, ParsedRegister]) -> None:
         """Expand inline ``0x1070..0x1098`` cycle-history ranges."""
         for line in self.text.splitlines():
-            for m in re.finditer(r"0x([0-9A-Fa-f]{4})\s*\.\.\s*0x([0-9A-Fa-f]{4})", line):
+            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", line):
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
                 if not re.search(r"[Rr]egister|history|History|Cycle", line):
                     continue
@@ -526,7 +535,7 @@ class OrionXSHEXParser:
         for line in region.splitlines():
             if "..." in line or ".." in line or "|" in line or "=" in line:
                 continue
-            m = re.match(r"^\s*(0x[0-9A-Fa-f]{4})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+            m = re.match(r"^\s*(0[xX][0-9A-Fa-f]{4})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
             if not m:
                 # Single-line ".." range already handled; dotted triple
                 # ("0x1070..0x1098  Cycle history ...") is range-expanded.
@@ -560,10 +569,10 @@ class OrionXSHEXParser:
             hist_start = self.text.find("Historical data")
         remote_start = self.text.find("Remote control")
         for m in re.finditer(
-            r"[Rr]egisters?\s+0x[0-9A-Fa-f]{4}(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0x[0-9A-Fa-f]{4})*",
+            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{4}(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{4})*",
             self.text,
         ):
-            ids = [int(x, 16) for x in re.findall(r"0x[0-9A-Fa-f]{4}", m.group(0))]
+            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}", m.group(0))]
             # Inline ".." ranges inside mentions are expanded by
             # _parse_id_ranges; keep only single IDs here.
             if ".." in m.group(0) or "..." in m.group(0):
@@ -669,7 +678,9 @@ class BMV7xxHEXParser:
             if tokens[1] == "=":
                 # Product-ID prose ("0xA381 = BMV712"), not a table row.
                 continue
-            if any(skip in line for skip in ["talking to", "BMV712 = 0xA381", "0xA381 = BMV712"]):
+            # Prose guards case-insensitive for the ID (0X rescue, zero-diff:
+            # snapshots carry only lowercase 0xA381, so no new exclusions).
+            if any(skip in line or skip.replace("0x", "0X") in line for skip in ["talking to", "BMV712 = 0xA381", "0xA381 = BMV712"]):
                 continue
 
             rid = int(tokens[0], 16)
@@ -793,7 +804,7 @@ class PhoenixInverterHEXParser:
             if "VE_REG_" not in line:
                 continue
             tokens = line.split()
-            if len(tokens) < 3 or not re.fullmatch(r"0x[0-9A-Fa-f]{4}", tokens[0]):
+            if len(tokens) < 3 or not re.fullmatch(r"0[xX][0-9A-Fa-f]{4}", tokens[0]):
                 continue
 
             rid = int(tokens[0], 16)
@@ -852,7 +863,7 @@ class PhoenixInverterHEXParser:
         as evidence instead of silently dropping it.
         """
         evidence: Dict[int, str] = {}
-        for m in re.finditer(r"Capabilities BLE\s*\(register\s+(0x[0-9A-Fa-f]{4})\)", self.text):
+        for m in re.finditer(r"Capabilities BLE\s*\(register\s+(0[xX][0-9A-Fa-f]{4})\)", self.text):
             hid = int(m.group(1), 16)
             if hid != 0x0150:
                 evidence[hid] = (
@@ -881,8 +892,32 @@ _TEXT_UNITS_RE = re.compile(
 _TEXT_FOOTNOTE_RE = re.compile(r"^\s*\d[\d\s,]*")
 
 #: Lines that can never be a description continuation (page furniture and
-#: the device-column header of the next table).
-_TEXT_CONT_EXCLUDE = ("60x", "Victron Energy", "General phone", "www.victronenergy", "Label")
+#: the device-column header of the next table). Each pattern is anchored to
+#: its exact furniture text (same treatment as the BlueSolar skip-filter
+#: fix: ``re.match(r"^\\s*0xEDEF will always\\b", line)``): a bare substring
+#: (``"Label" in "Labelled ..."``, ``"60x" in "Depth for 60x ..."``,
+#: ``"Victron Energy" in "Made by Victron Energy ..."``) would also drop
+#: genuine continuations containing those words. Anchored patterns let
+#: mid-line mentions through while still excluding furniture:
+#: - device header starts with "60x" after spaces (indent 101-113);
+#: - footer "Victron Energy B.V. | ..." (indent 0, B.V. keeps a leading
+#:   "Victron Energy foo" continuation joinable);
+#: - footer "General phone: +31 ..." (indent 0, number keeps a leading
+#:   "General phone foo" continuation joinable);
+#: - bare footer URL alone (indent 0/198, trailing ``\\s*$`` keeps a leading
+#:   "www... foo" continuation joinable; https prose lives at indent 23
+#:   and already misses the indent rule);
+#: - fields-table header "Label Units ..." (indent 18, ``\\b`` lets
+#:   "Labelled ..." through and ``\\s+Units`` lets "Label foo" through).
+#: Verified zero-diff: only the 60x headers sit at indent >= 33 in the
+#: fields section, and they still match; no prose false positives.
+_TEXT_CONT_EXCLUDE = (
+    re.compile(r"^\s*60x\b"),
+    re.compile(r"^\s*Victron Energy B\.V\."),
+    re.compile(r"^\s*General phone: \+31"),
+    re.compile(r"^\s*www\.victronenergy\.com\s*$"),
+    re.compile(r"^\s*Label\s+Units\b"),
+)
 
 #: Shape of a would-be Units cell the closed _TEXT_UNITS_RE vocabulary did
 #: not recognize: anything letter-bearing before the 2+-space column gap.
@@ -997,7 +1032,9 @@ def _is_desc_continuation(line: str, base_indent: int = 13) -> bool:
         return False
     if len(line) - len(line.lstrip(" ")) < base_indent + 20:
         return False
-    return not any(x in line for x in _TEXT_CONT_EXCLUDE)
+    # Anchored furniture check (not bare substring): a genuine continuation
+    # containing "Labelled ..."/"60x"/"Victron Energy" mid-line must join.
+    return not any(rx.match(line) for rx in _TEXT_CONT_EXCLUDE)
 
 
 class VEDirectTextParser:
@@ -1139,7 +1176,9 @@ class VEDirectTextParser:
                 break
             # Name class includes '*', '.', '|', '+' so phased-out ("70|15*"),
             # dotted ("VE.Can"), and suffixed ("(1+1)") models all match.
-            m = re.search(r"^\s*([A-Za-z0-9\s|/\-().*+]+?)\s{2,}(0x[0-9A-Fa-f]{3,4})(\*)?", line)
+            # PID prefix case-insensitive like register IDs (0X rescue,
+            # zero-diff: no 0X PIDs in snapshots).
+            m = re.search(r"^\s*([A-Za-z0-9\s|/\-().*+]+?)\s{2,}(0[xX][0-9A-Fa-f]{3,4})(\*)?", line)
             if m:
                 name_raw = m.group(1).strip()
                 # Prose cross-references ("From 0xA10B to ...") are not models.

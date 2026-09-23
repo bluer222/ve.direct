@@ -473,9 +473,14 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
     1. Header stage: each snapshot's own revision/date markers (via
        :func:`snapshot_revision_info`, content-based, never file mtimes)
        are compared against the online Last-Modified headers. A header
-       older-or-equal to the snapshot date stays FRESH with no download
-       (fast path; one HEAD per spec).
-    2. Content stage (only when the header is newer): the remote PDF is
+       strictly older than the snapshot date stays FRESH with no download
+       (fast path; one HEAD per spec). Same-day (equal) headers are NOT
+       fresh-by-header: day-granularity local markers vs intraday remote
+       time is unorderable (an intraday remote revision passes silently
+       as FRESH), so same-day falls through to the content stage below
+       (consistent with check_specs STALE-UNKNOWN, but content-verified
+       here instead of header-only unknown).
+    2. Content stage (when the header is newer OR same-day): the remote PDF is
        downloaded with stdlib ``urllib`` and revision evidence is mined
        from the raw bytes via :func:`extract_pdf_revision_info` (FlateDecode
        + regex, no ``pdftotext``). Matching markers mean a byte-level
@@ -524,12 +529,15 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
         if remote_dt is None:
             unknowns.append(f"{key}.txt: server gave no Last-Modified header")
             continue
-        if remote_dt.date() <= local_date:
-            # Header proves fresh (older-or-equal): no download. Equal
-            # covers the same-day case without intraday ambiguity costs:
-            # a same-day remote revision would still carry a newer content
-            # date once published, which the content stage below catches
-            # on its next newer-header run.
+        if remote_dt.date() < local_date:
+            # Header-older proves fresh: no download. Same-day (equal) must
+            # NOT stay fresh here: the local marker is day-granularity while
+            # the remote header carries intraday time, so an intraday remote
+            # revision is unorderable and would pass silently as FRESH
+            # (suite/CLI inconsistency: check_specs already reports
+            # same-day STALE-UNKNOWN). Same-day falls through to the
+            # content gate below: markers-match -> FRESH, markers-newer ->
+            # STALE, unextractable/offline -> UNKNOWN (loud skip).
             continue
         # Header newer: content gate decides re-upload vs new revision.
         try:
