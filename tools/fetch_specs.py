@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+import zlib
 from pathlib import Path
 
 OFFICIAL_SPECS = {
@@ -153,27 +154,34 @@ def snapshot_revision_info(text: str):
         "August", "September", "October", "November", "December",
     )
     dates = []
-    for d, mo, y in re.findall(r"(\d{2})-(\d{2})-(\d{4})", tail):
+    # Anchored to revision-entry lines (not max over any date in the tail):
+    # an example/future date in prose ("next maintenance 15-11-2030") must not
+    # inflate local_date to false-FRESH. Entry headers are line-leading dates
+    # (BlueSolar bare "15-11-2021 – rev18", Phoenix "5) 2021-09-06", Orion
+    # "16-06-2025", Text-mode "3.34 14 April 2025"), so all patterns below
+    # require line-start anchor (with optional "N) " entry prefix or version
+    # prefix). Verified: identical results on all five current snapshots.
+    for d, mo, y in re.findall(r"(?m)^\s*(?:\d+\)\s*)?(\d{1,2})-(\d{1,2})-(\d{4})", tail):
         try:
             dates.append(datetime.date(int(y), int(mo), int(d)))
         except ValueError:
             continue
-    for y, mo, d in re.findall(r"(\d{4})-(\d{1,2})-(\d{1,2})", tail):
+    for y, mo, d in re.findall(r"(?m)^\s*(?:\d+\)\s*)?(\d{4})-(\d{1,2})-(\d{1,2})", tail):
         try:
             dates.append(datetime.date(int(y), int(mo), int(d)))
         except ValueError:
             continue
-    for d, mon, y in re.findall(
-        r"(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+    for ver, d, mon, y in re.findall(
+        r"(?m)^\s*(3\.\d+)\s+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
         tail,
     ):
         try:
             dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
         except ValueError:
             continue
-    # Month-first drift ("April 14, 2025") with optional ordinal/comma.
+    # Month-first drift ("April 14, 2025") with optional ordinal/comma, anchored.
     for mon, d, y in re.findall(
-        r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"(?m)^\s*(?:\d+\)\s*)?(?:3\.\d+\s+)?(January|February|March|April|May|June|July|August|September|October|November|December)"
         r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})",
         tail,
     ):
@@ -181,15 +189,27 @@ def snapshot_revision_info(text: str):
             dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
         except ValueError:
             continue
-    # Ordinal day-first drift ("14th April 2025") with optional comma.
+    # Ordinal day-first drift ("14th April 2025") with optional comma, anchored.
     for d, mon, y in re.findall(
-        r"(\d{1,2})(?:st|nd|rd|th)\s+"
+        r"(?m)^\s*(?:\d+\)\s*)?(\d{1,2})(?:st|nd|rd|th)\s+"
         r"(January|February|March|April|May|June|July|August|September|October|November|December)"
         r",?\s+(\d{4})",
         tail,
     ):
         try:
             dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+        except ValueError:
+            continue
+    # Bare day-first ("14 April 2025") anchored (covers Text-mode rows already
+    # counted above; deduplicated so max is unaffected).
+    for d, mon, y in re.findall(
+        r"(?m)^\s*(?:\d+\)\s*)?(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+        tail,
+    ):
+        try:
+            dt = datetime.date(int(y), months.index(mon) + 1, int(d))
+            if dt not in dates:
+                dates.append(dt)
         except ValueError:
             continue
     if label is None and re.search(r"Initial version", tail):
@@ -207,6 +227,171 @@ def download_pdf_bytes(url: str, timeout: float = 60.0) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
+
+
+def extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract readable text from PDF bytes without ``pdftotext`` (stdlib-only).
+
+    Parses PDF object streams and zlib-decompresses ``FlateDecode`` streams
+    (``zlib`` is stdlib), then concatenates ``(...)`` literal strings and
+    ``<...>`` hex strings in order. Kerning-split words (``[(w)5(w)(w)]TJ``)
+    rejoin by concatenation since the inter-string numbers are ignored.
+    Non-Flate streams (e.g. ``DCTDecode`` images) are skipped. The raw PDF
+    bytes are also scanned so ``/Title`` metadata is included. Never raises:
+    returns ``""`` for empty/bad input.
+    """
+    if not pdf_bytes:
+        return ""
+    try:
+        stream_re = re.compile(rb"stream(?:\r\n|\r|\n)(.*?)endstream", re.DOTALL)
+        chunks: list[bytes] = [bytes(pdf_bytes)]
+        for m in stream_re.finditer(bytes(pdf_bytes)):
+            raw = m.group(1).strip(b"\r\n")
+            try:
+                chunks.append(zlib.decompress(raw))
+            except Exception:
+                try:
+                    chunks.append(zlib.decompress(m.group(1)))
+                except Exception:
+                    continue  # DCTDecode images, unknown filters, etc.
+        combo = b"\n".join(chunks)
+        tok = re.compile(rb"\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>")
+        out: list[bytes] = []
+        for tm in tok.finditer(combo):
+            t = tm.group(0)
+            if t.startswith(b"("):
+                inner = t[1:-1]
+                inner = inner.replace(b"\\\\", b"\x00")
+                inner = inner.replace(b"\\(", b"(").replace(b"\\)", b")")
+                inner = inner.replace(b"\\n", b"\n").replace(b"\\r", b"\r").replace(b"\\t", b"\t")
+                inner = inner.replace(b"\x00", b"\\")
+
+                def _oct(mm):
+                    try:
+                        v = int(mm.group(1), 8)
+                        return bytes([v]) if 0 <= v <= 255 else mm.group(0)
+                    except Exception:
+                        return mm.group(0)
+
+                try:
+                    inner = re.sub(rb"\\([0-7]{1,3})", _oct, inner)
+                except Exception:
+                    pass
+                out.append(inner)
+            else:
+                hexs = re.sub(rb"\s", b"", t[1:-1])
+                if not hexs or len(hexs) > 2000:
+                    continue  # skip huge binary hex blobs
+                if len(hexs) % 2 == 1:
+                    hexs += b"0"
+                try:
+                    out.append(bytes.fromhex(hexs.decode("ascii")))
+                except Exception:
+                    continue
+        return b"".join(out).decode("latin-1", errors="ignore")
+    except Exception:
+        return ""
+
+
+def extract_pdf_revision_info(pdf_bytes: bytes):
+    """Extract ``(label, date)`` revision evidence from remote PDF bytes.
+
+    Runs :func:`extract_pdf_text` then mines the same marker families as
+    :func:`snapshot_revision_info` (``Rev 18``/``REV 18`` covers, ``3.34 14
+    April 2025`` version rows, ``Initial version`` labels, ``Revision Log`` /
+    ``Document history`` / ``Changes`` entry dates, ``/Title`` metadata is
+    included via the raw scan). Differences from the snapshot parser are
+    deliberate: the joined stream text carries no reliable line breaks, so
+    mining is unanchored, the label is searched globally (the cover) while
+    dates are scoped to the tail after the FIRST revision header (joined
+    stream order appends the document outline last, so ``rfind`` hits the
+    outline instead of the content). Returns ``(None, None)`` when no
+    markers are recoverable.
+    """
+    try:
+        text = extract_pdf_text(pdf_bytes)
+    except Exception:
+        return None, None
+    if not text:
+        return None, None
+    label = None
+    revs = re.findall(r"(?:Rev|REV)\s+(\d+)", text)
+    if revs:
+        try:
+            label = f"Rev {max(int(x) for x in revs)}"
+        except Exception:
+            label = None
+    else:
+        vers = re.findall(r"(3\.\d+)\s+\d{1,2}\s+\w+\s+\d{4}", text)
+        if vers:
+            def _vkey(v):
+                try:
+                    return tuple(int(p) for p in v.split("."))
+                except Exception:
+                    return (0,)
+
+            try:
+                label = f"v{max(vers, key=_vkey)}"
+            except Exception:
+                label = None
+    cands = [text.find(s) for s in ("Revision Log", "Document history", "Changes:", "Changes")]
+    cands = [c for c in cands if c >= 0]
+    tail = text[min(cands):] if cands else text
+    months = (
+        "January", "February", "March", "April", "May", "June", "July",
+        "August", "September", "October", "November", "December",
+    )
+    dates = []
+    for d, mo, y in re.findall(r"(\d{1,2})-(\d{1,2})-(\d{4})", tail):
+        try:
+            dates.append(datetime.date(int(y), int(mo), int(d)))
+        except ValueError:
+            continue
+    for y, mo, d in re.findall(r"(\d{4})-(\d{1,2})-(\d{1,2})", tail):
+        try:
+            dates.append(datetime.date(int(y), int(mo), int(d)))
+        except ValueError:
+            continue
+    for _ver, d, mon, y in re.findall(
+        r"(3\.\d+)\s+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+        tail,
+    ):
+        try:
+            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+        except ValueError:
+            continue
+    for mon, d, y in re.findall(
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})",
+        tail,
+    ):
+        try:
+            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+        except ValueError:
+            continue
+    for d, mon, y in re.findall(
+        r"(\d{1,2})(?:st|nd|rd|th)\s+"
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r",?\s+(\d{4})",
+        tail,
+    ):
+        try:
+            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+        except ValueError:
+            continue
+    for d, mon, y in re.findall(
+        r"(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+        tail,
+    ):
+        try:
+            dt = datetime.date(int(y), months.index(mon) + 1, int(d))
+            if dt not in dates:
+                dates.append(dt)
+        except ValueError:
+            continue
+    if label is None and re.search(r"Initial version", tail):
+        label = f"Initial version {max(dates).isoformat()}" if dates else "Initial version"
+    return label, (max(dates) if dates else None)
 
 
 def normalize_snapshot_text(text: str) -> str:
@@ -281,26 +466,35 @@ def verify_remote_content(specs_dir: Path, timeout: float = 60.0):
 
 
 def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
-    """Real-directory freshness gate for the test suite.
+    """Real-directory freshness gate for the test suite (content-based).
 
-    Compares each snapshot's own revision/date markers against the online
-    Last-Modified headers (headers only, stdlib-only; no download).
+    Two stages per spec (stdlib-only, no ``pdftotext``):
 
-    Returns ``(status, detail)`` with status one of:
+    1. Header stage: each snapshot's own revision/date markers (via
+       :func:`snapshot_revision_info`, content-based, never file mtimes)
+       are compared against the online Last-Modified headers. A header
+       older-or-equal to the snapshot date stays FRESH with no download
+       (fast path; one HEAD per spec).
+    2. Content stage (only when the header is newer): the remote PDF is
+       downloaded with stdlib ``urllib`` and revision evidence is mined
+       from the raw bytes via :func:`extract_pdf_revision_info` (FlateDecode
+       + regex, no ``pdftotext``). Matching markers mean a byte-level
+       re-upload/re-export of the SAME revision (HTTP Last-Modified tracks
+       re-uploads, not revisions) -> FRESH despite the newer header. Markers
+       proving a NEWER revision -> STALE (suite must FAIL, detail names the
+       new revision). Unextractable markers or a failed download -> UNKNOWN
+       (loud warning naming the spec, suite SKIPs, never fails).
 
-    * ``"stale"`` — at least one online copy is newer than its snapshot
-      (suite must FAIL);
-    * ``"fresh"`` — every spec verifiable and no online copy newer
-      (suite passes);
-    * ``"unknown"`` — anything unverifiable (offline/network error, no
-      Last-Modified header, unparseable local markers, same-day
-      intraday ambiguity, missing file): the suite must SKIP, never
-      fail and never pass on partial evidence.
+    Downloads are cached within a run (one fetch per spec max). Offline (no
+    network at all) stays UNKNOWN as before.
 
-    Every spec is evaluated (no first-failure short-circuit: an early
-    same-day ``unknown`` must not mask a later ``stale``); the worst
-    status wins (stale > unknown > fresh) and the detail names every
-    stale/unverifiable spec.
+    Returns ``(status, detail)`` with status one of ``"stale"`` (at least
+    one proven-newer online revision: suite must FAIL), ``"fresh"`` (every
+    spec verifiable and current: suite passes), ``"unknown"`` (anything
+    unverifiable: suite must SKIP, never fail and never pass on partial
+    evidence). Every spec is evaluated (no first-failure short-circuit);
+    the worst status wins (stale > unknown > fresh) and the detail names
+    every stale/unverifiable spec.
     """
     try:
         entries = list(OFFICIAL_SPECS.items())
@@ -308,6 +502,7 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
         return "unknown", f"cannot enumerate specs ({e})"
     stale: list[str] = []
     unknowns: list[str] = []
+    dl_cache: dict[str, bytes] = {}
     for key, info in entries:
         txt_path = specs_dir / f"{key}.txt"
         if not txt_path.is_file() or txt_path.stat().st_size == 0:
@@ -329,19 +524,67 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
         if remote_dt is None:
             unknowns.append(f"{key}.txt: server gave no Last-Modified header")
             continue
-        if remote_dt.date() > local_date:
-            stale.append(
-                f"{key}.txt online copy newer (remote {remote_dt:%Y-%m-%d} > snapshot {local_date.isoformat()})"
-            )
-        elif remote_dt.date() == local_date:
+        if remote_dt.date() <= local_date:
+            # Header proves fresh (older-or-equal): no download. Equal
+            # covers the same-day case without intraday ambiguity costs:
+            # a same-day remote revision would still carry a newer content
+            # date once published, which the content stage below catches
+            # on its next newer-header run.
+            continue
+        # Header newer: content gate decides re-upload vs new revision.
+        try:
+            if key in dl_cache:
+                pdf_bytes = dl_cache[key]
+            else:
+                pdf_bytes = download_pdf_bytes(info["url"], timeout=timeout)
+                dl_cache[key] = pdf_bytes
+        except Exception as e:
             unknowns.append(
-                f"{key}.txt remote revision is same-day ({remote_dt:%Y-%m-%d}); freshness unverifiable"
+                f"{key}.txt online copy newer (remote {remote_dt:%Y-%m-%d} > snapshot {local_date.isoformat()}) "
+                f"but download failed ({e}); freshness unverifiable"
             )
+            continue
+        try:
+            rem_label, rem_date = extract_pdf_revision_info(pdf_bytes)
+        except Exception as e:
+            unknowns.append(f"{key}.txt online revision markers unextractable ({e}); freshness unverifiable")
+            continue
+        if rem_label is None and rem_date is None:
+            unknowns.append(
+                f"{key}.txt online revision markers unextractable "
+                f"(remote {remote_dt:%Y-%m-%d} > snapshot {local_date.isoformat()}); freshness unverifiable"
+            )
+            continue
+        snap_mark = f"{label or 'unlabelled'} {local_date.isoformat()}"
+        rem_mark = f"{rem_label or 'unlabelled'} {rem_date.isoformat() if rem_date else 'undated'}"
+        if rem_date is not None:
+            if rem_date > local_date:
+                stale.append(
+                    f"{key}.txt online revision newer (remote {rem_mark} > snapshot {snap_mark})"
+                )
+            elif rem_date == local_date:
+                if rem_label is None or label is None or rem_label == label:
+                    continue  # same-revision re-upload/re-export: FRESH
+                stale.append(
+                    f"{key}.txt online revision newer (remote {rem_mark} vs snapshot {snap_mark})"
+                )
+            else:
+                continue  # snapshot ahead of remote content: FRESH
+        else:
+            # Date unextractable: decide on the label alone.
+            if rem_label == label:
+                continue  # label match: FRESH
+            if rem_label is not None and label is not None:
+                stale.append(
+                    f"{key}.txt online revision newer (remote {rem_mark} vs snapshot {snap_mark})"
+                )
+            else:
+                unknowns.append(f"{key}.txt online revision partially unextractable ({rem_mark}); freshness unverifiable")
     if stale:
         return "stale", "; ".join(stale + unknowns)
     if unknowns:
         return "unknown", "; ".join(unknowns)
-    return "fresh", "all snapshots predate their online Last-Modified dates"
+    return "fresh", "all snapshots match their online revisions (header-or-content verified)"
 
 
 def content_gate_verdict(results: dict) -> tuple:
@@ -399,6 +642,62 @@ def update_manifest_text(source: str, manifest: dict, verified_on: str) -> str:
         source,
         flags=re.DOTALL,
     )
+
+
+def update_manifest_text_per_spec(source: str, manifest_per_spec: dict) -> str:
+    """Rewrite the FRESHNESS_MANIFEST block with per-spec ``verified_on``.
+
+    ``manifest_per_spec`` maps spec key to ``(label, date, verified_on)``
+    (iso-date strings or None; ``verified_on`` None = never verified online).
+    Used by ``--sync`` to stamp only the specs whose remote content actually
+    verified (SYNC-OK) while preserving the old ``verified_on`` for the rest
+    — a partial success still records the successful specs instead of
+    dropping the stamp entirely. Pure function (no file I/O) for mocked tests.
+    """
+    begin = "# FRESHNESS-MANIFEST-" + "BEGIN"
+    end = "# FRESHNESS-MANIFEST-" + "END"
+    lines = []
+    for key in OFFICIAL_SPECS:
+        label, date, verified = manifest_per_spec.get(key, (None, None, None))
+        lines.append(
+            f'    "{key}": {{"label": {label!r}, "date": {date!r}, '
+            f'"verified_on": {verified!r}}},'
+        )
+    block = begin + "\nFRESHNESS_MANIFEST = {\n" + "\n".join(lines) + "\n}\n" + end
+    return re.sub(
+        begin + r".*?" + end,
+        lambda _m: block,
+        source,
+        flags=re.DOTALL,
+    )
+
+
+def build_sync_manifest_per_spec(
+    dest_dir: Path, results: dict, today: str
+) -> dict:
+    """Build per-spec ``(label, date, verified_on)`` for ``--sync`` stamping.
+
+    ``results`` is the ``{key: True/False/None}`` map from
+    :func:`verify_remote_content`. Specs with ``True`` (remote content matches)
+    get ``verified_on=today``; all others preserve their existing
+    ``FRESHNESS_MANIFEST`` stamp (None = never verified). Label/date always
+    re-derived from the current snapshots so drift fails loudly.
+    """
+    out: dict = {}
+    for key in OFFICIAL_SPECS:
+        try:
+            label, local_date = snapshot_revision_info(
+                (dest_dir / f"{key}.txt").read_text(errors="ignore")
+            )
+        except Exception:
+            label, local_date = None, None
+        date_str = local_date.isoformat() if local_date else None
+        if results.get(key) is True:
+            verified: str | None = today
+        else:
+            verified = FRESHNESS_MANIFEST.get(key, {}).get("verified_on")
+        out[key] = (label, date_str, verified)
+    return out
 
 
 def check_specs(specs_dir: Path) -> bool:
@@ -497,31 +796,22 @@ def main() -> int:
             else:
                 print(f"  [SYNC-UNKNOWN] {key}.txt - cannot verify (offline, no pdftotext, or missing snapshot)")
                 all_ok = False
-        if all_ok:
-            # Refresh the checked-in last-verified manifest from the freshly
-            # confirmed snapshots so the suite (and humans) can see that
-            # online verification happened, and when.
+        # Stamp the checked-in manifest whenever real online verification
+        # succeeds (per-spec, not just all-or-nothing): SYNC-OK specs get
+        # verified_on=today, others preserve their old stamp (None = never
+        # verified). Offline (all unknown) still writes nothing new but stays
+        # green-offline (returns 1, suite skips; no crash).
+        if any(v is True for v in results.values()):
             today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-            manifest = {}
-            for key in OFFICIAL_SPECS:
-                try:
-                    label, local_date = snapshot_revision_info(
-                        (dest_dir / f"{key}.txt").read_text(errors="ignore")
-                    )
-                except Exception:
-                    label, local_date = None, None
-                manifest[key] = (
-                    label,
-                    local_date.isoformat() if local_date else None,
-                )
             try:
                 source_path = Path(__file__)
+                per_spec = build_sync_manifest_per_spec(dest_dir, results, today)
                 source_path.write_text(
-                    update_manifest_text(
-                        source_path.read_text(errors="ignore"), manifest, today
+                    update_manifest_text_per_spec(
+                        source_path.read_text(errors="ignore"), per_spec
                     )
                 )
-                print(f"  FRESHNESS_MANIFEST refreshed (verified_on={today})")
+                print(f"  FRESHNESS_MANIFEST refreshed (verified_on={today} for SYNC-OK specs)")
             except Exception as e:
                 print(f"  Warning: could not refresh FRESHNESS_MANIFEST ({e})", file=sys.stderr)
         return 0 if all_ok else 1

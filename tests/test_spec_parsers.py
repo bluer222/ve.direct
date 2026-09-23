@@ -23,6 +23,7 @@ import sys
 import tempfile
 import unittest
 import warnings
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -36,13 +37,18 @@ from spec_parser import (
     BlueSolarHEXParser,
     VEDirectTextParser,
     _is_desc_continuation,
+    _is_write_desc,
     load_all_specs,
 )
 import fetch_specs
 from fetch_specs import (
     FRESHNESS_MANIFEST,
+    build_sync_manifest_per_spec,
     check_specs,
     content_gate_verdict,
+    download_pdf_bytes,
+    extract_pdf_revision_info,
+    extract_pdf_text,
     extract_text,
     fetch_remote_snapshot_text,
     normalize_snapshot_text,
@@ -50,6 +56,7 @@ from fetch_specs import (
     snapshot_freshness_status,
     snapshot_revision_info,
     update_manifest_text,
+    update_manifest_text_per_spec,
     verify_remote_content,
 )
 import ve_direct.registers as R
@@ -152,57 +159,85 @@ def scrape_doc_ids(text: str) -> set[int]:
 
 
 def scrape_doc_cs_codes(section: str) -> dict[int, str]:
-    """Independent CS counter: name-plus-code prefix with NO tail requirement.
+    """Independent CS counter: OVER-INCLUSIVE name with NO tail requirement.
 
-    The parser anchors the trailing device-column marker (``\\s+(•|\\d)``),
-    so a row without trailing bullets is missed by the parser while the
-    suite stays green. This scraper anchors only the ``name code`` prefix
-    and ignores the tail entirely — a bullet-less row is still counted, so
-    it fails loudly as scraper-vs-parser mismatch. The leading-``[A-Za-z]``
-    rule excludes the "(1) Load search" footnote; verified exact against
-    the snapshot CS section (same ERR-header bound as the parser)."""
+    The parser anchors the trailing device-column marker (``\\s+(•|\\d)``)
+    and a closed name class (letters/space/slash/parens/hyphen), so a row
+    without trailing bullets or with ``+``/``:``/digit names is missed by the
+    parser while the suite stays green. This scraper anchors only the ``name
+    code`` prefix, ignores the tail entirely, and captures the name with an
+    open ``([A-Za-z].+?)`` (any chars after a leading letter) — a bullet-less
+    or ``+``/``:``/digit row is still counted, so it fails loudly as
+    scraper-vs-parser mismatch. Over-inclusion is the safe direction: extra
+    hits fail via the invented-IDs-style set-equality, while under-inclusion
+    would hide the same blind spot on both sides. Denylists (explicit,
+    justified): the leading-``[A-Za-z]`` excludes the "(1) Load search"
+    footnote (starts with "("), and the "Bit"/"register" guard excludes the
+    table header; verified exact against the snapshot CS section (same
+    ERR-header bound as the parser)."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*([A-Za-z][A-Za-z\s/()\-]*?)\s+(\d{1,3})\b", line)
+        m = re.match(r"^\s*([A-Za-z].+?)\s+(\d{1,3})\b", line)
         if m:
-            found[int(m.group(2))] = m.group(1).strip()
+            name = m.group(1).strip()
+            # Header guard (same as parser): "Bit ...", "register ..." lines are not states.
+            if "Bit" in name or "register" in name:
+                continue
+            found[int(m.group(2))] = name
     return found
 
 
 def scrape_doc_error_codes(section: str) -> dict[int, str]:
-    """Independent error counter: EOL-anchored code with a permissive gap.
+    """Independent error counter: OVER-INCLUSIVE name, permissive gap, EOL.
 
-    The parser requires a 2+-space gap before the code (``\\s{2,}``), so a
-    single-space row is missed with no counter to catch it. This scraper
-    tolerates ANY gap (``\\s+``) and anchors the code at end-of-line
-    instead — a single-space row is still counted and fails loudly as
-    scraper-vs-parser mismatch. Note prose ("Note1: ... will no longer be
-    reported.") ends in words, never in a bare code, so the EOL anchor
-    keeps it out; verified exact against the snapshot ERR section."""
+    The parser requires a 2+-space gap plus a closed name class
+    (``[A-Za-z0-9\\s/(),\\-]``), so a single-space row or a ``+``/``:``/``.``
+    name is missed with no counter to catch it. This scraper tolerates ANY
+    gap (``\\s+``), anchors the code at end-of-line, and captures the name
+    with an open ``([A-Za-z0-9].+?)`` — a single-space or ``+``/``:``/``.``
+    row is still counted and fails loudly as scraper-vs-parser mismatch.
+    Over-inclusion is safe (extra hits fail loudly); under-inclusion sharing
+    the parser's closed class is the bug. Denylist (justified): note prose
+    ("Note1: ... will no longer be reported.") ends in words, never in a bare
+    code, so the EOL anchor keeps it out; verified exact against the snapshot
+    ERR section."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*([A-Za-z0-9][A-Za-z0-9\s/(),\-]*?)\s+(\d{1,3})\s*$", line)
+        m = re.match(r"^\s*([A-Za-z0-9].+?)\s+(\d{1,3})\s*$", line)
         if m:
             found[int(m.group(2))] = m.group(1).strip()
     return found
 
 
 def scrape_doc_capability_bits(text: str, marker: str, window: int) -> dict[int, str]:
-    """Independent capability-bit scraper with an OPEN name vocabulary.
+    """Independent capability-bit scraper: OPEN vocabulary + WIDER window.
 
-    The parser's closed name class (``[A-Za-z0-9_()./,\\-\\s]``) drops
-    names containing ``+``/``:`` etc. This scraper captures the name with
-    ``(.+?)`` and only strips the ``(0=no ...)`` suffix, keeping the
-    parser's "Bit"/"register" header guard — a future ``+``/``:`` name is
-    still scraped here and fails loudly as scraper-vs-parser mismatch.
-    Same marker/window as the parser (that bound is shared ground truth,
-    the line pattern is the independent axis); verified exact on both
-    snapshot capability tables."""
+    The parser uses a closed name class (``[A-Za-z0-9_()./,\\-\\s]``) plus a
+    fixed 1500/1800-char window, so a ``+``/``:`` name or a bit past the
+    window is missed by both while hardcoded EXPECTED_CAPS stays green. This
+    scraper differentiates on BOTH axes (the fix pattern that works):
+    (1) open name ``(.+?)`` with only the ``(0=no ...)`` suffix stripped and
+    the "Bit"/"register" header guard kept — a future ``+``/``:`` name is
+    still scraped here and fails loudly; (2) wider/different window: scans
+    ``max(window*3, 5000)`` chars (not the parser's verbatim window) and
+    requires the ``(0=no`` marker that every capability row carries (verified:
+    all 25 BS + 29 Orion snapshot rows have it, later register/mode tables
+    never do). The suffix requirement is what keeps the wider scan exact
+    (zero diff) on current snapshots — without it the wider window overwrites
+    bit 0 with later "0 or 4 Charger off" mode lines. Verified exact on both
+    snapshot capability tables; the window-divergence test proves the wider
+    scan catches a bit past the parser window."""
     pos = text.find(marker)
-    section = text[pos : pos + window]
+    # Wider/differently (justified above): parser window is shared ground
+    # truth that hides the same blind spot; scraper over-scans so a
+    # past-window bit fails loudly instead of being missed by both.
+    wide = max(window * 3, 5000)
+    section = text[pos : pos + wide]
     caps: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*(\d{1,2})\s+(.+?)(?:\s*\(0=no.*)?$", line)
+        # Require the "(0=no" capability marker to stay exact on the wider
+        # window (later tables lack it); open vocabulary for the name itself.
+        m = re.match(r"^\s*(\d{1,2})\s+(.+?)\s*\(0=no.*$", line)
         if m:
             name = m.group(2).strip()
             if "Bit" not in name and "register" not in name:
@@ -226,18 +261,24 @@ def scrape_doc_pid_set(text: str) -> set[int]:
 
 
 def scrape_decimal_ids(text: str) -> set[int]:
-    """Independent non-hex ID scan: bare decimal IDs and spaced hex typos.
+    """Independent non-hex ID scan: bare decimal IDs (any position) + spaced typos.
 
     Parser and scrape_doc_ids both anchor on the ``0x`` prefix (only the
     "xEDE0" rescue escapes it), so a decimal-only row ("60961 ... un16")
     or a spaced typo ("0 xEDF0") is missed by both. This scan uses the
-    disjoint assumption — a line-leading 4-5 digit decimal with a
-    table-shaped (dtype) tail, or ``0 xHHHH`` — and therefore fails loudly
-    where the hex strategies agree in silence. The 4-digit floor excludes
-    Bytes-layout sub-table offsets (single digits); verified: zero hits on
-    all four current HEX snapshots."""
+    disjoint assumption — a 4-5 digit decimal with a table-shaped (dtype)
+    tail ANYWHERE on the line (not just line-leading), or ``0 xHHHH`` — and
+    therefore fails loudly where the hex strategies agree in silence. Widened
+    from line-leading-only (``^\\s*\\d{4,5}``) to mid-line
+    (``(?<!\\w)\\d{4,5}\\s+[A-Za-z]...dtype``) with justification: a future
+    mid-line decimal ("Some prose 60961 ... un16") was missed by parser, hex
+    scraper, and the old scan together. The 4-digit floor excludes
+    Bytes-layout sub-table offsets (single digits); the dtype-tail requirement
+    excludes dates/versions (which lack a dtype token); verified: zero hits
+    on all four current HEX snapshots (before/after)."""
     ids: set[int] = set()
     for line in text.splitlines():
+        # Line-leading table-shaped decimal (original coverage).
         m = re.match(
             r"^\s*(\d{4,5})\s+[A-Z].*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
@@ -245,9 +286,81 @@ def scrape_decimal_ids(text: str) -> set[int]:
         )
         if m:
             ids.add(int(m.group(1)))
+        # Mid-line widening (justified above): any 4-5 digit run with a dtype
+        # tail on the same line. Stays exact (zero hits) on snapshots.
+        for m_mid in re.finditer(
+            r"(?<!\w)(\d{4,5})\s+[A-Za-z].*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            line,
+            re.IGNORECASE,
+        ):
+            ids.add(int(m_mid.group(1)))
         for m2 in re.finditer(r"(?<!\w)0\s+x([0-9A-Fa-f]{4})\b", line):
             ids.add(int(m2.group(1), 16))
     return ids
+
+
+def independent_revision_info(text: str):
+    """INDEPENDENT re-derivation of (label, date) for the manifest-match test.
+
+    Deliberately shaped unlike fetch_specs.snapshot_revision_info on every
+    axis while staying exact on current snapshots: it walks lines (not
+    findall-on-tail), requires entry-header anchoring (date/version at line
+    start, not any date in tail prose), and parses each format with separate
+    line-start checks. A future/example date in tail prose ("next maintenance
+    15-11-2030") is therefore ignored here but inflated the old max-over-tail
+    implementation to false-FRESH — the divergence test proves this axis is
+    independent. Verified: identical (label, date) on all five current
+    snapshots."""
+    import datetime as _dt
+
+    label = None
+    m = re.search(r"(?m)^\s*Rev\s+(\d+)\s*$", text)
+    if m:
+        label = f"Rev {m.group(1)}"
+    else:
+        vers = re.findall(r"(?m)^\s*(3\.\d+)\s+\d{1,2}\s+\w+\s+\d{4}", text)
+        if vers:
+            label = f"v{vers[-1]}"
+    marks = [text.rfind(s) for s in ("Revision Log", "Document history", "Changes:")]
+    cut = max(marks)
+    tail_lines = text[cut:].splitlines() if cut >= 0 else text.splitlines()
+    months = (
+        "January", "February", "March", "April", "May", "June", "July",
+        "August", "September", "October", "November", "December",
+    )
+    dates: set = set()
+    for line in tail_lines:
+        s = line.strip()
+        # DD-MM-YYYY entry header (BlueSolar/Orion/BMV, optional "N) "/" – rev N" suffix).
+        m1 = re.match(r"^(?:\d+\)\s*)?(\d{1,2})-(\d{1,2})-(\d{4})(?:\s.*)?$", s)
+        if m1:
+            try:
+                dates.add(_dt.date(int(m1.group(3)), int(m1.group(2)), int(m1.group(1))))
+            except ValueError:
+                pass
+            continue
+        # ISO entry header (Phoenix "5) 2021-09-06").
+        m2 = re.match(r"^(?:\d+\)\s*)?(\d{4})-(\d{1,2})-(\d{1,2})(?:\s.*)?$", s)
+        if m2:
+            try:
+                dates.add(_dt.date(int(m2.group(1)), int(m2.group(2)), int(m2.group(3))))
+            except ValueError:
+                pass
+            continue
+        # Text-mode version+date row ("3.34 14 April 2025", leading spaces).
+        m3 = re.match(
+            r"^(3\.\d+)\s+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+            s,
+        )
+        if m3:
+            try:
+                dates.add(_dt.date(int(m3.group(4)), months.index(m3.group(3)) + 1, int(m3.group(2))))
+            except ValueError:
+                pass
+            continue
+    if label is None and any("Initial version" in ln for ln in tail_lines):
+        label = f"Initial version {max(dates).isoformat()}" if dates else "Initial version"
+    return label, (max(dates) if dates else None)
 
 
 # Scraped IDs that are not registers (verified against the snapshots):
@@ -540,9 +653,9 @@ class TestSpecParsers(unittest.TestCase):
 
     def test_decimal_id_scan_divergence(self):
         """Proves the decimal scan is independent of the shared ``0x``
-        assumption: a synthetic decimal-only row is found by
-        scrape_decimal_ids yet missed by both the parser and
-        scrape_doc_ids, i.e. it would fail loudly as scraped-but-unparsed
+        assumption: synthetic decimal-only rows (line-leading AND mid-line)
+        are found by scrape_decimal_ids yet missed by both the parser and
+        scrape_doc_ids, i.e. they would fail loudly as scraped-but-unparsed
         instead of being missed by both. Control: zero decimal hits on all
         four current HEX snapshots (only the "xEDE0" rescue escapes the
         ``0x`` assumption, and it is explicitly allowlisted)."""
@@ -560,6 +673,37 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(0xEDF0, parsed)
         self.assertNotIn(60961, scrape_doc_ids(synthetic))
         self.assertNotIn(0xEDF0, scrape_doc_ids(synthetic))
+
+    def test_decimal_id_midline_divergence(self):
+        """Proves the widened decimal scan catches mid-line IDs missed by
+        parser, hex scraper, AND the old line-leading-only scan: a synthetic
+        mid-line decimal ("Some prose 60961 ... un16") is found by the
+        widened scrape_decimal_ids yet missed by both the parser and
+        scrape_doc_ids, i.e. it would fail loudly instead of staying green."""
+        synthetic = "Some prose 60961 mid-line un16 register mention\n"
+        self.assertEqual(scrape_decimal_ids(synthetic), {60961})
+        self.assertNotIn(60961, BlueSolarHEXParser(synthetic).parse_registers())
+        self.assertNotIn(60961, scrape_doc_ids(synthetic))
+
+    def test_write_hint_phrase_divergence(self):
+        """Proves write-hint detection is phrase-guarded, not bare-substring:
+        a synthetic readable containing "restore" (but not the command phrase
+        "restore default/factory") is NOT write-only, while real command rows
+        still are. The old bare "restore" matched any readable with the
+        substring."""
+        # Real commands still write-only.
+        self.assertTrue(_is_write_desc("Restore default"))
+        self.assertTrue(_is_write_desc("Restore Defaults (write only)"))
+        self.assertTrue(_is_write_desc("Restore factory defaults"))
+        self.assertTrue(_is_write_desc("Clear history"))
+        self.assertTrue(_is_write_desc("Reset counters command"))
+        # Synthetic readables containing "restore" stay readable.
+        self.assertFalse(_is_write_desc("Device restores defaults on boot readable value"))
+        self.assertFalse(_is_write_desc("restore factor in readable"))
+        self.assertFalse(_is_write_desc("Pressure restore point readable"))
+        # Anchoring: "synchronized" (BMV 0x0FFD) never matches "synchronize".
+        self.assertFalse(_is_write_desc("Start synchronized (2,3)"))
+        self.assertFalse(_is_write_desc("User yield (resettable)"))
 
     def test_multiline_scan_gap_divergence(self):
         """Proves the test-side multi-line scan is truly independent of the
@@ -724,16 +868,25 @@ class TestSpecParsers(unittest.TestCase):
         alone would stay green against a new online revision; this gate
         closes that hole while staying green in offline environments
         (network unreachable -> "unknown" -> skip). The skip stays LOUD:
-        a visible warning names the unverifiable specs plus the last
-        online-verified manifest, so "green" is never mistaken for
-        "verified"."""
+        a visible warning names the unverifiable specs, the last
+        online-verified manifest, AND plainly lists which specs have NEVER
+        been verified online (verified_on None) — not just "unreachable
+        now" — so "green" is never mistaken for "verified"."""
         status, detail = snapshot_freshness_status(self.specs_dir)
         if status == "unknown":
+            never = sorted(
+                k for k, v in FRESHNESS_MANIFEST.items() if v.get("verified_on") is None
+            )
+            never_msg = (
+                f"NEVER verified online: {', '.join(never)}"
+                if never
+                else "all specs previously verified online"
+            )
             warnings.warn(
                 "spec freshness UNKNOWN (unverifiable, NOT verified fresh): "
-                f"{detail}; last-verified-online manifest: {FRESHNESS_MANIFEST}"
+                f"{detail}; {never_msg}; last-verified-online manifest: {FRESHNESS_MANIFEST}"
             )
-            self.skipTest(f"freshness unverifiable, skipping: {detail}")
+            self.skipTest(f"freshness unverifiable, skipping: {detail}; {never_msg}")
         self.assertEqual(status, "fresh", f"online specs newer than snapshots: {detail}")
 
     def test_snapshot_content_against_online(self):
@@ -742,28 +895,59 @@ class TestSpecParsers(unittest.TestCase):
         available the full-download verify_remote_content comparison runs
         as well (DIFF -> FAIL). Offline or without pdftotext it SKIPs with
         a clear reason; default runs stay fast (the header stage above
-        skips first when offline, so no download is even attempted)."""
+        skips first when offline, so no download is even attempted). The
+        skip plainly lists NEVER-verified specs like the header stage."""
         if shutil.which("pdftotext") is None:
             self.skipTest("content stage needs `pdftotext` in PATH; skipping")
         results = verify_remote_content(self.specs_dir, timeout=30.0)
         status, detail = content_gate_verdict(results)
         if status == "unknown":
-            self.skipTest(f"remote content unverifiable, skipping: {detail}")
+            never = sorted(
+                k for k, v in FRESHNESS_MANIFEST.items() if v.get("verified_on") is None
+            )
+            never_msg = (
+                f"NEVER verified online: {', '.join(never)}"
+                if never
+                else "all specs previously verified online"
+            )
+            self.skipTest(f"remote content unverifiable, skipping: {detail}; {never_msg}")
         self.assertEqual(status, "fresh", f"remote content differs: {detail}")
 
     def test_freshness_manifest_matches_snapshots(self):
         """The checked-in last-verified manifest must track the snapshots'
         own revision markers (offline check, no network): doc drift fails
-        here until re-verified online and refreshed via --sync."""
+        here until re-verified online and refreshed via --sync. Compares
+        against an INDEPENDENT re-derivation (independent_revision_info,
+        line-walking and entry-anchored, unlike snapshot_revision_info's
+        findall-on-tail) — not the same function both sides — so a shared
+        max-over-tail bug cannot stay green."""
         for key in fetch_specs.OFFICIAL_SPECS:
             text = (self.specs_dir / f"{key}.txt").read_text(errors="ignore")
             label, date = snapshot_revision_info(text)
+            indep_label, indep_date = independent_revision_info(text)
+            # Independent axis must agree with the primary parser on current
+            # snapshots (both anchored, zero diff); divergence proves
+            # independence on synthetic future-date prose.
+            self.assertEqual((indep_label, indep_date), (label, date), f"{key} independent re-derivation diverged")
             entry = FRESHNESS_MANIFEST[key]
-            self.assertEqual(entry["label"], label, f"{key} manifest label drifted")
+            self.assertEqual(entry["label"], indep_label, f"{key} manifest label drifted")
             self.assertEqual(
-                entry["date"], date.isoformat() if date else None,
+                entry["date"], indep_date.isoformat() if indep_date else None,
                 f"{key} manifest date drifted",
             )
+
+    def test_snapshot_revision_no_future_inflation(self):
+        """Proves date selection is anchored, not max-over-tail: a synthetic
+        example/future date in tail prose must not inflate local_date to
+        false-FRESH. Both the fixed parser and the independent re-derivation
+        ignore mid-line prose dates."""
+        base = "Title\nRev 18\n\nRevision Log\n\n15-11-2021 some change\n"
+        tail = base + "Some example: next maintenance 15-11-2030 future note\n"
+        label, date = snapshot_revision_info(tail)
+        self.assertEqual(label, "Rev 18")
+        self.assertEqual(date, datetime.date(2021, 11, 15))
+        indep_label, indep_date = independent_revision_info(tail)
+        self.assertEqual((indep_label, indep_date), (label, date))
 
     def test_text_unknown_units_empty(self):
         """The snapshot's Units column vocabulary was enumerated directly
@@ -803,9 +987,11 @@ class TestSpecParsers(unittest.TestCase):
         """Synthetic multi-word future unit: the old single-token shape
         check let "kilo watt hours" leak into the description with
         unknown_units==[]; the widened gate records the full pre-gap
-        candidate instead. Control: a long description leaking through an
-        accidental internal double space (> 32 chars) stays unrecorded —
-        the length cap keeps description sentences out of the unit sink."""
+        candidate instead. Over-long control: a long description leaking
+        through an accidental internal double space is now RECORDED (loud,
+        flagged for human review) instead of silently dropped by the old
+        32-char cap — over-scraping fails loudly via the invented-IDs-style
+        unknown-units check, which is the safe direction."""
         section = (
             "The units used by the serial interface are as follows:\n"
             "             KWz                 kilo watt hours          Some new quantity\n"
@@ -822,7 +1008,55 @@ class TestSpecParsers(unittest.TestCase):
         )
         parser2 = VEDirectTextParser(long_desc)
         parser2.parse_fields()
+        # Loud recording: over-long pre-gap candidate is flagged for review,
+        # never silently dropped (old cap hid real >32-char units).
+        self.assertEqual(
+            parser2.unknown_units, [("LDz", "This is a very long description with")]
+        )
+
+    def test_text_unknown_single_space_unit_recorded(self):
+        """Regression for the single-space gate: a future unit separated from
+        its description by ONE space ("Hz Some new quantity", layout collapse)
+        never split on 2+ spaces, so the old gate leaked it into the
+        description with unknown_units==[] and suite green. The fallback
+        records the first token (denylisting known description starters to
+        stay exact on snapshots). Control: a real empty-Units description
+        ("Alarm reason") stays unrecorded."""
+        section = (
+            "The units used by the serial interface are as follows:\n"
+            "             QZz                 Hz Some new quantity\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        parser = VEDirectTextParser(section)
+        fields = parser.parse_fields()
+        self.assertEqual(parser.unknown_units, [("QZz", "Hz")])
+        self.assertEqual(fields["QZz"].units, "")
+        # Control: known description starter never records (denylisted).
+        ctrl = (
+            "The units used by the serial interface are as follows:\n"
+            "             AR                  Alarm reason\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        parser2 = VEDirectTextParser(ctrl)
+        parser2.parse_fields()
         self.assertEqual(parser2.unknown_units, [])
+
+    def test_text_unknown_overlong_unit_recorded(self):
+        """Regression for the 32-char silent drop: a future unit longer than
+        32 chars was silently ignored (unknown_units==[]) while leaking into
+        the description. Loud recording replaces the silent ignore — the full
+        candidate is recorded for human review."""
+        long_unit = "supercalifragilisticexpialidocious_unit_xyz"
+        self.assertGreater(len(long_unit), 32)
+        section = (
+            "The units used by the serial interface are as follows:\n"
+            f"             QZz                 {long_unit}          Some new quantity\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        parser = VEDirectTextParser(section)
+        fields = parser.parse_fields()
+        self.assertEqual(parser.unknown_units, [("QZz", long_unit)])
+        self.assertEqual(fields["QZz"].units, "")
 
     def test_text_field_counter_gap_divergence(self):
         """Proves the independent counter is truly gap-permissive: a
@@ -1080,6 +1314,29 @@ class TestSpecParsers(unittest.TestCase):
         self.assertIn(99, scrape_doc_cs_codes(section))
         self.assertNotIn(99, VEDirectTextParser(section).parse_cs_states())
 
+    def test_cs_scraper_name_divergence(self):
+        """Proves the CS scraper is over-inclusive on names (structural
+        guidance): synthetic ``+``/``:``/digit names are scraped here yet
+        dropped by both the parser and the OLD closed scraper class
+        (letters/space/slash/parens/hyphen), i.e. they would fail loudly as
+        scraper-vs-parser mismatch instead of being missed by both while
+        hardcoded EXPECTED_CS stays green."""
+        section = (
+            "The state of operation. See the table below\n"
+            "                        Off                                   0      •\n"
+            "                        Bulk+Boost                            99     •\n"
+            "                        Charge:Fast                           100    •\n"
+            "                        Mode2Fast                             101    •\n"
+        )
+        scraped = scrape_doc_cs_codes(section)
+        self.assertEqual(scraped[99], "Bulk+Boost")
+        self.assertEqual(scraped[100], "Charge:Fast")
+        self.assertEqual(scraped[101], "Mode2Fast")
+        parsed = VEDirectTextParser(section).parse_cs_states()
+        self.assertNotIn(99, parsed)
+        self.assertNotIn(100, parsed)
+        self.assertNotIn(101, parsed)
+
     def test_error_codes_full_coverage(self):
         """parse_errors must cover the whole section incl. 66/67/68/116/117/119."""
         errors = self.specs["text"].parse_errors()
@@ -1116,6 +1373,29 @@ class TestSpecParsers(unittest.TestCase):
             1,
             VEDirectTextParser(section).parse_errors(),
         )
+
+    def test_error_scraper_name_divergence(self):
+        """Proves the error scraper is over-inclusive on names: synthetic
+        ``+``/``:``/``.`` names are scraped here yet dropped by both the
+        parser and the OLD closed class, i.e. they would fail loudly instead
+        of being missed by both while hardcoded EXPECTED_ERRORS stays green.
+        Control: digit names (e.g. Mode2Fast) were already covered by both
+        sides, so only ``+``/``:``/``.`` prove the new axis."""
+        section = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        Bulk+Boost fault                                                    99\n"
+            "                        Charge:Fast fault                                                   100\n"
+            "                        Dotted.Name fault                                                   102\n"
+        )
+        scraped = scrape_doc_error_codes(section)
+        self.assertEqual(scraped[99], "Bulk+Boost fault")
+        self.assertEqual(scraped[100], "Charge:Fast fault")
+        self.assertEqual(scraped[102], "Dotted.Name fault")
+        parsed = VEDirectTextParser(section).parse_errors()
+        self.assertNotIn(99, parsed)
+        self.assertNotIn(100, parsed)
+        self.assertNotIn(102, parsed)
 
     def test_capabilities_against_doc(self):
         """Capability bits asserted against the doc maps (incl. Orion 28-31)."""
@@ -1157,6 +1437,29 @@ class TestSpecParsers(unittest.TestCase):
             "PAY+GO support",
         )
         self.assertNotIn(27, BlueSolarHEXParser(text).parse_capabilities())
+
+    def test_capability_scraper_window_divergence(self):
+        """Proves the capability scraper scans wider/differently than the
+        parser's fixed 1500/1800-char window: a synthetic bit placed past the
+        parser window but inside the scraper's wider scan is scraped yet
+        missed by the parser, i.e. it would fail loudly instead of being
+        missed by both. The scraper's wider scan (max(window*3,5000) + "(0=no"
+        marker requirement) is justified to stay exact on snapshots."""
+        marker = "Capabilities (register 0x0140)"
+        base = self.raw_texts["bluesolar"]
+        pos = base.find(marker)
+        # Bit at offset ~2000 past marker: beyond parser 1500 window, inside
+        # scraper max(1500*3,5000)=5000 window, with required "(0=no" marker.
+        tail = "x" * 2000 + "\n 30        Future wide bit (0=no, 1=yes)\n"
+        text2 = base[:pos] + marker + tail + base[pos + len(marker):]
+        self.assertIn(
+            30,
+            scrape_doc_capability_bits(text2, marker, 1500),
+        )
+        self.assertNotIn(
+            30,
+            BlueSolarHEXParser(text2).parse_capabilities(),
+        )
 
     def test_phoenix_ble_header_typo(self):
         """The §2.2.5 'Capabilities BLE (register 0x0160)' heading is a doc
@@ -1230,6 +1533,64 @@ class TestSpecParsers(unittest.TestCase):
             if actual != expected and actual != "CONSTANT":
                 mismatches.append(
                     f"0x{rid:04X}: expected {expected}, got {actual}")
+        self.assertEqual(mismatches, [])
+
+        # BMV/BS/Orion access (normalize-then-compare, Phoenix pattern):
+        # BMV explicit markers "(write only)"/"(read-only)" are DOC truth;
+        # READ_WRITE defaults carry no doc access column (parser default, not
+        # DOC truth) so they are skipped — otherwise monitor/history precision
+        # (DB READ_ONLY vs parser READ_WRITE default) would false-fail.
+        # BS/Orion W (Restore/Clear commands) and R for history records are
+        # DOC truth (commands writable, history read-only); R/W defaults and
+        # detail-mention Rs with no access column (Orion 0x0090/0x0206/0x2013:
+        # settings vs measurement ambiguous in prose, parser default R vs DB
+        # READ_WRITE) are skipped with justification — timer events fixed to
+        # R/W (Get/Set writable, DB READ_WRITE) so they no longer assert as R.
+        bmv_map = {"WRITE_ONLY": "WRITE_ONLY", "READ_ONLY": "READ_ONLY"}
+        for rid, spec_reg in self.bmv_regs.items():
+            if spec_reg.access not in bmv_map:
+                continue  # READ_WRITE default, no doc column
+            expected = bmv_map[spec_reg.access]
+            actual = R.lookup(rid, flavor="BMV").access
+            if actual != expected and actual != "CONSTANT":
+                mismatches.append(f"BMV 0x{rid:04X}: expected {expected}, got {actual}")
+        self.assertEqual(mismatches, [])
+        mismatches = []
+        for rid, spec_reg in self.bs_regs.items():
+            if spec_reg.access == "W":
+                expected = "WRITE_ONLY"
+            elif spec_reg.access == "R" and (
+                "history" in spec_reg.description.lower()
+                or "range-expanded" in spec_reg.notes.lower()
+                or "total history" in spec_reg.description.lower()
+            ):
+                expected = "READ_ONLY"
+            else:
+                continue  # R/W default or timer R/W (Get/Set writable), no assert
+            actual = R.lookup(rid, flavor="MPPT").access
+            # Timer R/W skipped above; history R must be READ_ONLY (CONSTANT allowed like Phoenix).
+            if actual != expected and actual != "CONSTANT":
+                # src/ is read-only: DOC truth asserts here; on mismatch report DB file:line.
+                mismatches.append(f"BS 0x{rid:04X} ({spec_reg.name}): expected {expected}, got {actual}")
+        self.assertEqual(mismatches, [])
+        mismatches = []
+        for rid, spec_reg in self.or_regs.items():
+            if spec_reg.access == "W":
+                expected = "WRITE_ONLY"
+            elif spec_reg.access == "R" and (
+                "history" in spec_reg.description.lower()
+                or "cycle" in spec_reg.description.lower()
+                or "range-expanded" in spec_reg.notes.lower()
+            ):
+                expected = "READ_ONLY"
+            else:
+                continue  # R/W defaults + detail Rs (0x0090/0x0206/0x2013/0x0150/0xEDDA: no access column)
+            try:
+                actual = R.lookup(rid, flavor="ORION").access
+            except Exception:
+                continue  # flavor-aliased, covered by schema compliance
+            if actual != expected and actual != "CONSTANT":
+                mismatches.append(f"Orion 0x{rid:04X} ({spec_reg.name}): expected {expected}, got {actual}")
         self.assertEqual(mismatches, [])
 
         self.assertEqual(R.lookup("REBULK_VOLTAGE_OFFSET").id, 0xED2E)
@@ -1413,6 +1774,88 @@ class TestFetchSpecs(unittest.TestCase):
     def _write_dated_specs(self, tmp: Path) -> None:
         self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
 
+    @staticmethod
+    def _content_pdf_bytes(marker_text: str) -> bytes:
+        """Craft minimal PDF bytes with a FlateDecode stream (stdlib-only).
+
+        Splits the marker text into single-char ``(...)`` fragments inside a
+        ``[...]TJ`` array (with kerning numbers) to mirror the real Victron
+        PDFs' split-word layout, so the extractor's concatenation path is
+        what the test exercises — not a trivial whole-string match.
+        """
+        parts = []
+        for ch in marker_text:
+            if ch in "()\\":
+                parts.append(f"(\\{ch})")
+            else:
+                parts.append(f"({ch})")
+        content = ("BT [ " + "".join(f"{p}5 " for p in parts) + "] TJ ET").encode("latin-1")
+        comp = zlib.compress(content)
+        return (
+            b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+            b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+            b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj\n"
+            b"4 0 obj << /Length " + str(len(comp)).encode() + b" /Filter /FlateDecode >> stream\n"
+            + comp + b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF"
+        )
+
+    def _markers_pdf_for(self, label, date) -> bytes:
+        """Build a crafted PDF embedding derived ``(label, date)`` markers.
+
+        No revision literals: everything embedded derives from the caller's
+        ``(label, date)``, which tests derive from the snapshots (or bump
+        from them), so the suite still fails for real when Victron publishes
+        a new revision.
+        """
+        bits = [
+            "Revision Log",
+            "Document history",
+            "Changes:",
+            label or "",
+            date.strftime("%d-%m-%Y"),
+            date.isoformat(),
+            date.strftime("%d %B %Y"),
+        ]
+        if label and re.match(r"v3\.\d+$", label):
+            bits.append(f"{label[1:]} {date.day} {date.strftime('%B')} {date.year}")
+        if label and "Initial version" in label:
+            bits.append("Initial version")
+        return self._content_pdf_bytes("  ".join(b for b in bits if b))
+
+    @staticmethod
+    def _bumped_label_date(label, date):
+        """Derive a provably-newer ``(label, date)`` from snapshot markers.
+
+        No revision literals: Rev N -> Rev N+1, vA.B -> vA.(B+1), Initial
+        version D -> Initial version D+30d; the date always moves +30 days so
+        both the label and the date prove newness.
+        """
+        new_date = date + datetime.timedelta(days=30)
+        m = re.match(r"Rev\s+(\d+)$", label or "")
+        if m:
+            return f"Rev {int(m.group(1)) + 1}", new_date
+        m = re.match(r"v(\d+)\.(\d+)$", label or "")
+        if m:
+            return f"v{m.group(1)}.{int(m.group(2)) + 1}", new_date
+        if label and "Initial version" in label:
+            return f"Initial version {new_date.isoformat()}", new_date
+        return (f"{label}+", new_date) if label else (label, new_date)
+
+    def _copy_real_snapshots(self, tmp: Path) -> dict:
+        """Copy the checked-in snapshots to ``tmp``; return derived markers.
+
+        Returns ``{key: (label, date)}`` via :func:`snapshot_revision_info`
+        on the real snapshot text — expected answers derive from the
+        snapshots/manifest, never literals.
+        """
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        out = {}
+        for key in fetch_specs.OFFICIAL_SPECS:
+            text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+            (tmp / f"{key}.txt").write_text(text)
+            out[key] = snapshot_revision_info(text)
+        return out
+
     def test_freshness_status_fresh(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._write_dated_specs(Path(tmp))
@@ -1420,41 +1863,62 @@ class TestFetchSpecs(unittest.TestCase):
                 fetch_specs, "remote_last_modified",
                 return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
             ):
-                status, _ = snapshot_freshness_status(Path(tmp))
-                self.assertEqual(status, "fresh")
+                # Header-old stays FRESH with no download (fast path).
+                with mock.patch.object(fetch_specs, "download_pdf_bytes") as md:
+                    status, _ = snapshot_freshness_status(Path(tmp))
+                    self.assertEqual(status, "fresh")
+                    md.assert_not_called()
 
     def test_freshness_status_stale(self):
+        # Header-newer alone no longer fails: the download must prove a
+        # newer revision. Craft FlateDecode PDFs bumping the fixture's own
+        # markers (derived, not hardcoded) so the content stage reports STALE.
         with tempfile.TemporaryDirectory() as tmp:
             self._write_dated_specs(Path(tmp))
+            label, local_date = snapshot_revision_info("Rev 9\nRevision Log\n1 February 2023\n")
+            new_label, new_date = self._bumped_label_date(label, local_date)
+            pdf = self._markers_pdf_for(new_label, new_date)
             with mock.patch.object(
                 fetch_specs, "remote_last_modified",
                 return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
             ):
-                status, detail = snapshot_freshness_status(Path(tmp))
-                self.assertEqual(status, "stale")
-                self.assertIn("BlueSolar", detail)
+                with mock.patch.object(
+                    fetch_specs, "download_pdf_bytes", return_value=pdf
+                ) as md:
+                    status, detail = snapshot_freshness_status(Path(tmp))
+                    self.assertEqual(status, "stale")
+                    self.assertIn("BlueSolar", detail)
+                    self.assertIn(new_label, detail)
+                    self.assertEqual(md.call_count, len(fetch_specs.OFFICIAL_SPECS))
 
     def test_freshness_status_stale_wins_over_same_day_unknown(self):
         """Regression for the first-failure short-circuit: an early
-        same-day ``unknown`` must not mask a later ``stale`` — all specs
-        are evaluated and the worst status wins."""
+        same-day (now header-fresh, no download) must not mask a later
+        content-proven ``stale`` — all specs are evaluated and the worst
+        status wins."""
         with tempfile.TemporaryDirectory() as tmp:
             self._write_dated_specs(Path(tmp))
+            label, local_date = snapshot_revision_info("Rev 9\nRevision Log\n1 February 2023\n")
+            new_label, new_date = self._bumped_label_date(label, local_date)
+            pdf = self._markers_pdf_for(new_label, new_date)
             calls = {"n": 0}
 
             def _fake(url, timeout=15.0):
                 calls["n"] += 1
                 if calls["n"] == 1:
-                    # First spec (BlueSolar): same-day -> unknown ...
+                    # First spec (BlueSolar): same-day header -> fresh, no download ...
                     return datetime.datetime(2023, 2, 1, 18, 0, tzinfo=datetime.timezone.utc)
-                # ... but a later spec is outright stale.
+                # ... but later specs have newer headers AND newer content.
                 return datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)
 
             with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake):
-                status, detail = snapshot_freshness_status(Path(tmp))
-                self.assertEqual(status, "stale", detail)
-                self.assertEqual(calls["n"], len(fetch_specs.OFFICIAL_SPECS))
-                self.assertIn("same-day", detail)
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", return_value=pdf) as md:
+                    status, detail = snapshot_freshness_status(Path(tmp))
+                    self.assertEqual(status, "stale", detail)
+                    self.assertEqual(calls["n"], len(fetch_specs.OFFICIAL_SPECS))
+                    # Same-day spec needed no download; each newer header fetched once.
+                    self.assertEqual(md.call_count, len(fetch_specs.OFFICIAL_SPECS) - 1)
+                    self.assertIn(new_label, detail)
 
     def test_freshness_status_unknown_names_every_spec(self):
         """When several specs are unverifiable, the detail names all of
@@ -1467,15 +1931,19 @@ class TestFetchSpecs(unittest.TestCase):
                 for key in fetch_specs.OFFICIAL_SPECS:
                     self.assertIn(key, detail)
 
-    def test_freshness_status_same_day_is_unknown(self):
+    def test_freshness_status_same_day_is_fresh_without_download(self):
+        """Same-day (equal) headers stay FRESH with no download: the header
+        already proves currency, so the content stage is never reached."""
         with tempfile.TemporaryDirectory() as tmp:
             self._write_dated_specs(Path(tmp))
             with mock.patch.object(
                 fetch_specs, "remote_last_modified",
                 return_value=datetime.datetime(2023, 2, 1, 18, 0, tzinfo=datetime.timezone.utc),
             ):
-                status, _ = snapshot_freshness_status(Path(tmp))
-                self.assertEqual(status, "unknown")
+                with mock.patch.object(fetch_specs, "download_pdf_bytes") as md:
+                    status, _ = snapshot_freshness_status(Path(tmp))
+                    self.assertEqual(status, "fresh")
+                    md.assert_not_called()
 
     def test_freshness_status_offline_is_unknown(self):
         # Offline (URLError from urlopen) must SKIP the suite, never fail it.
@@ -1485,15 +1953,19 @@ class TestFetchSpecs(unittest.TestCase):
                 fetch_specs, "remote_last_modified",
                 side_effect=OSError("Network is unreachable"),
             ):
-                status, _ = snapshot_freshness_status(Path(tmp))
-                self.assertEqual(status, "unknown")
+                with mock.patch.object(fetch_specs, "download_pdf_bytes") as md:
+                    status, _ = snapshot_freshness_status(Path(tmp))
+                    self.assertEqual(status, "unknown")
+                    md.assert_not_called()
 
     def test_freshness_status_no_header_is_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._write_dated_specs(Path(tmp))
             with mock.patch.object(fetch_specs, "remote_last_modified", return_value=None):
-                status, _ = snapshot_freshness_status(Path(tmp))
-                self.assertEqual(status, "unknown")
+                with mock.patch.object(fetch_specs, "download_pdf_bytes") as md:
+                    status, _ = snapshot_freshness_status(Path(tmp))
+                    self.assertEqual(status, "unknown")
+                    md.assert_not_called()
 
     def test_freshness_status_undated_local_is_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1516,6 +1988,169 @@ class TestFetchSpecs(unittest.TestCase):
                 status, _ = snapshot_freshness_status(Path(tmp))
                 self.assertEqual(status, "unknown")
 
+    def test_extract_pdf_text_flatedecode_split_words(self):
+        """Crafted FlateDecode stream with kerning-split words recovers
+        contiguous markers without pdftotext (stdlib zlib only)."""
+        pdf = self._content_pdf_bytes("Revision Log Rev 9 01-02-2023")
+        text = extract_pdf_text(pdf)
+        self.assertIn("Rev 9", text)
+        self.assertIn("01-02-2023", text)
+        label, date = extract_pdf_revision_info(pdf)
+        self.assertEqual(label, "Rev 9")
+        self.assertEqual(date, datetime.date(2023, 2, 1))
+
+    def test_extract_pdf_revision_info_matches_snapshot_parser(self):
+        """Mocked technique proof (no network): for every checked-in
+        snapshot, a FlateDecode PDF crafted from its own derived markers
+        round-trips through extract_pdf_revision_info exactly."""
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        for key in fetch_specs.OFFICIAL_SPECS:
+            with self.subTest(spec=key):
+                text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+                label, date = snapshot_revision_info(text)
+                self.assertIsNotNone(date, f"{key} snapshot has no date")
+                pdf = self._markers_pdf_for(label, date)
+                self.assertEqual(extract_pdf_revision_info(pdf), (label, date))
+
+    def test_content_gate_markers_match_is_fresh(self):
+        """Newer header + SAME revision markers in the PDF -> FRESH (the
+        false-positive fix): expected markers derive from the checked-in
+        snapshots, never literals, so a real new revision still fails loudly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            expected = self._copy_real_snapshots(tmpdir)
+            newer = {
+                key: datetime.datetime.combine(
+                    date + datetime.timedelta(days=10), datetime.time(12, 0),
+                    tzinfo=datetime.timezone.utc,
+                )
+                for key, (_label, date) in expected.items()
+            }
+            pdfs = {
+                key: self._markers_pdf_for(label, date)
+                for key, (label, date) in expected.items()
+            }
+
+            def _fake_header(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return newer[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            def _fake_download(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return pdfs[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download) as md:
+                    status, detail = snapshot_freshness_status(tmpdir)
+                    self.assertEqual(status, "fresh", detail)
+                    # One fetch per spec max (cached within the run).
+                    self.assertEqual(md.call_count, len(fetch_specs.OFFICIAL_SPECS))
+
+    def test_content_gate_markers_newer_is_stale(self):
+        """Newer header + NEWER revision markers in the PDF -> STALE naming
+        the new revision: bumped markers derive from the snapshots, never
+        literals."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            expected = self._copy_real_snapshots(tmpdir)
+            bumped = {
+                key: self._bumped_label_date(label, date)
+                for key, (label, date) in expected.items()
+            }
+            newer = {
+                key: datetime.datetime.combine(
+                    date + datetime.timedelta(days=10), datetime.time(12, 0),
+                    tzinfo=datetime.timezone.utc,
+                )
+                for key, (_label, date) in expected.items()
+            }
+            pdfs = {
+                key: self._markers_pdf_for(*bumped[key]) for key in expected
+            }
+
+            def _fake_header(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return newer[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            def _fake_download(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return pdfs[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
+                    status, detail = snapshot_freshness_status(tmpdir)
+                    self.assertEqual(status, "stale", detail)
+                    for key in expected:
+                        self.assertIn(bumped[key][0], detail, key)
+
+    def test_content_gate_unextractable_is_unknown(self):
+        """Newer header but no revision markers in the PDF -> UNKNOWN (loud
+        skip naming every spec, never fail)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            markerless = self._content_pdf_bytes("hello world no markers here")
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+            ):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", return_value=markerless):
+                    status, detail = snapshot_freshness_status(Path(tmp))
+                    self.assertEqual(status, "unknown")
+                    for key in fetch_specs.OFFICIAL_SPECS:
+                        self.assertIn(key, detail)
+
+    def test_content_gate_download_failure_is_unknown(self):
+        """Newer header but the PDF download fails -> UNKNOWN (loud skip
+        naming every spec, never fail)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_dated_specs(Path(tmp))
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+            ):
+                with mock.patch.object(
+                    fetch_specs, "download_pdf_bytes", side_effect=OSError("boom")
+                ):
+                    status, detail = snapshot_freshness_status(Path(tmp))
+                    self.assertEqual(status, "unknown")
+                    for key in fetch_specs.OFFICIAL_SPECS:
+                        self.assertIn(key, detail)
+
+    def test_download_pdf_bytes_uses_urllib(self):
+        """download_pdf_bytes goes through stdlib urllib (mocked urlopen)."""
+        with mock.patch("urllib.request.urlopen") as mu:
+            mu.return_value.__enter__.return_value.read.return_value = b"%PDF-fake"
+            self.assertEqual(download_pdf_bytes("http://example/x.pdf"), b"%PDF-fake")
+
+    def test_content_gate_live_online_markers_match(self):
+        """Live behavior (skipped unless network is present): the real online
+        PDFs' stdlib-extracted markers still equal their snapshots' (same
+        revisions, re-uploaded). A real new revision fails here loudly
+        instead of passing; offline skips. Other live assertions stay out of
+        the suite (the mocked tests above cover the mechanism) to keep
+        default runs fast and offline-green."""
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        for key, info in fetch_specs.OFFICIAL_SPECS.items():
+            with self.subTest(spec=key):
+                snap_text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+                expected = snapshot_revision_info(snap_text)
+                try:
+                    pdf_bytes = download_pdf_bytes(info["url"], timeout=30.0)
+                except OSError as e:
+                    self.skipTest(f"live download unreachable, skipping: {e}")
+                self.assertEqual(
+                    extract_pdf_revision_info(pdf_bytes), expected,
+                    f"{key} live markers diverged from snapshot",
+                )
+
     def test_freshness_manifest_matches_snapshots_offline(self):
         """Manifest tested without network in TestSpecParsers; here the
         --sync rewrite helper is covered as a pure function (offline)."""
@@ -1527,6 +2162,74 @@ class TestFetchSpecs(unittest.TestCase):
         for key in fetch_specs.OFFICIAL_SPECS:
             self.assertIn(f'"{key}": {{"label": \'Rev 9\', "date": \'2023-02-01\'', out)
         self.assertIn('"verified_on": \'2026-01-01\'', out)
+
+    def test_sync_manifest_per_spec_stamps_only_successes(self):
+        """--sync per-spec stamping (mocked, offline): SYNC-OK specs get
+        verified_on=today, others preserve their old stamp (None = never).
+        Proves the checked-in manifest file itself is updated (not just the
+        pure helper) and that partial success still records successes."""
+        source = (
+            "# FRESHNESS-MANIFEST-BEGIN\nFRESHNESS_MANIFEST = {\n}\n# FRESHNESS-MANIFEST-END\n"
+        )
+        per_spec = {
+            k: ("Rev 9", "2023-02-01", ("2026-05-01" if k == "BlueSolar-HEX-protocol" else None))
+            for k in fetch_specs.OFFICIAL_SPECS
+        }
+        out = update_manifest_text_per_spec(source, per_spec)
+        self.assertIn('"verified_on": \'2026-05-01\'', out)
+        # Only one spec stamped, rest None (never).
+        self.assertEqual(out.count("'2026-05-01'"), 1)
+        self.assertGreaterEqual(out.count("None"), 4)
+
+    def test_sync_main_updates_manifest_file_mocked(self):
+        """Verify the --sync CLI path writes the manifest file (mocked
+        network + file I/O): with all SYNC-OK, the file gains today's
+        verified_on. Proves the checked-in record path works without real
+        network (offline-green)."""
+        import datetime as _dt
+        import sys as _sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp)
+            for key in fetch_specs.OFFICIAL_SPECS:
+                (dest / f"{key}.txt").write_text("Rev 9\nRevision Log\n1 February 2023\n")
+            fake_results = {k: True for k in fetch_specs.OFFICIAL_SPECS}
+            today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+            fake_source = (
+                "# FRESHNESS-MANIFEST-BEGIN\nFRESHNESS_MANIFEST = {\n}\n# FRESHNESS-MANIFEST-END\n"
+            )
+            written: dict = {}
+            real_path_cls = fetch_specs.Path
+
+            def _fake_path(*args, **kwargs):
+                # Path(__file__) -> fake file capturing write_text; others real.
+                if len(args) == 1 and isinstance(args[0], str) and args[0].endswith("fetch_specs.py"):
+                    m = mock.MagicMock()
+                    m.read_text.return_value = fake_source
+                    def _write(txt):
+                        written["text"] = txt
+                        return len(txt)
+                    m.write_text.side_effect = _write
+                    return m
+                return real_path_cls(*args, **kwargs)
+
+            with mock.patch.object(fetch_specs, "verify_remote_content", return_value=fake_results):
+                with mock.patch.object(fetch_specs, "Path", side_effect=_fake_path):
+                    with mock.patch.object(
+                        _sys, "argv", ["fetch_specs.py", "--sync", "--dest-dir", str(dest)]
+                    ):
+                        rc = fetch_specs.main()
+            self.assertEqual(rc, 0)
+            self.assertIn("text", written, "--sync with all SYNC-OK must write manifest file")
+            self.assertIn(f"'{today}'", written["text"])
+
+    def test_snapshot_revision_no_midline_future_inflation(self):
+        """fetch_specs-level proof: mid-line example/future date in the tail
+        must not inflate local_date (anchored, not max-over-tail)."""
+        base = "Title\nRev 18\n\nRevision Log\n\n15-11-2021 some change\n"
+        tail = base + "Some example: next maintenance 15-11-2030 future note\n"
+        _label, date = snapshot_revision_info(tail)
+        self.assertEqual(date, datetime.date(2021, 11, 15))
 
     def test_content_gate_verdict_fresh(self):
         results = {k: True for k in fetch_specs.OFFICIAL_SPECS}

@@ -67,11 +67,30 @@ DOC_TYPO_REGISTER_IDS = frozenset({0xEFF0})
 #: command rows explicitly as "(write only)" ("Zero Current", "Synchronize",
 #: "Restore Defaults", "Clear History"), and BlueSolar/Orion use the same
 #: command verbs in their ID+description tables ("Restore default",
-#: "Clear history"). "reset counter(s)" covers reset-command rows (e.g. a
-#: "Reset counters" row); it is a full phrase so a readable register such as
-#: BlueSolar 0xEDDC "User yield (resettable)" never matches. "(write only)"
-#: itself is included so any row carrying the doc's literal marker is caught.
-_WRITE_HINTS = ("restore", "clear history", "zero current", "synchronize", "reset counter", "(write only)")
+#: "Clear history"). All hints are phrase-guarded / word-anchored (never a
+#: bare substring): bare "restore" also matched readables such as "Device
+#: restores defaults" or "restore factor", and bare "synchronize" matched
+#: "synchronized" (e.g. BMV 0x0FFD "Start synchronized"). "restore default(s)"
+#: covers 0x0004 "Restore default" / "Restore Defaults"; "restore factory"
+#: covers the "Restore factory defaults" header variant; "reset counter(s)"
+#: is plural-aware so "Reset counters" matches while BlueSolar 0xEDDC "User
+#: yield (resettable)" never does (space vs "table"). "(write only)" itself
+#: is included so any row carrying the doc's literal marker is caught.
+_WRITE_HINTS = ("restore default", "restore factory", "clear history", "zero current", "synchronize", "reset counter", "(write only)")
+
+#: Word-anchored regexes for _is_write_desc (plural-aware where the doc
+#: uses both forms). Substring matching ("restore" in desc) is the bug:
+#: it misclassifies any readable containing the substring. Anchored phrases
+#: fail loudly via the write-only divergence test instead.
+_WRITE_HINT_RES = (
+    re.compile(r"\brestore\s+defaults?\b", re.IGNORECASE),
+    re.compile(r"\brestore\s+factory\b", re.IGNORECASE),
+    re.compile(r"\bclear\s+history\b", re.IGNORECASE),
+    re.compile(r"\bzero\s+current\b", re.IGNORECASE),
+    re.compile(r"\bsynchronize\b", re.IGNORECASE),
+    re.compile(r"\breset\s+counters?\b", re.IGNORECASE),
+    re.compile(r"\(write only\)", re.IGNORECASE),
+)
 
 #: Device columns of the VE.Direct Text Mode fields tables, left to right.
 TEXT_DEVICES = ["BMV60x", "BMV70x", "BMV71x", "MPPT", "PhoenixInverter", "PhoenixCharger", "BuckBoost"]
@@ -187,7 +206,7 @@ def _expand_id_range(a: int, b: int, cap: int = 64) -> List[int]:
 
 
 def _is_write_desc(desc: str) -> bool:
-    return any(h in desc.lower() for h in _WRITE_HINTS)
+    return any(rx.search(desc) for rx in _WRITE_HINT_RES)
 
 
 class BlueSolarHEXParser:
@@ -309,7 +328,10 @@ class BlueSolarHEXParser:
                                     scale=None,
                                     data_type="struct",
                                     unit=None,
-                                    access="R",
+                                    # Timer events live in the 1.1 Get and Set table (streetlighting
+                                    # settings, writable) while history records are read-only;
+                                    # the DB models timers as READ_WRITE (see src/ve_direct/registers/__init__.py:373).
+                                    access="R/W" if kind == "Timer event" else "R",
                                     source="BlueSolar-HEX",
                                     notes=f"range-expanded multi-line 0x{a:04X}...0x{b:04X}; doc Type is a 32-bit word/bit-field layout" if kind == "Timer event" else f"range-expanded multi-line 0x{a:04X}...0x{b:04X}; byte-field layout, no single wire type",
                                 )
@@ -866,14 +888,34 @@ _TEXT_CONT_EXCLUDE = ("60x", "Victron Energy", "General phone", "www.victronener
 #: not recognize: anything letter-bearing before the 2+-space column gap.
 #: Multi-word candidates ("kilo watt hours") are recorded as well as single
 #: tokens: the old single-token shape check let a future multi-word unit
-#: leak into the description with unknown_units==[]. Length-guarded (<= 32
-#: chars): the longest vocabulary unit is 8 chars ("0.01 kWh"), so 32 gives
-#: 4x headroom for plausible multi-word units, while description sentences
-#: (which only reach this branch through an accidental internal double
-#: space) are far longer. Verified: no snapshot row yields a two-part
-#: pre-gap split here, so the widened gate stays empty on current docs.
+#: leak into the description with unknown_units==[]. Loud recording (no
+#: length drop): the longest vocabulary unit is 8 chars ("0.01 kWh"), but a
+#: future unit longer than 32 chars must still fail loudly instead of being
+#: silently ignored — over-long candidates are recorded with their full text
+#: so the suite flags them for human review. Verified: no snapshot row yields
+#: a two-part pre-gap split here, so the widened gate stays empty on current
+#: docs.
 _UNKNOWN_UNIT_CAND_RE = re.compile(r"[A-Za-z°‰%Ωμ]")
+#: Retained for triage documentation only (4x headroom over the 8-char
+#: longest vocabulary unit); NOT used to drop candidates — dropping hid real
+#: units. See _split_text_units_desc: all letter-bearing candidates are
+#: recorded.
 _UNKNOWN_UNIT_MAX_LEN = 32
+
+#: First-words of current snapshot empty-Units descriptions (AR/Alarm/Relay/
+#: OR/ERR/CS/LOAD/HSDS/H11-H14/BMV/FW/PID/SER#/MODE/WARN/MPPT/MON): the
+#: single-space fallback below takes the first whitespace-separated token as
+#: the unit candidate, so these description starters must be denylisted to
+#: stay exact (zero diff) on current docs. Over-inclusion principle: a future
+#: unit colliding with one of these words would be missed here, but the list
+#: is explicit and reviewable, and the single-space divergence test proves the
+#: fallback catches non-denylisted units (e.g. "Hz"). Verified: every
+#: snapshot empty-Units remainder's first token is in this set, so the
+#: fallback stays empty on current docs.
+_SINGLE_SPACE_DESC_DENY = frozenset({
+    "Alarm", "Model", "State", "Error", "Firmware", "Number", "Day", "Load",
+    "Device", "DC", "Tracker", "Off", "Product", "Relay", "Serial", "Warning",
+})
 
 
 def _split_text_units_desc(
@@ -894,7 +936,12 @@ def _split_text_units_desc(
     future "Hz" or "kilo watt hours" row), the raw candidate is appended to
     ``unknown_sink`` as ``(label, candidate)`` (when a sink is given) and
     the row still parses as ``("", rest)`` so the suite — which asserts the
-    sink is empty — breaks until the unit is explicitly allowlisted.
+    sink is empty — breaks until the unit is explicitly allowlisted. A
+    single-space layout collapse ("Hz Some new quantity" with one space
+    between unit and description) has no 2+-space gap, so a fallback takes
+    the first whitespace-separated token as the candidate (denylisting known
+    description starters to stay exact on current docs). Over-long
+    candidates are recorded, never dropped.
     """
     units = ""
     m = _TEXT_UNITS_RE.match(rest)
@@ -915,9 +962,20 @@ def _split_text_units_desc(
             # footnote run must not defeat the letter check, so it is
             # stripped for the check but the raw candidate is recorded.
             shape = re.sub(r"\d[\d\s,]*$", "", cand).strip() or cand
-            if len(cand) <= _UNKNOWN_UNIT_MAX_LEN and _UNKNOWN_UNIT_CAND_RE.search(shape):
+            if _UNKNOWN_UNIT_CAND_RE.search(shape):
                 if unknown_sink is not None:
                     unknown_sink.append((label, cand))
+        else:
+            # Single-space fallback: no column gap (layout collapse or future
+            # single-spaced unit). Record the first token unless it is a known
+            # description starter (denylisted above to stay exact).
+            toks = head.strip().split()
+            if toks:
+                cand1 = toks[0].strip()
+                shape1 = re.sub(r"\d[\d\s,]*$", "", cand1).strip() or cand1
+                if cand1 not in _SINGLE_SPACE_DESC_DENY and _UNKNOWN_UNIT_CAND_RE.search(shape1):
+                    if unknown_sink is not None:
+                        unknown_sink.append((label, cand1))
     return units, rest.split("•", 1)[0].strip()
 
 
