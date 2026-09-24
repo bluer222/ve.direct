@@ -111,36 +111,86 @@ def count_doc_field_labels(section: str) -> set[str]:
     continuations at 58, furniture at 0 and device headers at 101+ are
     excluded by STRUCTURE, not indent: with the counter's any-gap
     ``\\s+`` every multi-token line matches structurally, so furniture is
-    excluded by an explicit content denylist instead). The denylist below
-    is the complete first-token furniture of the current fields section
-    (verified: 75 distinct first-tokens match structurally, 63 are labels,
-    these 12 are the entire remainder): table headers (Label, 60x),
-    section intro (The), footnote prose (Available, When, the, batches, —
-    the wrapped "batches, with PID 0x300 ..." line), continuations (Amount,
-    Depth, Number — "Depth of the deepest discharge" etc.), footers
-    (Victron, General — "General phone: ..." carries E-mail mid-line).
-    Deliberately NOT denylisted (divergence proofs): "Note" (parser
-    stoplist word — a colliding future label is counted here but skipped
-    by the parser, see test_text_field_counter_stoplist_divergence) and
-    "MPPT" (a REAL label; the footnote "MPPT 75/15 ..." line yields the
-    same token and dedups at distinct-level, so 63 stay exact). Bare
-    footnote numbers / bare URLs are single-token lines (no gap) and miss
-    structurally. A single-space label row is still counted here but
-    missed by the parser's ``\\s{2,}`` rule (gap divergence, see
+    excluded by explicit pins instead). Furniture is excluded ONLY by
+    EXACT full-line pins below (stripped snapshot lines verbatim — the
+    ERR-furniture-divergence precedent): the complete set of snapshot
+    fields-section lines whose first token collides with a plausible future
+    label (Label, 60x, The, Available, When, Victron, General — 28 distinct
+    lines, each verified verbatim-present below). A shared content denylist
+    on those words (``"Available" in deny`` on both sides) hid a future
+    ``Available mV ...`` field on BOTH sides while 63 stayed green
+    (reproduced synthetically before the fix); exact pins diverge from the
+    parser's stoplist by construction, so a future colliding label row
+    matches no pin here while the parser still drops it: scraped-but-
+    unparsed, failing loudly instead of agreed-missing (see the
+    furniture-pins divergence test). Remaining content-denied starters
+    (Available-neighbour footnote prose "the"/"batches,", continuations
+    "Amount"/"Depth"/"Number") are NOT shared blind spots and stay denied:
+    none is in the parser's stoplist, so a future label colliding with one
+    of them is parsed (not denied) while this counter drops it — diverging
+    in the opposite direction, failing loudly via set-equality. Deliberately
+    NOT denylisted/pinned (divergence proofs): "Note" (parser stoplist word
+    — a colliding future label is counted here but skipped by the parser,
+    see test_text_field_counter_stoplist_divergence) and "MPPT" (a REAL
+    label; the footnote "MPPT 75/15 ..." line yields the same token and
+    dedups at distinct-level, so 63 stay exact). Bare footnote numbers /
+    bare URLs are single-token lines (no gap) and miss structurally. A
+    single-space label row is still counted here but missed by the parser's
+    ``\\s{2,}`` rule (gap divergence, see
     test_text_field_counter_gap_divergence); indent/charset no longer
-    diverge (both sides structural), gap/stoplist still do. Verified: this
-    yields exactly the 63 doc fields on the current snapshot with no prose
-    false positives (all 63 labels at column 13)."""
+    diverge (both sides structural), gap/stoplist/furniture-pins still do.
+    Verified: this yields exactly the 63 doc fields on the current snapshot
+    with no prose false positives (all 63 labels at column 13)."""
+    # Exact full-line furniture pins (stripped snapshot lines verbatim —
+    # every fields-section line starting with Label/60x/The/Available/When/
+    # Victron/General, the words a future field could be named): table
+    # headers (Label ... + 60x device-column sub-headers), the section intro
+    # (both "The ..." lines), footnote prose (14 "Available ..." + 4 "When
+    # ..." lines), page footers (Victron/General, each 3x identical).
+    # A reworded future note matches no pin and scrapes loudly
+    # (over-inclusion); a colliding future label likewise.
+    _furniture_lines = frozenset({
+        "Label          Units                               Description                                 BMV          BMV          BMV71x           MPPT 1        Phoenix         Phoenix          Smart",
+        "Label                 Units                                Description                       BMV          BMV          BMV71x        MPPT 1   Phoenix    Phoenix     Smart",
+        "Label                 Units                              Description               BMV   BMV    BMV71x      MPPT 1   Phoenix    Phoenix     Smart",
+        "60x          70x         SmartShunt                      Inverter        Charger        BuckBoost",
+        "60x          70x         SmartShunt              Inverter   Charger   BuckBoost",
+        "60x   70x   SmartShunt            Inverter   Charger   BuckBoost",
+        "The units used by the serial interface are as follows:",
+        "The VE.Direct protocol is available in the MPPT 70/15 since firmware version v1.09 and up, and only in newer type MPPT 70/15s: the ones with a product id other than 0x300. The first",
+        "Available on BlueSolar mppt chargers since firmware version v1.16",
+        "Available on BlueSolar mppt chargers since firmware version v1.37",
+        "Available on Phoenix Inverter (some models) since firmware version v1.16",
+        "Available on Phoenix Inverter v1.16",
+        "Available on Phoenix Smart Chargers with triple outputs only",
+        "Available on Smart Phoenix Inverter",
+        "Available on SmartSolar mppt chargers since firmware version v1.17",
+        "Available on SmartSolar mppt chargers since firmware version v1.44 (VE.Direct models) and v1.03 (SmartSolar VE.Can models)",
+        "Available since version v1.12, and only for models with a load output.",
+        "Available since version v1.15, and only for models with a load output.",
+        "Available since version v4.08",
+        "Available when the AUX input is configured as Mid Point",
+        "Available when the AUX input is configured as Starter Battery",
+        "Available when the AUX input is configured as Temperature",
+        "When configured as DC monitor, “---” will be sent instead of a value.",
+        "When no temperature sensor is connected, “---” will be sent instead of a value.",
+        "When the BMV is not synchronised, these statistics have no meaning, so “---” will be sent instead of a value.",
+        "When the battery is not discharging the time- to-go is infinite. This is represented as -1.",
+        "Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands",
+        "General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com",
+    })
+    # Content-denied starters that are NOT shared blind spots (justified
+    # above): footnote prose ("the", "batches,") and description
+    # continuations ("Amount", "Depth", "Number") — none in the parser's
+    # stoplist, so colliding future labels diverge in the other direction.
     _deny = {
-        "Label", "60x",  # table headers ("Label Units ...", device columns)
-        "The",  # section intro ("The units used ...") + "The VE.Direct ..." footnote
-        "Available", "When", "the", "batches,",  # footnote prose starters
+        "the", "batches,",  # footnote prose starters
         "Amount", "Depth", "Number",  # description-continuation starters
-        "Victron", "General",  # page footers
     }
     return {
         m.group(1)
         for line in section.splitlines()
+        if line.strip() not in _furniture_lines
         for m in [re.match(r"^\s*(\S+)\s+", line)]
         if m and m.group(1) not in _deny
     }
@@ -220,10 +270,15 @@ def scrape_doc_cs_codes(section: str) -> dict[int, str]:
     none), so the guard-free scan stays exactly the 15 states while a
     colliding row diverges. Gap independence is preserved (scraper
     ``\\s+`` vs parser bullet-tail): a bullet-less row still diverges (see
-    test_cs_counter_bullet_gap_divergence)."""
+    test_cs_counter_bullet_gap_divergence). Codes accept up to 4 digits:
+    a future 4-digit state missed by a shared 3-digit bound on both sides
+    while hardcoded EXPECTED_CS stays green is the bug (see the 4-digit
+    divergence test); 5-digit would collide with decimal register IDs and
+    years in the same text. Zero-diff: no snapshot code exceeds 3 digits
+    (15 exact, pinned by full coverage)."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*(.+?)\s+(\d{1,3})\b", line)
+        m = re.match(r"^\s*(.+?)\s+(\d{1,4})\b", line)
         if m:
             found[int(m.group(2))] = m.group(1).strip()
     return found
@@ -265,7 +320,12 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     Zero-diff: all 20 snapshot ERR names start with a letter and carry no
     trailing prose (verified). Gap independence is preserved (scraper
     ``\\s+`` vs parser ``\\s{2,}``): a single-space row still diverges (see
-    test_error_counter_single_space_divergence)."""
+    test_error_counter_single_space_divergence). Codes accept up to 4
+    digits (same justification as the CS scraper above): a future 4-digit
+    fault missed by a shared 3-digit bound on both sides while hardcoded
+    EXPECTED_ERRORS stays green is the bug (see the 4-digit divergence
+    test). Zero-diff: no snapshot code exceeds 3 digits (20 exact, pinned
+    by full coverage)."""
     # Exact full-line furniture pins (stripped snapshot lines verbatim):
     # Note1/Note2 prose ("Note1: Error 19 can ...", "MPPT charger. Since
     # version ...", "Note2: Error 21 ...", "shutdown of the ...") is the
@@ -283,7 +343,7 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     for line in section.splitlines():
         if line.strip() in _furniture_lines:
             continue
-        m = re.match(r"^\s*(.+?)\s+(\d{1,3})\b.*$", line)
+        m = re.match(r"^\s*(.+?)\s+(\d{1,4})\b.*$", line)
         if m:
             found[int(m.group(2))] = m.group(1).strip()
     return found
@@ -3174,6 +3234,295 @@ class TestSpecParsers(unittest.TestCase):
         # Synthetic control row is ID-only shaped; parser still marks write-only.
         self.assertEqual(ctrl.access, "WRITE_ONLY")
         self.assertIn(db_access, allowed_by_parser[ctrl.access])
+
+    def test_scale_scientific_notation_parsed(self):
+        """A scientific-notation scale on an allowlisted ID (probe ``0xEDB3
+        Tracker mode 1e-2 un16 -``) parsed as scale None with the factor
+        leaking into the description, while 0xEDB3's SCALE_NONE_ALLOW
+        membership skipped the missing-scale check and ID-based
+        reverse-coverage stayed green (reproduced synthetically before the
+        fix). Section-table scales now accept the general
+        float-with-exponent form, so the probe parses scale 0.01 honestly.
+        Doc verification first: no snapshot scale cell uses exponent form
+        (docs print plain decimals 0.01/0.1/1 only), so the widened shape is
+        zero-diff. Zero-diff: counts and schema checks unchanged (pinned
+        elsewhere)."""
+        from spec_parser import OrionXSHEXParser, _split_typed_row
+
+        # What the doc actually uses: every snapshot section-table scale
+        # token is a plain decimal or "-" (no exponent anywhere).
+        for key, fname, cls, bare_x in (
+            ("bluesolar", "BlueSolar-HEX-protocol.txt", BlueSolarHEXParser, False),
+            ("orion", "Orion-XS-HEX-protocol.txt", OrionXSHEXParser, True),
+        ):
+            with self.subTest(snapshot=key):
+                text = (self.specs_dir / fname).read_text(errors="ignore")
+                start = text.find("1.1 Get and Set items")
+                end = text.find("1.2 Asynchronous items")
+                section = text[start:end] if end > start else text[start:]
+                expo = []
+                for line in section.splitlines():
+                    if not re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\b", line):
+                        continue
+                    row = _split_typed_row(line, allow_bare_x_prefix=bare_x)
+                    if row is None:
+                        continue
+                    _rid, _desc, scale_str, _dt, _un, _ty = row
+                    if scale_str not in (None, "-") and re.search(r"[eE]", scale_str):
+                        expo.append((_rid, scale_str))
+                self.assertEqual(expo, [], f"{key} snapshot uses exponent scales: {expo}")
+        # Exponent probes parse honestly on both section-table parsers.
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            for token, expected in (("1e-2", 0.01), ("1E-2", 0.01), ("1E+1", 10.0)):
+                with self.subTest(parser=cls.__name__, scale=token):
+                    synthetic = (
+                        "1.1 Get and Set items\n"
+                        f"0xEDB3     Tracker mode             {token}        un16        -\n"
+                        "1.2 Asynchronous items\n"
+                    )
+                    probe = cls(synthetic).parse_registers()[0xEDB3]
+                    self.assertAlmostEqual(probe.scale, expected)
+                    self.assertEqual(probe.description, "Tracker mode")
+                    self.assertEqual(probe.data_type, "un16")
+                    # 0xEDB3 is allowlisted no-scale, so only an honestly
+                    # parsed factor distinguishes the probe from a drop.
+                    self.assertIn(0xEDB3, SCALE_NONE_ALLOW["bluesolar"])
+
+    def test_unknown_scale_token_loud_on_allowlisted_ids(self):
+        """An unparsable scale-like token on an allowlisted ID (probe
+        ``0xEDB3 Tracker mode 1x un16 -``) parsed as scale None with "1x"
+        leaking into the description and nothing recorded, while
+        SCALE_NONE_ALLOW skipped the check and reverse-coverage stayed
+        green (reproduced synthetically before the fix). Unknown scale
+        tokens are LOUD (recorded + asserted, unknown-units/unknown-access
+        gate pattern) even on allowlisted IDs — allowlists excuse missing
+        doc data, never dropped unknown tokens. Zero-diff: all four
+        snapshot gates stay empty."""
+        from spec_parser import (
+            BMV7xxHEXParser,
+            OrionXSHEXParser,
+            PhoenixInverterHEXParser,
+        )
+
+        # Snapshot stays exact (no unknowns on current docs, all parsers).
+        self.assertEqual(self.specs["bluesolar"].unknown_scales, [])
+        self.assertEqual(self.specs["orion"].unknown_scales, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        self.assertEqual(self.specs["phoenix"].unknown_scales, [])
+        # Synthetic probe on allowlisted 0xEDB3: dropped to None but
+        # recorded loudly (section-table gate, both parsers).
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                parser = cls(
+                    "1.1 Get and Set items\n"
+                    "0xEDB3     Tracker mode             1x          un16        -\n"
+                    "1.2 Asynchronous items\n"
+                )
+                probe = parser.parse_registers()[0xEDB3]
+                self.assertIsNone(probe.scale)
+                self.assertIn(0xEDB3, SCALE_NONE_ALLOW["bluesolar"])
+                self.assertEqual(parser.unknown_scales, [(0xEDB3, "1x")])
+        # Controls: honest exponent parses with no record; genuine "-"
+        # absence records nothing either.
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(control=cls.__name__):
+                ok = cls(
+                    "1.1 Get and Set items\n"
+                    "0xEDB3     Tracker mode             1e-2        un16        -\n"
+                    "1.2 Asynchronous items\n"
+                )
+                self.assertAlmostEqual(ok.parse_registers()[0xEDB3].scale, 0.01)
+                self.assertEqual(ok.unknown_scales, [])
+                bare = cls(
+                    "1.1 Get and Set items\n"
+                    "0xEDB3     Tracker mode             -           un16        -\n"
+                    "1.2 Asynchronous items\n"
+                )
+                self.assertIsNone(bare.parse_registers()[0xEDB3].scale)
+                self.assertEqual(bare.unknown_scales, [])
+        # Same gate shape on the other scale cells: BMV Step and Phoenix
+        # Scale cells record digit-bearing-but-unparsable tokens loudly.
+        bmv_parser = BMV7xxHEXParser(
+            "hdr\n0xEDD0     Foo Bar               -         un16        0..1        0           1x          V\nftr"
+        )
+        bmv_parser.parse_registers()
+        self.assertEqual(bmv_parser.unknown_scales, [(0xEDD0, "1x")])
+        bmv_ctrl = BMV7xxHEXParser(
+            "hdr\n0xEDD0     Foo Bar               -         un16        0..1        0           0.5         V\nftr"
+        )
+        self.assertAlmostEqual(bmv_ctrl.parse_registers()[0xEDD0].scale, 0.5)
+        self.assertEqual(bmv_ctrl.unknown_scales, [])
+        phx_parser = PhoenixInverterHEXParser("0xEB99 VE_REG_FOO R/W un16 1x V\n")
+        phx_parser.parse_registers()
+        self.assertEqual(phx_parser.unknown_scales, [(0xEB99, "1x")])
+        phx_ctrl = PhoenixInverterHEXParser("0xEB99 VE_REG_FOO R/W un16 1e-2 V\n")
+        self.assertAlmostEqual(phx_ctrl.parse_registers()[0xEB99].scale, 0.01)
+        self.assertEqual(phx_ctrl.unknown_scales, [])
+
+    def test_text_field_counter_furniture_pins_divergence(self):
+        """Proves the fields counter no longer shares the parser's content
+        denylist: synthetic label rows colliding with parser stoplist words
+        ("Available", "When", "The", "Label", "60x", "Victron", "General")
+        were missed by BOTH sides while 63 stayed green (reproduced
+        synthetically before the fix: counter denied them, parser
+        stoplists them). The counter now excludes furniture ONLY by exact
+        full-line pins (stripped snapshot lines verbatim, ERR-precedent),
+        so colliding future rows match no pin and are counted here while
+        the parser still drops them — scraped-but-unparsed, failing loudly
+        via set-equality instead of agreed-missing. The parser keeps its
+        stoplist (furniture must still parse as 63 exact — honest pass on
+        snapshots), so this divergence is the loud mechanism. Zero-diff: 63
+        exact on both sides, and every pin below occurs verbatim in the
+        snapshot (pins are load-bearing: a doc rewording fails here for
+        re-triage AND scrapes loudly as an unpinned line)."""
+        base = "The units used by the serial interface are as follows:\n"
+        end = "Table I Supported Text-mode fields\n"
+        for label in ("Available", "When", "The", "Label", "60x", "Victron", "General"):
+            with self.subTest(label=label):
+                section = (
+                    base
+                    + "             V                   mV                       Main voltage\n"
+                    + f"             {label}                 mV                       Future quantity\n"
+                    + end
+                )
+                self.assertIn(label, count_doc_field_labels(section))
+                self.assertNotIn(label, VEDirectTextParser(section).parse_fields())
+        # Pins are load-bearing: each occurs verbatim in the snapshot
+        # fields section.
+        text = self.raw_texts["text"]
+        start = text.find("The units used by the serial interface are as follows:")
+        section = text[start:text.find("Table I Supported Text-mode fields")]
+        for pin in (
+            "Label          Units                               Description                                 BMV          BMV          BMV71x           MPPT 1        Phoenix         Phoenix          Smart",
+            "Label                 Units                                Description                       BMV          BMV          BMV71x        MPPT 1   Phoenix    Phoenix     Smart",
+            "Label                 Units                              Description               BMV   BMV    BMV71x      MPPT 1   Phoenix    Phoenix     Smart",
+            "60x          70x         SmartShunt                      Inverter        Charger        BuckBoost",
+            "60x          70x         SmartShunt              Inverter   Charger   BuckBoost",
+            "60x   70x   SmartShunt            Inverter   Charger   BuckBoost",
+            "The units used by the serial interface are as follows:",
+            "The VE.Direct protocol is available in the MPPT 70/15 since firmware version v1.09 and up, and only in newer type MPPT 70/15s: the ones with a product id other than 0x300. The first",
+            "Available on BlueSolar mppt chargers since firmware version v1.16",
+            "Available on BlueSolar mppt chargers since firmware version v1.37",
+            "Available on Phoenix Inverter (some models) since firmware version v1.16",
+            "Available on Phoenix Inverter v1.16",
+            "Available on Phoenix Smart Chargers with triple outputs only",
+            "Available on Smart Phoenix Inverter",
+            "Available on SmartSolar mppt chargers since firmware version v1.17",
+            "Available on SmartSolar mppt chargers since firmware version v1.44 (VE.Direct models) and v1.03 (SmartSolar VE.Can models)",
+            "Available since version v1.12, and only for models with a load output.",
+            "Available since version v1.15, and only for models with a load output.",
+            "Available since version v4.08",
+            "Available when the AUX input is configured as Mid Point",
+            "Available when the AUX input is configured as Starter Battery",
+            "Available when the AUX input is configured as Temperature",
+            "When configured as DC monitor, “---” will be sent instead of a value.",
+            "When no temperature sensor is connected, “---” will be sent instead of a value.",
+            "When the BMV is not synchronised, these statistics have no meaning, so “---” will be sent instead of a value.",
+            "When the battery is not discharging the time- to-go is infinite. This is represented as -1.",
+            "Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands",
+            "General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com",
+        ):
+            self.assertIn(pin, section, f"furniture pin drifted from snapshot: {pin[:40]}...")
+        # Zero-diff: snapshot-wide scan stays exactly the 63 doc fields on
+        # both sides (parser set-equality pinned by test_text_protocol_spec).
+        self.assertEqual(len(count_doc_field_labels(section)), EXPECTED_COUNTS["fields"])
+        self.assertEqual(set(self.text_fields), count_doc_field_labels(section))
+
+    def test_cs_err_four_digit_codes(self):
+        """A shared 3-digit bound hid 4-digit CS/ERR codes on both sides
+        (probes ``FutureState 1234`` / ``Future fault 1234`` missed by
+        scrapers AND parsers while EXPECTED maps stayed green — reproduced
+        synthetically before the fix). All four patterns now accept up to 4
+        digits (5-digit would collide with decimal register IDs and years),
+        so the probes pass honestly with exact codes/names on both sides.
+        The live tolerant CS extractor still uses the 3-digit bound
+        (tools/fetch_specs.py:883 — read-only here, reported not edited),
+        so it misses the probe: documented divergence below, failing loudly
+        in tolerant-vs-parser agreement once snapshots carry a 4-digit code.
+        Zero-diff: 15/20 exact on every side (pinned by full coverage)."""
+        from fetch_specs import tolerant_cs_states
+
+        cs_sec = (
+            "The state of operation. See the table below\n"
+            "                        Off                                   0      •\n"
+            "                        FutureState                           1234     •\n"
+        )
+        self.assertEqual(scrape_doc_cs_codes(cs_sec)[1234], "FutureState")
+        self.assertEqual(VEDirectTextParser(cs_sec).parse_cs_states()[1234], "FutureState")
+        err_sec = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        Future fault                                                        1234\n"
+        )
+        self.assertEqual(scrape_doc_error_codes(err_sec)[1234], "Future fault")
+        self.assertEqual(VEDirectTextParser(err_sec).parse_errors()[1234], "Future fault")
+        # Divergence: the read-only tolerant extractor shares the old bound
+        # (tools/fetch_specs.py:883 ``(\\d{1,3})``) and misses the 4-digit
+        # probe while parser+scraper catch it — reported, not edited
+        # (fetch_specs.py is out of scope for this change).
+        self.assertNotIn(1234, tolerant_cs_states(cs_sec))
+        self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
+        # Zero-diff: snapshot-wide scans stay exactly the doc maps.
+        text = self.raw_texts["text"]
+        pos = text.find("The state of operation. See the table below")
+        tail = text[pos:]
+        m_wide = re.search(r"The error code of the device", tail)
+        self.assertIsNotNone(m_wide)
+        self.assertEqual(scrape_doc_cs_codes(tail[: m_wide.start()]), EXPECTED_CS)
+        pos_e = text.find("The error code of the device (relevant when the device is in the fault state)")
+        tail_e = text[pos_e:]
+        m_wide_e = re.search(r"Historical data", tail_e)
+        self.assertIsNotNone(m_wide_e)
+        self.assertEqual(scrape_doc_error_codes(tail_e[: m_wide_e.start()]), EXPECTED_ERRORS)
+
+    def test_write_only_spelling_variants(self):
+        """The hyphen ``write-only`` spelling (probe ``0x0399 Foo Bar
+        write-only - un16 V``) parsed as READ_WRITE — only ``(write only)``
+        matched — while the BMV access check allows READ_WRITE, staying
+        green (reproduced synthetically before the fix). All three obvious
+        spellings (``(write only)`` as the snapshots print it, ``write-only``
+        hyphenated, bare ``write only``) now parse WRITE_ONLY, in both the
+        BMV access column logic and the shared _is_write_desc used by the
+        BlueSolar/Orion tables. Word-anchored: "rewrite"/"overwrite" never
+        match. The BMV access assertion now catches the probe: hyphen-marked
+        on 0x0303 (DB READ_ONLY) parses WRITE_ONLY, whose allowed set
+        {WRITE_ONLY} excludes the DB value (the old READ_WRITE parse allowed
+        {READ_WRITE, READ_ONLY} and stayed green). Zero-diff: the snapshot
+        WRITE_ONLY set is exactly the 4 marked command rows."""
+        from spec_parser import BMV7xxHEXParser
+
+        # Per-spelling probes: every spelling parses WRITE_ONLY (BMV rows).
+        for spelling in ("(write only)", "write-only", "write only"):
+            with self.subTest(spelling=spelling):
+                probe = BMV7xxHEXParser(
+                    f"hdr\n0x0399     Foo Bar {spelling}           -         un16        V\nftr"
+                ).parse_registers()[0x0399]
+                self.assertEqual(probe.access, "WRITE_ONLY")
+                # Shared BlueSolar/Orion write-hint path, same spellings.
+                self.assertTrue(_is_write_desc(f"Foo Bar {spelling}"))
+        # Anchoring controls: rewrite/overwrite prose never matches.
+        self.assertFalse(_is_write_desc("Rewrite only the readable value"))
+        self.assertFalse(_is_write_desc("Overwrite-only readable value"))
+        # The BMV access assertion catches the hyphen probe: 0x0303 is
+        # READ_ONLY in the DB, so a hyphen-marked (WRITE_ONLY-parsed) row
+        # mismatches while the old READ_WRITE parse stayed green.
+        hyphen = BMV7xxHEXParser(
+            "hdr\n0x0303     Foo Bar write-only           -         un32        W\nftr"
+        ).parse_registers()[0x0303]
+        self.assertEqual(hyphen.access, "WRITE_ONLY")
+        db_access = R.lookup(0x0303, flavor="BMV").access
+        self.assertEqual(db_access, "READ_ONLY")
+        self.assertNotIn(db_access, {"WRITE_ONLY"})
+        # Control: the old spelling on the same shape also parses WRITE_ONLY.
+        ctrl = BMV7xxHEXParser(
+            "hdr\n0x0303     Foo Bar (write only)           -         un32        W\nftr"
+        ).parse_registers()[0x0303]
+        self.assertEqual(ctrl.access, "WRITE_ONLY")
+        # Zero-diff: snapshot WRITE_ONLY set is exactly the 4 marked rows.
+        self.assertEqual(
+            {rid for rid, r in self.bmv_regs.items() if r.access == "WRITE_ONLY"},
+            {0x0004, 0x1029, 0x102C, 0x1030},
+        )
 
     def test_pid_name_rename_divergence(self):
         """Proves PID name comparison is exact: a synthetic rename

@@ -76,6 +76,13 @@ DOC_TYPO_REGISTER_IDS = frozenset({0xEFF0})
 #: is plural-aware so "Reset counters" matches while BlueSolar 0xEDDC "User
 #: yield (resettable)" never does (space vs "table"). "(write only)" itself
 #: is included so any row carrying the doc's literal marker is caught.
+#: Hyphen/bare spellings ("write-only", "write only") match too (see
+#: _WRITE_ONLY_RE): the snapshots use "(write only)" only (BMV 0x0004/
+#: 0x1029/0x102C/0x1030), but all three spellings carry the same command
+#: semantics, so a hyphen-spelled row parses WRITE_ONLY instead of
+#: READ_WRITE. Word-anchored (never a bare substring): "rewrite only" /
+#: "overwrite-only" must not match (no boundary inside "rewrite").
+_WRITE_ONLY_RE = re.compile(r"\(?\bwrite[\s\-]+only\b\)?", re.IGNORECASE)
 _WRITE_HINTS = ("restore default", "restore factory", "clear history", "zero current", "synchronize", "reset counter", "(write only)")
 
 #: Word-anchored regexes for _is_write_desc (plural-aware where the doc
@@ -89,7 +96,7 @@ _WRITE_HINT_RES = (
     re.compile(r"\bzero\s+current\b", re.IGNORECASE),
     re.compile(r"\bsynchronize\b", re.IGNORECASE),
     re.compile(r"\breset\s+counters?\b", re.IGNORECASE),
-    re.compile(r"\(write only\)", re.IGNORECASE),
+    _WRITE_ONLY_RE,
 )
 
 #: Device columns of the VE.Direct Text Mode fields tables, left to right.
@@ -104,7 +111,27 @@ _DTYPE_RE = re.compile(r"^(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)$", re.IGN
 _FOOTNOTE_DTYPE_RE = re.compile(r"^\(\*\d+\)$")
 
 #: A scale-column token: a decimal factor or "-" (doc gives no factor).
-_SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:\.\d+)?|-)$")
+#: Exponent form ("1e-2", "1E-2", "1E+1") is accepted too: no snapshot
+#: scale cell uses it (verified: no ``[eE]``-exponent scale token in any
+#: HEX snapshot — the docs print plain decimals like 0.01/0.1/1 only), so
+#: the general float-with-exponent shape is zero-diff while a future
+#: scientific-notation factor parses instead of leaking into the
+#: description with scale None (cf. the 0xEDB3 "1e-2" probe, hidden behind
+#: SCALE_NONE_ALLOW while ID-based reverse-coverage stays green).
+#: ``float()`` parses every accepted shape.
+_SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|-)$")
+
+#: A scale-CELL-shaped token that the strict _SCALE_TOKEN_RE rejects:
+#: digit-bearing, built only from scale punctuation (digits, ".", "eE",
+#: "+", "-", "/", "x"). Used ONLY as the loud gate below (unknown-scale
+#: tokens are recorded even on allowlisted IDs — allowlists excuse absent
+#: doc data, never dropped unknown tokens; unknown-units/unknown-access
+#: gate pattern): genuine descriptions ("mode", "Tracker") carry no digits
+#: and miss it, while a future "1x"-style cell records loudly instead of
+#: leaking into the description with scale None. Verified zero-diff: no
+#: snapshot dtype-anchored row ends its description with such a token
+#: (checked on both section-table snapshots).
+_SCALE_LIKE_RE = re.compile(r"^(?=.*\d)[0-9eE.+\-/xX]+$")
 
 #: A bare register-ID token (Orion-XS allows the doc-typo form "xHHHH").
 #: The 0X prefix is uppercase-X rescue (e.g. "0XEDF0" for 0xEDF0, "XEDE0"
@@ -150,7 +177,7 @@ def _normalize_dtype(raw: str) -> Tuple[str, str]:
     return "unknown", f"doc dtype cell {t!r} gives no single wire width"
 
 
-def _split_typed_row(line: str, allow_bare_x_prefix: bool = False) -> Optional[Tuple[int, str, Optional[str], str, Optional[str], bool]]:
+def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink: Optional[List[Tuple[int, str]]] = None) -> Optional[Tuple[int, str, Optional[str], str, Optional[str], bool]]:
     """Token-split one HEX table row into ``(rid, desc, scale_token, dtype_token, unit, typo)``.
 
     Column gaps may be single spaces (cf. BlueSolar 0xEDE0/0xEDCA single
@@ -160,6 +187,11 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False) -> Optional[T
     spaces and numbers. Returns ``None`` when the line is not a typed table
     row (prose mentions, product-ID rows, range headers). ``unit`` is the
     raw remainder (may be ``-`` or contain sentinels, as the callers expect).
+    When the row is dtype-anchored (no strict scale token) but the token
+    immediately before the dtype is scale-CELL-shaped yet unparsable
+    (e.g. a future "1x"), ``(rid, token)`` is appended to ``unknown_sink``
+    (when given) — the loud unknown-scale gate (unknown-units pattern):
+    allowlists excuse absent doc data, never dropped unknown tokens.
     """
     tokens = line.split()
     if len(tokens) < 3:
@@ -224,6 +256,10 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False) -> Optional[T
                 desc = " ".join(rest[:i]).strip()
                 if not desc:
                     return None
+                if unknown_sink is not None and i >= 1:
+                    cand = rest[i - 1]
+                    if _SCALE_LIKE_RE.match(cand) and not _SCALE_TOKEN_RE.match(cand):
+                        unknown_sink.append((rid, cand))
                 unit = " ".join(rest[i + 1:]).strip() or None
                 return rid, desc, None, tok, unit, typo
     return None
@@ -251,6 +287,14 @@ class BlueSolarHEXParser:
 
     def __init__(self, text: str):
         self.text = text
+        #: ``(rid, token)`` rows whose scale cell was scale-shaped but
+        #: unparsable (see _split_typed_row). Empty for the current
+        #: snapshot; the suite asserts it stays empty so a newly
+        #: introduced scale token breaks loudly until explicitly
+        #: triaged (unknown-units/unknown-access gate pattern).
+        #: Allowlists excuse missing doc data, never dropped unknown
+        #: tokens — even allowlisted IDs (e.g. 0xEDB3) record here.
+        self.unknown_scales: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> BlueSolarHEXParser:
@@ -258,6 +302,7 @@ class BlueSolarHEXParser:
 
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
+        self.unknown_scales = []
         self._parse_section_tables(regs)
         self._parse_id_ranges(regs)
         self._parse_tracker_mirrors(regs)
@@ -295,7 +340,9 @@ class BlueSolarHEXParser:
             # Token-anchored split (not \s{2,} gaps): tolerates single-space
             # columns and any-case dtypes; footnote dtypes ("(*4)") fall out
             # of _normalize_dtype as unknown with the cell kept in notes.
-            row = _split_typed_row(line)
+            # The unknown-scale sink records scale-shaped-but-unparsable
+            # cells even on allowlisted IDs (loud gate, see _SCALE_LIKE_RE).
+            row = _split_typed_row(line, unknown_sink=self.unknown_scales)
             if row is None:
                 continue
             rid, desc, scale_str, dtype_raw, unit_str, _typo = row
@@ -538,6 +585,12 @@ class OrionXSHEXParser:
 
     def __init__(self, text: str):
         self.text = text
+        #: ``(rid, token)`` rows whose scale cell was scale-shaped but
+        #: unparsable (see _split_typed_row). Empty for the current
+        #: snapshot; the suite asserts it stays empty (unknown-units
+        #: gate pattern — allowlists never hide dropped unknown tokens,
+        #: even on allowlisted IDs).
+        self.unknown_scales: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> OrionXSHEXParser:
@@ -545,6 +598,7 @@ class OrionXSHEXParser:
 
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
+        self.unknown_scales = []
         self._parse_section_tables(regs)
         self._parse_id_ranges(regs)
         self._parse_history_restore_id_rows(regs)
@@ -558,8 +612,10 @@ class OrionXSHEXParser:
 
         for line in section.splitlines():
             # Token-anchored split (not \s{2,} gaps): tolerates single-space
-            # columns and any-case dtypes, like the BlueSolar tables.
-            row = _split_typed_row(line, allow_bare_x_prefix=True)
+            # columns and any-case dtypes, like the BlueSolar tables. The
+            # unknown-scale sink records scale-shaped-but-unparsable cells
+            # even on allowlisted IDs (loud gate, see _SCALE_LIKE_RE).
+            row = _split_typed_row(line, allow_bare_x_prefix=True, unknown_sink=self.unknown_scales)
             if row is None:
                 continue
             rid, desc, scale_str, dtype_raw, unit_str, typo = row
@@ -742,8 +798,11 @@ class OrionXSHEXParser:
                 in_table = True
                 continue
             if in_table:
+                # Scale accepts the same exponent form as _SCALE_TOKEN_RE
+                # (no snapshot single-field scale uses it — plain decimals
+                # only — so zero-diff; a future "1e-2" parses via float()).
                 m = re.match(
-                    r"^\s*\d+\s+.+?\s+(-|[0-9.]+)\s+(un\d+|sn\d+|string\d*)\s*(\S.*)?$", line
+                    r"^\s*\d+\s+.+?\s+(-|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s+(un\d+|sn\d+|string\d*)\s*(\S.*)?$", line
                 )
                 if m:
                     scale = float(m.group(1)) if m.group(1) != "-" else None
@@ -784,6 +843,12 @@ class BMV7xxHEXParser:
         #: allowlisted with justification (Text unknown-units gate pattern).
         #: Allowlists excuse missing doc data, never dropped unknown tokens.
         self.unknown_units: List[Tuple[int, str]] = []
+        #: ``(rid, token)`` rows whose Step (scale) cell was scale-shaped
+        #: but unparsable (same loud-gate pattern as unknown_units and the
+        #: section-table unknown_scales gates): recorded even on allowlisted
+        #: IDs. Empty for the current snapshot (verified: no snapshot
+        #: digit-bearing Step cell misses the strict shape below).
+        self.unknown_scales: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> BMV7xxHEXParser:
@@ -792,6 +857,7 @@ class BMV7xxHEXParser:
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
         self.unknown_units = []
+        self.unknown_scales = []
         for line in self.text.splitlines():
             # Token-anchored split (not 2+-whitespace gaps): rows such as the
             # monitor short-layout lines may use single spaces between
@@ -869,8 +935,15 @@ class BMV7xxHEXParser:
                         col += 1
                     col += 1
                 step = rest[col + 1].strip() if len(rest) > col + 1 else ""
-                if re.fullmatch(r"\d+(\.\d+)?", step):
+                # Exponent Step form ("1e-2") parses via float(); no snapshot
+                # Step uses it (plain decimals/ints only), so zero-diff.
+                if re.fullmatch(r"\d+(\.\d+)?([eE][+-]?\d+)?", step):
                     scale = float(step)
+                elif step and re.search(r"\d", step) and _SCALE_LIKE_RE.match(step):
+                    # Loud unknown-scale gate (unknown-units pattern): a
+                    # scale-like Step cell the strict shape rejects records
+                    # loudly even on allowlisted IDs.
+                    self.unknown_scales.append((rid, step))
                 if len(rest) > col + 2:
                     u = " ".join(rest[col + 2:]).strip()
                     if u == "-" or "(" in u:
@@ -895,13 +968,16 @@ class BMV7xxHEXParser:
                 # so only factor-less drops record here. Zero-diff: all
                 # snapshot short-layout rows either capture a unit or carry
                 # "-" / empty (no letters), verified.
-                is_write_only = "(write only)" in desc.lower()
+                is_write_only = bool(_WRITE_ONLY_RE.search(desc))
                 for j, p in enumerate(rest):
                     p_clean = p.strip()
                     if not is_write_only:
                         # Unit column holds the factor ("0.01 V" split across
                         # tokens by single-space gaps, or combined "0.001A").
-                        sm = re.match(r"^(0?\.\d+)([A-Za-z%°]+)?$", p_clean)
+                        # Exponent factors ("1e-2", "1E+1 V") parse via
+                        # float(); no snapshot row uses them (plain decimals
+                        # only), so zero-diff.
+                        sm = re.match(r"^(0?\.\d+|\d+(?:\.\d+)?[eE][+-]?\d+)([A-Za-z%°]+)?$", p_clean)
                         if sm:
                             scale = float(sm.group(1))
                             if sm.group(2):
@@ -921,7 +997,7 @@ class BMV7xxHEXParser:
                             self.unknown_units.append((rid, cand))
                             break
 
-            if "(write only)" in desc.lower():
+            if _WRITE_ONLY_RE.search(desc):
                 access = "WRITE_ONLY"
                 scale = None
             elif "(read-only)" in desc.lower() or "(read only)" in desc.lower():
@@ -958,6 +1034,13 @@ class PhoenixInverterHEXParser:
         #: dropped tokens — here the access check ``continue``s on unknown
         #: forms, staying green while a change is missed.
         self.unknown_accesses: List[Tuple[int, str]] = []
+        #: ``(rid, token)`` rows whose Scale cell was scale-shaped but
+        #: unparsable via ``float()`` (same loud-gate pattern: recorded even
+        #: on allowlisted IDs such as 0xEB99). Empty for the current
+        #: snapshot (verified: every parsed snapshot row's Scale cell either
+        #: parses or carries no digit; prose lines never reach the gate —
+        #: their tokens[0] is not an ID).
+        self.unknown_scales: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> PhoenixInverterHEXParser:
@@ -966,6 +1049,7 @@ class PhoenixInverterHEXParser:
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
         self.unknown_accesses = []
+        self.unknown_scales = []
         for line in self.text.splitlines():
             # Token-split (not 2+-whitespace split): rows such as 0xEB99 use
             # single spaces between columns. Register names contain no spaces.
@@ -1016,9 +1100,16 @@ class PhoenixInverterHEXParser:
                     # expresses the period count for 50 or 60 Hz AC-out): the
                     # slash marks the 50/60 Hz alternation, the numeric part
                     # is the doc's scale factor, not a missing value.
+                    # Exponent form ("1e-2") parses via float() with no
+                    # change needed here.
                     try:
                         scale = float(p4.rstrip("/"))
                     except ValueError:
+                        # Loud unknown-scale gate (unknown-units pattern): a
+                        # digit-bearing but unparsable Scale cell records
+                        # loudly even on allowlisted IDs (e.g. 0xEB99).
+                        if re.search(r"\d", p4):
+                            self.unknown_scales.append((rid, p4))
                         scale = None
             if len(tokens) >= 6:
                 p5 = tokens[5].strip()
@@ -1469,7 +1560,15 @@ class VEDirectTextParser:
             # "(1) Load search" footnote (starts with "(", never a real
             # state), and bare "N) ..." enumerations. Zero-diff: all 15
             # snapshot names start with a letter (pinned by full coverage).
-            m = re.match(r"^\s*(.+?)\s+(\d{1,3})\s+(?:•|\d)", line)
+            # Codes accept up to 4 digits (``\d{1,4}``): current maxima are
+            # 252 (CS) / 119 (ERR), so 4 digits give headroom for future
+            # extended codes while 5-digit would collide with decimal
+            # register IDs (60961-style) and calendar years in the same
+            # text. Zero-diff: no snapshot code exceeds 3 digits (15 exact,
+            # pinned by full coverage). NOTE the live tolerant extractor
+            # (tools/fetch_specs.py:883) still uses ``\d{1,3}`` — read-only
+            # here; reported, not edited.
+            m = re.match(r"^\s*(.+?)\s+(\d{1,4})\s+(?:•|\d)", line)
             if m:
                 name = m.group(1).strip()
                 if "Bit" in name or "register" in name:
@@ -1510,10 +1609,13 @@ class VEDirectTextParser:
             # rows. Zero-diff: all 20 snapshot names start with a letter
             # and carry no trailing prose (pinned by full coverage). The
             # scraper (tests/test_spec_parsers.py) is WIDER (any gap): a
-            # single-space row still diverges loudly there.
+            # single-space row still diverges loudly there. Codes accept up
+            # to 4 digits (``\d{1,4}``, justification as in parse_cs_states
+            # above); zero-diff: no snapshot ERR code exceeds 3 digits (20
+            # exact, pinned by full coverage).
             if any(rx.match(line) for rx in _ERR_FURNITURE_RES):
                 continue
-            m = re.match(r"^\s*(.+?)\s{2,}(\d{1,3})\b.*$", line)
+            m = re.match(r"^\s*(.+?)\s{2,}(\d{1,4})\b.*$", line)
             if m:
                 desc = m.group(1).strip()
                 code = int(m.group(2))
