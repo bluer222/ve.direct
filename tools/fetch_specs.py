@@ -910,15 +910,6 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
                 continue
             if re.search(r"\(\d+\)", name):
                 continue
-            # Backup for a bare "1) ..." enumeration without "(" (the
-            # lookbehind already blocks "(1)" -> "1) ..."; real snapshot
-            # footnote carries no code/bullet, so zero-diff). Footnote
-            # references merged into a name ("(1) Fault") are furniture,
-            # never a real state (real snapshot names carry no "(N)").
-            if re.match(r"^\d+\)", name):
-                continue
-            if re.search(r"\(\d+\)", name):
-                continue
             try:
                 found[int(m.group(2))] = name
             except Exception:

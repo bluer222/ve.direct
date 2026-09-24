@@ -1565,9 +1565,9 @@ class VEDirectTextParser:
             # extended codes while 5-digit would collide with decimal
             # register IDs (60961-style) and calendar years in the same
             # text. Zero-diff: no snapshot code exceeds 3 digits (15 exact,
-            # pinned by full coverage). NOTE the live tolerant extractor
-            # (tools/fetch_specs.py:883) still uses ``\d{1,3}`` — read-only
-            # here; reported, not edited.
+            # pinned by full coverage). The live tolerant extractor
+            # (tools/fetch_specs.py:889) accepts the same ``\d{1,4}``
+            # since round 16, so 4-digit states agree on both sides.
             m = re.match(r"^\s*(.+?)\s+(\d{1,4})\s+(?:•|\d)", line)
             if m:
                 name = m.group(1).strip()
