@@ -51,7 +51,9 @@ from fetch_specs import (
     extract_pdf_text,
     extract_text,
     fetch_remote_snapshot_text,
+    live_register_ids,
     normalize_snapshot_text,
+    register_id_set_from_text,
     remote_last_modified,
     snapshot_freshness_status,
     snapshot_revision_info,
@@ -111,13 +113,18 @@ def count_doc_field_labels(section: str) -> set[str]:
     prose/footnotes (25+), so only the literal "Label" column header needs
     exclusion. A future doc label colliding with a parser stoplist word
     ("Note", "When", ...) is therefore still counted here and fails loudly
-    against the parser instead of being missed by both. Verified: this
+    against the parser instead of being missed by both. Label class is
+    OVER-INCLUSIVE on hyphen/dot ([A-Za-z0-9_#.\\-], cf. parser): the
+    shared closed [A-Za-z0-9_#] missed future DC-IN/V.PV rows on both
+    sides while counts stayed green; this side accepts hyphen/dot so such
+    a row is scraped here and (now) parsed too — set-equality fails
+    loudly if either side regresses. Verified: this
     yields exactly the 63 doc fields on the current snapshot with no prose
-    false positives."""
+    false positives (no hyphen/dot label in snapshots)."""
     return {
         m.group(1)
         for line in section.splitlines()
-        for m in [re.match(r"^\s{10,20}([A-Za-z0-9_#]+)\s+", line)]
+        for m in [re.match(r"^\s{10,20}([A-Za-z0-9_#.\-]+)\s+", line)]
         if m and m.group(1) != "Label"
     }
 
@@ -197,27 +204,36 @@ def scrape_doc_cs_codes(section: str) -> dict[int, str]:
 
 
 def scrape_doc_error_codes(section: str) -> dict[int, str]:
-    """Independent error counter: OVER-INCLUSIVE name, permissive gap, EOL.
+    """Independent error counter: OVER-INCLUSIVE name, permissive gap,
+    BULLET-TAIL-AGNOSTIC (copies the CS tail-independence spirit).
 
     The parser requires a 2+-space gap plus a closed name class
     (``[A-Za-z0-9\\s/(),\\-]``), so a single-space row or a ``+``/``:``/``.``
     name is missed with no counter to catch it. This scraper tolerates ANY
-    gap (``\\s+``), anchors the code at end-of-line, and captures the name
-    with an open ``([A-Za-z0-9].+?)`` — a single-space or ``+``/``:``/``.``
-    row is still counted and fails loudly as scraper-vs-parser mismatch.
-    Over-inclusion is safe (extra hits fail loudly); under-inclusion sharing
-    the parser's closed class is the bug. Denylist (justified): note prose
-    ("Note1: ... will no longer be reported.") ends in words, never in a bare
-    code, so the EOL anchor keeps it out; verified exact against the snapshot
-    ERR section with a WIDER bound than the parser (scraper scans to
-    "Historical data" prose, parser stops at "^HSDS$" — see
-    test_error_codes_full_coverage): the extra HSDS header + blank carry no
-    EOL-anchored ``name code`` pattern, so the wider scan stays exact while
-    a row past the parser bound is still scraped here (bound-divergence
-    test)."""
+    gap (``\\s+``), ignores a bullet tail (``(?:\\s+•.*)?``), and captures
+    the name with an open ``([A-Za-z0-9].+?)`` — a single-space,
+    ``+``/``:``/``.`` or bullet-tailed (``Future fault 99 •``) row is still
+    counted and fails loudly as scraper-vs-parser mismatch. The shared EOL
+    anchor hid bullet-tailed rows on both sides while EXPECTED_ERRORS
+    stayed green; bullet-tail-agnostic closes it. Fully tail-agnostic
+    (``\\b``, the literal CS pattern) over-matches here: Note1/Note2 prose
+    ("Note1: Error 19 can ...", "Since version 1.15 ...") contains mid-line
+    codes that ``\\b`` catches (verified: ``{1: ..., 19: 'Note1: Error',
+    21: 'Note2: Error'}`` spurious), so this scraper allows EOL-or-bullet
+    only — still catches ``99 •`` while keeping notes out. Over-inclusion
+    is safe (extra hits fail loudly); under-inclusion sharing the parser's
+    closed class is the bug. Denylist (justified): note prose ends in
+    words, never in a bare code/bullet-tail, so EOL-or-bullet keeps it out;
+    verified exact against the snapshot ERR section with a WIDER bound than
+    the parser (scraper scans to "Historical data" prose, parser stops at
+    "^HSDS$" — see test_error_codes_full_coverage): the extra HSDS header
+    + blank carry no ``name code`` pattern, so the wider scan stays exact
+    while a row past the parser bound is still scraped here
+    (bound-divergence test). Zero-diff: snapshot ERR rows carry no bullet
+    tail, so EOL-or-bullet matches exactly the EOL set."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*([A-Za-z0-9].+?)\s+(\d{1,3})\s*$", line)
+        m = re.match(r"^\s*([A-Za-z0-9].+?)\s+(\d{1,3})(?:\s+•.*)?\s*$", line)
         if m:
             found[int(m.group(2))] = m.group(1).strip()
     return found
@@ -495,6 +511,125 @@ SCALE_VALUE_EXCEPTIONS = {
     # counts (scale 1.0, unit ""), documented at the register definition.
     ("phoenix", 0xEB10): 1.0,
 }
+
+# Registers whose doc genuinely prints no unit ("-" or empty Unit column).
+# Everything else must have a parsed unit, so a dropped unit (e.g. future
+# "Hz" parsed as None by the BMV vocabulary) fails as missing_units instead
+# of skipping. Explicit sets (not "skip when None"): a future unit dropped
+# to None for an ID absent here fails loudly. Zero-diff verified: these are
+# exactly the snapshot None/"-" sets.
+UNIT_NONE_ALLOW = {
+    # BlueSolar: product info/caps, device control/mode, display/mode rows
+    # with "-" or no Unit column, history/timer structs (byte layouts, no
+    # single unit), per-tracker mode mirrors (base 0xEDB3 "-"), tail-current
+    # 0xEDE7 (row ends after dtype, no Unit column though scale/dtype
+    # present), version/state/relay/mode rows.
+    "bluesolar": frozenset({
+        0x0004, 0x0100, 0x0104, 0x010A, 0x010B, 0x0140,
+        0x0200, 0x0201, 0x0202, 0x0205, 0x0207, 0x0244,
+        0x0400, 0x0401, 0x0402, 0x0403, 0x0404, 0x0406, 0x0408,
+        0x1030, 0x104F,
+        0x2000, 0x2004, 0x2009, 0x200C, 0x200D, 0x200E, 0x200F, 0x2018,
+        0xD01F, 0xD0C0,
+        0xECC3, 0xECD3, 0xECE3, 0xECF3,
+        0xED91, 0xED98, 0xED9E, 0xEDA8, 0xEDAB, 0xEDB3,
+        0xEDCC, 0xEDCD, 0xEDCE, 0xEDD4, 0xEDD9, 0xEDDA, 0xEDE7,
+    })
+    | frozenset(range(0x1050, 0x106F))  # daily history structs, no unit
+    | frozenset(range(0x10A0, 0x10BF))  # MPPT history structs (table wins)
+    | frozenset(range(0xEDA0, 0xEDA6)),  # timer event words
+    # Orion: product info/BLE/mode/state, history-block records and
+    # cycle-history structs (byte layouts), detail-only IDs with no Unit
+    # column (0x0206/0xEDDA/0x2013 prose, 0x0090/0x0150 single-field but
+    # unit-less in doc table), tail-current 0xEDE7 (as BlueSolar).
+    "orion": frozenset({
+        0x0004, 0x0090, 0x0100, 0x0102, 0x0104, 0x010A, 0x010B, 0x0140, 0x0150,
+        0x0200, 0x0201, 0x0206, 0x0207,
+        0x1030, 0x1042, 0x1043, 0x106F, 0x1099,
+        0x2000, 0x200C, 0x200D, 0x200E, 0x200F, 0x2013, 0xEDDA, 0xEDE7,
+    })
+    | frozenset(range(0x1070, 0x1099)),  # cycle history structs
+    # BMV: product info, bare counters without Unit column or Type "-"
+    # rows (write-only commands, timestamp Step "-", HEX version Step "-",
+    # sync/state/mode rows with no Unit column). 0xED8E (power, "W") is
+    # deliberately NOT here: a future "Hz" dropped to None must fail.
+    "bmv": frozenset({
+        0x0004, 0x0090, 0x0100, 0x0101, 0x010A, 0x010B, 0x010C, 0x0150,
+        0x0303, 0x0304, 0x0309, 0x030A, 0x030B, 0x031F,
+        0x034D, 0x034E, 0x034F, 0x0400, 0x0FFD, 0x1005,
+        0x1029, 0x102C, 0x1030, 0xEEB6, 0xEEB8,
+        0xEEE0, 0xEEE1, 0xEEE2, 0xEEE3, 0xEEE4, 0xEEE5, 0xEEE6, 0xEEE7,
+        0xEEE8, 0xEEF5, 0xEEF6, 0xEEF7, 0xEEF8, 0xEEF9, 0xEEFC, 0xEEFE,
+    }),
+    # Phoenix: product info/caps/mode/state rows with "-" or no Unit
+    # column, NVM/relay/cutoff rows without units, timestamp.
+    "phoenix": frozenset({
+        0x0004, 0x0090, 0x0100, 0x0101, 0x0102, 0x010A, 0x010B, 0x0140, 0x0150,
+        0x0200, 0x0201, 0x0207, 0x031C, 0x031E, 0x034E, 0x034F,
+        0xEB03, 0xEB99, 0xEBB2, 0xEBB3, 0xEBB5, 0xEBB7, 0xEBBA, 0xEC41,
+    }),
+}
+
+# Registers where the DB unit deliberately differs from the doc's printed
+# unit (explicitly justified per entry with src file:line; src/ is
+# read-only, so the comparison asserts the DB value instead of weakening
+# the normalization — drift on either side still fails).
+UNIT_VALUE_EXCEPTIONS = {
+    # BlueSolar/Orion 0xEDEA: doc prints "V" but the DB models
+    # BAT_VOLTAGE_SETTING as ENUM (values include Auto/specials, not a pure
+    # voltage; src/ve_direct/registers/__init__.py:199 unit ""), so no
+    # physical unit is correct. Doc "V" vs DB "" mismatch allowlisted here,
+    # not normalized away.
+    ("bluesolar", 0xEDEA): "",
+    ("orion", 0xEDEA): "",
+    # Phoenix 0xEB10: doc prints Unit "s" with Scale "0.02/" but Note 4
+    # defines the wire value as a COUNT of AC-out periods (50/60 Hz
+    # dependent, no single seconds scale); the DB stores raw counts
+    # (src/ve_direct/registers/__init__.py:406 unit "", scale 1.0 per
+    # SCALE_VALUE_EXCEPTIONS). Doc "s" vs DB "" mismatch allowlisted here.
+    ("phoenix", 0xEB10): "",
+}
+
+
+def _normalize_unit_for_comparison(raw: str | None) -> str | None:
+    """Normalize a doc/DB unit cell for comparison (None stays None).
+
+    Strips whitespace; "-" / "" map to "" (doc prints no unit, DB empty).
+    Pure enum descriptions ("0=no, 1=yes", "0=off, ...", "0xFF = user")
+    map to "" (value encodings in the Unit column, not physical units; DB
+    "" is correct). Comma/parenthetical suffixes ("A, 0xFFFF=use max" ->
+    "A", "% (of 0xEDF0)" -> "%", "min, 0=mid-night" -> "min") strip to the
+    leading physical unit. Aliases (minute/minutes/min. -> min, hours ->
+    h, seconds -> s, °C/degC -> C so "%CAP/°C" and "%CAP/degC" both become
+    "%CAP/C") unify doc/DB vocabularies without hiding real disagreements
+    (e.g. doc "V" vs DB "" stays mismatched and must be allowlisted, never
+    normalized away).
+    """
+    if raw is None:
+        return None
+    u = raw.strip()
+    if u in ("-", ""):
+        return ""
+    # Pure enum hint in the Unit column (starts with digit/0x, contains
+    # "="): not a physical unit (e.g. "0xFF = user", "0=no, 1=yes").
+    # "A, 0xFFFF=..." starts with a unit letter, so it falls through to
+    # comma-stripping below (honest "A").
+    if "=" in u and re.match(r"^\s*(0[xX]|\d)", u):
+        # Starts with a digit/0x (enum), not a unit letter -> no unit.
+        return ""
+    # Leading-unit + sentinel/option suffix: keep the physical unit.
+    if "," in u:
+        u = u.split(",")[0].strip()
+    u = re.sub(r"\s*\(.*\)", "", u).strip()
+    low = u.lower()
+    _alias = {"minute": "min", "minutes": "min", "min.": "min", "hours": "h", "seconds": "s"}
+    if low in _alias:
+        u = _alias[low]
+    # Degree unification (doc "°C" vs DB "C"; doc "%CAP/°C" vs DB
+    # "%CAP/degC"): both become "C"/"%CAP/C" so the alias matches without
+    # hiding V-vs-"" style disagreements.
+    u = u.replace("°C", "C").replace("degC", "C").replace("°", "")
+    return u
 
 # Registers whose doc genuinely gives no single wire width: struct records
 # (byte-field layouts), write-only commands (Type "-"), firmware-dependent
@@ -798,11 +933,14 @@ class TestSpecParsers(unittest.TestCase):
         inaccessible = []
         missing_scales = []
         missing_dtypes = []
+        missing_units = []
+        unit_mismatches = []
 
         for doc_name, reg_dict, query_flavor, allowed_flavors in specs_to_test:
             key = doc_name.lower()
             scale_allow = SCALE_NONE_ALLOW[key]
             dtype_allow = DTYPE_UNKNOWN_ALLOW[key]
+            unit_allow = UNIT_NONE_ALLOW[key]
             for rid, spec_reg in reg_dict.items():
                 # Scale must be extracted wherever the doc prints a factor.
                 if spec_reg.scale is None and rid not in scale_allow:
@@ -812,6 +950,25 @@ class TestSpecParsers(unittest.TestCase):
                     missing_dtypes.append(
                         f"{doc_name} 0x{rid:04X} ({spec_reg.name}): {spec_reg.data_type!r}"
                     )
+                # Unit must be extracted wherever the doc prints one
+                # (normalize-then-compare, Phoenix access pattern): genuine
+                # no-unit docs ("-"/empty) live in UNIT_NONE_ALLOW only, so
+                # a future unit dropped to None (e.g. BMV "Hz" vocabulary
+                # gap: probe 0xED8E "Hz" -> None vs control "W" -> "W")
+                # fails here as missing_units instead of skipping.
+                _raw_unit = spec_reg.unit
+                _is_empty_unit = _raw_unit is None or (isinstance(_raw_unit, str) and _raw_unit.strip() in ("-", ""))
+                if rid in unit_allow:
+                    # Genuine no-unit doc: skip comparison, but a future
+                    # revision printing a unit here must fail loudly for
+                    # re-triage (allowlist drift).
+                    if not _is_empty_unit:
+                        unit_mismatches.append(
+                            f"{doc_name} 0x{rid:04X} ({spec_reg.name}): allowlisted no-unit now prints unit {_raw_unit!r}"
+                        )
+                else:
+                    if _is_empty_unit:
+                        missing_units.append(f"{doc_name} 0x{rid:04X} ({spec_reg.name})")
                 # 1. Register presence
                 candidates = R._REGISTERS_BY_ID.get(rid, [])
                 if not candidates:
@@ -852,12 +1009,64 @@ class TestSpecParsers(unittest.TestCase):
                     if actual_dtype != expected:
                         dtype_mismatches.append(f"{doc_name} 0x{rid:04X} ({reg.name}): expected dtype {expected}, got {reg.dtype!r}")
 
+                # 5. Unit compliance (normalize-then-compare, access pattern):
+                # doc genuinely prints a unit (not in UNIT_NONE_ALLOW) ->
+                # normalized doc must equal normalized DB, except
+                # UNIT_VALUE_EXCEPTIONS where the DB deliberately differs
+                # (src read-only: mismatches allowlisted with file:line,
+                # never normalized away). Genuine no-unit docs skipped above.
+                if rid not in unit_allow and not _is_empty_unit:
+                    norm_doc = _normalize_unit_for_comparison(spec_reg.unit)
+                    norm_db = _normalize_unit_for_comparison(reg.unit)
+                    expected_unit = UNIT_VALUE_EXCEPTIONS.get((key, rid), norm_doc)
+                    if norm_db != expected_unit:
+                        unit_mismatches.append(
+                            f"{doc_name} 0x{rid:04X} ({reg.name}): expected unit {expected_unit!r} (doc {spec_reg.unit!r}), got DB {reg.unit!r}"
+                        )
+
         self.assertEqual(missing_scales, [], f"Documented scales not extracted: {missing_scales}")
         self.assertEqual(missing_dtypes, [], f"Documented dtypes not extracted: {missing_dtypes}")
+        self.assertEqual(missing_units, [], f"Documented units not extracted: {missing_units}")
         self.assertEqual(missing_registers, [], f"Missing spec registers: {missing_registers}")
         self.assertEqual(inaccessible, [], f"Inaccessible registers for device flavor: {inaccessible}")
         self.assertEqual(scale_mismatches, [], f"Scale factor mismatches: {scale_mismatches}")
         self.assertEqual(dtype_mismatches, [], f"Data type mismatches: {dtype_mismatches}")
+        self.assertEqual(unit_mismatches, [], f"Unit mismatches: {unit_mismatches}")
+
+    def test_hex_unit_future_probe(self):
+        """HEX units were never asserted: probe ``0xED8E Power - Sn16 Hz``
+        parsed as unit=None with no failure (control ``... W`` gives 'W')
+        while schema checks compared IDs/scales/dtypes/access only. The
+        unit comparison above (normalize-then-compare, access pattern)
+        closes it: 0xED8E is NOT in UNIT_NONE_ALLOW (snapshot doc prints
+        "W"), so a dropped "Hz" fails as missing_units instead of skipping.
+        Control: aliases normalize (minute->min, °C->C, etc.) without
+        hiding V-vs-"" style disagreements (allowlisted with file:line)."""
+        from spec_parser import BMV7xxHEXParser
+
+        probe = BMV7xxHEXParser("hdr\n0xED8E     Power               -         Sn16        Hz\nftr").parse_registers()[0xED8E]
+        control = BMV7xxHEXParser("hdr\n0xED8E     Power               -         Sn16        W\nftr").parse_registers()[0xED8E]
+        # BMV vocabulary drops unknown "Hz" to None while "W" parses.
+        self.assertIsNone(probe.unit)
+        self.assertEqual(control.unit, "W")
+        # 0xED8E genuinely prints a unit (snapshot "W"), so it is absent
+        # from the no-unit allowlist: a None here must fail loudly as
+        # missing_units in the schema check above, never skip.
+        self.assertNotIn(0xED8E, UNIT_NONE_ALLOW["bmv"])
+        self.assertNotIn(0xED8E, UNIT_NONE_ALLOW["orion"])
+        # Normalization aliases hold (no weakening to hide mismatches).
+        self.assertEqual(_normalize_unit_for_comparison("minute"), "min")
+        self.assertEqual(_normalize_unit_for_comparison("hours"), "h")
+        self.assertEqual(_normalize_unit_for_comparison("seconds"), "s")
+        self.assertEqual(_normalize_unit_for_comparison("°C"), "C")
+        self.assertEqual(_normalize_unit_for_comparison("%CAP/°C"), _normalize_unit_for_comparison("%CAP/degC"))
+        self.assertEqual(_normalize_unit_for_comparison("A, 0xFFFF=use max"), "A")
+        self.assertEqual(_normalize_unit_for_comparison("% (of 0xEDF0)"), "%")
+        # Genuine DB-vs-doc disagreements stay allowlisted with file:line
+        # (src read-only), never normalized away.
+        self.assertEqual(_normalize_unit_for_comparison("V"), "V")
+        self.assertIn(("bluesolar", 0xEDEA), UNIT_VALUE_EXCEPTIONS)
+        self.assertIn(("phoenix", 0xEB10), UNIT_VALUE_EXCEPTIONS)
 
     def test_parser_dtype_vocabulary(self):
         """Parser dtypes must use the module convention (known wire widths,
@@ -1134,6 +1343,41 @@ class TestSpecParsers(unittest.TestCase):
         )
         self.assertIn("Note", count_doc_field_labels(section))
         self.assertNotIn("Note", VEDirectTextParser(section).parse_fields())
+
+    def test_text_field_label_charset_hyphen_dot(self):
+        """Shared label charset hid hyphen/dotted future labels on both
+        sides (probe ``DC-IN``/``V.PV`` yielded parser ['V'] and counter
+        ['V'], counts staying green). Scraper is over-inclusive (hyphen/dot
+        in the class) and the parser records such labels too, so the probe
+        now passes honestly on both sides. Control: no hyphen/dot label in
+        current snapshots (zero-diff, 63 fields stay exact)."""
+        section = (
+            "The units used by the serial interface are as follows:\n"
+            "             V                   mV                       Main voltage\n"
+            "             DC-IN               mV                       Future hyphen label\n"
+            "             V.PV                mV                       Future dotted label\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        # Over-inclusive scraper catches hyphen/dotted (was missed before).
+        labels = count_doc_field_labels(section)
+        self.assertIn("DC-IN", labels)
+        self.assertIn("V.PV", labels)
+        # Parser records them too (honest pass, not divergence): future
+        # hyphen/dotted rows parse instead of staying green-but-missed.
+        fields = VEDirectTextParser(section).parse_fields()
+        self.assertIn("DC-IN", fields)
+        self.assertIn("V.PV", fields)
+        self.assertEqual(fields["DC-IN"].units, "mV")
+        self.assertEqual(fields["V.PV"].units, "mV")
+        # Zero-diff control: snapshots carry no hyphen/dot label, so the
+        # widened class adds no hits (63 stay exact on both sides).
+        text = self.raw_texts["text"]
+        start = text.find("The units used by the serial interface are as follows:")
+        end = text.find("Table I Supported Text-mode fields")
+        snap_labels = count_doc_field_labels(text[start:end])
+        self.assertEqual(len(snap_labels), EXPECTED_COUNTS["fields"])
+        self.assertFalse(any("-" in lb or "." in lb for lb in snap_labels))
+        self.assertFalse(any("-" in lb or "." in lb for lb in self.text_fields))
 
     def test_text_device_bullet_overflow_fails_loudly(self):
         """A bullet beyond the last known device column (synthetic 8th
@@ -1566,6 +1810,33 @@ class TestSpecParsers(unittest.TestCase):
             "                       HSDS\n"
         )
         self.assertIn(99, VEDirectTextParser(inside).parse_errors())
+
+    def test_error_tail_divergence(self):
+        """Shared EOL anchor hid bullet-tailed error rows on both sides
+        (probe ``Future fault 99 •`` missed by scraper and parser while
+        EXPECTED_ERRORS stayed green; CS already tail-diverged). Scraper is
+        bullet-tail-agnostic (EOL-or-bullet, not shared EOL) and the parser
+        records bullet-tailed rows too, so the probe now passes honestly on
+        both sides. Control: snapshots carry no bullet tail (zero-diff,
+        full coverage stays exact)."""
+        section = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        Future fault                                                         99 •\n"
+        )
+        # Bullet-tail-agnostic scraper catches the future row (was missed).
+        self.assertIn(99, scrape_doc_error_codes(section))
+        self.assertEqual(scrape_doc_error_codes(section)[99], "Future fault")
+        # Parser handles the tail too (honest pass): future bullet-tailed
+        # rows parse instead of staying green-but-missed.
+        self.assertIn(99, VEDirectTextParser(section).parse_errors())
+        self.assertEqual(VEDirectTextParser(section).parse_errors()[99], "Future fault")
+        # Zero-diff control: snapshot ERR rows carry no bullet tail, so the
+        # widened tail adds no hits (pinned by full coverage).
+        text = self.raw_texts["text"]
+        pos = text.find("The error code of the device (relevant when the device is in the fault state)")
+        tail = text[pos:]
+        self.assertNotIn("•", tail[: tail.find("HSDS") if "HSDS" in tail else len(tail)])
 
     def test_capabilities_against_doc(self):
         """Capability bits asserted against the doc maps (incl. Orion 28-31)."""
@@ -2226,7 +2497,9 @@ class TestFetchSpecs(unittest.TestCase):
     def test_content_gate_markers_match_is_fresh(self):
         """Newer header + SAME revision markers in the PDF -> FRESH (the
         false-positive fix): expected markers derive from the checked-in
-        snapshots, never literals, so a real new revision still fails loudly."""
+        snapshots, never literals, so a real new revision still fails loudly.
+        ID stage included (third stage): matching PDFs list the snapshot's
+        own ID sets, so markers+IDs both match -> FRESH (not unknown)."""
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             expected = self._copy_real_snapshots(tmpdir)
@@ -2237,8 +2510,16 @@ class TestFetchSpecs(unittest.TestCase):
                 )
                 for key, (_label, date) in expected.items()
             }
+            # Matching PDFs carry markers PLUS snapshot-exact IDs (derived),
+            # so the ID stage (headers -> markers -> ID sets) stays FRESH.
+            snap_ids = {
+                key: register_id_set_from_text(
+                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                )
+                for key in fetch_specs.OFFICIAL_SPECS
+            }
             pdfs = {
-                key: self._markers_pdf_for(label, date)
+                key: self._ids_pdf_for(label, date, snap_ids[key])
                 for key, (label, date) in expected.items()
             }
 
@@ -2360,6 +2641,202 @@ class TestFetchSpecs(unittest.TestCase):
                 self.assertEqual(
                     extract_pdf_revision_info(pdf_bytes), expected,
                     f"{key} live markers diverged from snapshot",
+                )
+
+    def _ids_pdf_for(self, label, date, ids) -> bytes:
+        """Craft PDF embedding derived markers PLUS explicit ID list.
+
+        Markers derive from the caller's (label, date) (no revision
+        literals, like _markers_pdf_for); IDs render as "0xHHHH" space
+        runs so stdlib live_register_ids recovers them exactly (single-char
+        TJ fragments, like _content_pdf_bytes). Snapshot-exact PDFs list the
+        snapshot's own register_id_set_from_text; added/removed variants add
+        or omit one ID (never literals for revisions, IDs 0x9999/0xEDF0 are
+        synthetic/derived choices documented per test).
+        """
+        bits = [
+            "Revision Log",
+            "Document history",
+            "Changes:",
+            label or "",
+            date.strftime("%d-%m-%Y"),
+            date.isoformat(),
+            date.strftime("%d %B %Y"),
+        ]
+        if label and re.match(r"v3\.\d+$", label):
+            bits.append(f"{label[1:]} {date.day} {date.strftime('%B')} {date.year}")
+        if label and "Initial version" in label:
+            bits.append("Initial version")
+        bits.append(" ".join(f"0x{i:04X}" for i in sorted(ids)))
+        return self._content_pdf_bytes("  ".join(b for b in bits if b))
+
+    def test_freshness_id_stage_added_is_stale(self):
+        """Mocked added-ID -> STALE naming the ID: live table gains 0x9999
+        (absent from all snapshots) while markers match, so headers+markers
+        stay fresh but the third stage fails loudly as added."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            expected = self._copy_real_snapshots(tmpdir)
+            # Snapshot-exact ID sets (derived, never literals).
+            snap_ids = {
+                key: register_id_set_from_text(
+                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                )
+                for key in fetch_specs.OFFICIAL_SPECS
+            }
+            self.assertNotIn(0x9999, snap_ids["BlueSolar-HEX-protocol"])
+            pdfs = {}
+            for key, (label, date) in expected.items():
+                ids = set(snap_ids[key])
+                if key == "BlueSolar-HEX-protocol":
+                    ids.add(0x9999)  # synthetic future register, markers unchanged
+                pdfs[key] = self._ids_pdf_for(label, date, ids)
+            newer = {
+                key: datetime.datetime.combine(
+                    date + datetime.timedelta(days=10), datetime.time(12, 0),
+                    tzinfo=datetime.timezone.utc,
+                )
+                for key, (_label, date) in expected.items()
+            }
+
+            def _fake_header(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return newer[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            def _fake_download(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return pdfs[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
+                    status, detail = snapshot_freshness_status(tmpdir)
+                    self.assertEqual(status, "stale", detail)
+                    self.assertIn("0x9999", detail)
+                    self.assertIn("added", detail)
+                    self.assertIn("BlueSolar", detail)
+
+    def test_freshness_id_stage_removed_is_stale(self):
+        """Mocked removed-ID -> STALE: live table drops 0xEDF0 (present in
+        BlueSolar snapshot, real register 0xEDF0 battery max current) while
+        markers match, so the third stage fails loudly as removed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            expected = self._copy_real_snapshots(tmpdir)
+            snap_ids = {
+                key: register_id_set_from_text(
+                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                )
+                for key in fetch_specs.OFFICIAL_SPECS
+            }
+            self.assertIn(0xEDF0, snap_ids["BlueSolar-HEX-protocol"])
+            pdfs = {}
+            for key, (label, date) in expected.items():
+                ids = set(snap_ids[key])
+                if key == "BlueSolar-HEX-protocol":
+                    ids.discard(0xEDF0)  # synthetic removal, markers unchanged
+                pdfs[key] = self._ids_pdf_for(label, date, ids)
+            newer = {
+                key: datetime.datetime.combine(
+                    date + datetime.timedelta(days=10), datetime.time(12, 0),
+                    tzinfo=datetime.timezone.utc,
+                )
+                for key, (_label, date) in expected.items()
+            }
+
+            def _fake_header(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return newer[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            def _fake_download(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return pdfs[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
+                    status, detail = snapshot_freshness_status(tmpdir)
+                    self.assertEqual(status, "stale", detail)
+                    self.assertIn("0xEDF0", detail)
+                    self.assertIn("removed", detail)
+
+    def test_freshness_id_stage_unextractable_is_unknown(self):
+        """Unextractable live IDs -> UNKNOWN (skip, never fail): markers
+        match but the PDF carries no IDs (marker-only crafted PDF), so the
+        ID stage cannot prove a table change and must skip loudly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            expected = self._copy_real_snapshots(tmpdir)
+            # Matching PDFs for all but BlueSolar (which gets markers-only,
+            # no IDs -> empty live set -> unknown).
+            snap_ids = {
+                key: register_id_set_from_text(
+                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                )
+                for key in fetch_specs.OFFICIAL_SPECS
+            }
+            pdfs = {}
+            for key, (label, date) in expected.items():
+                if key == "BlueSolar-HEX-protocol":
+                    pdfs[key] = self._markers_pdf_for(label, date)  # no IDs
+                else:
+                    pdfs[key] = self._ids_pdf_for(label, date, snap_ids[key])
+            newer = {
+                key: datetime.datetime.combine(
+                    date + datetime.timedelta(days=10), datetime.time(12, 0),
+                    tzinfo=datetime.timezone.utc,
+                )
+                for key, (_label, date) in expected.items()
+            }
+
+            def _fake_header(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return newer[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            def _fake_download(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return pdfs[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
+                    status, detail = snapshot_freshness_status(tmpdir)
+                    self.assertEqual(status, "unknown", detail)
+                    self.assertIn("BlueSolar", detail)
+
+    def test_content_gate_live_online_ids_match(self):
+        """Live behavior (skipped unless network is present): the real online
+        PDFs' stdlib-extracted register/PID ID sets still equal their
+        snapshots' (same revisions, re-uploaded; verified 302/118/124/56/151
+        exact 2026-09-24). A table edit keeping Rev/date invisible to markers
+        fails here loudly as added/removed instead of passing; offline skips.
+        Zero-diff live: headers are newer today yet markers+IDs match, so the
+        gate stays FRESH (not unknown/stale)."""
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        for key, info in fetch_specs.OFFICIAL_SPECS.items():
+            with self.subTest(spec=key):
+                snap_text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+                expected = register_id_set_from_text(snap_text)
+                try:
+                    pdf_bytes = download_pdf_bytes(info["url"], timeout=30.0)
+                except OSError as e:
+                    self.skipTest(f"live download unreachable, skipping: {e}")
+                live = live_register_ids(pdf_bytes)
+                if not live:
+                    self.skipTest(f"{key} live IDs unextractable, skipping")
+                self.assertEqual(
+                    live, expected,
+                    f"{key} live IDs diverged: added {sorted(f'0x{i:04X}' for i in live - expected)[:10]} "
+                    f"removed {sorted(f'0x{i:04X}' for i in expected - live)[:10]}",
                 )
 
     def test_freshness_manifest_matches_snapshots_offline(self):

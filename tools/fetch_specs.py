@@ -394,6 +394,205 @@ def extract_pdf_revision_info(pdf_bytes: bytes):
     return label, (max(dates) if dates else None)
 
 
+#: Tagged-PDF language markers kept by stdlib extraction but dropped by
+#: ``pdftotext -layout`` (Orion-XS): "0x1070en-GB..en-US0x1098" breaks the
+#: ".." range into unmatchable pieces. Stripping these exact tags restores
+#: snapshot-like ranges. Only these four (observed live 2026-09-24); a
+#: future language appears as an unexpanded range -> stale (loud), never
+#: silent. Snapshots contain none (verified), so stripping is zero-diff
+#: there. Glued forms ("0x1070en-GB", no word boundary) are stripped too
+#: via plain replace (no ``\\b``), which is safe: no register description
+#: contains these tags (verified).
+_LANGUAGE_TAGS = ("en-GB", "en-US", "de-DE", "fr-FR")
+
+
+def _strip_language_tags(text: str) -> str:
+    """Remove tagged-PDF language markers (see _LANGUAGE_TAGS)."""
+    for tag in _LANGUAGE_TAGS:
+        text = text.replace(tag, "")
+    return text
+
+
+def register_id_set_from_text(text: str) -> set[int]:
+    """Collect register/PID IDs from text (stdlib Paranoia, nob).
+
+    Over-inclusive ``0[xX](HHHH)`` without ``\\b`` (glued IDs from lost
+    layout spaces in stdlib extraction, e.g. BlueSolar "0x04080Display"
+    needs prefix match; ``\\b`` would miss glued real IDs on live while
+    snapshots via ``pdftotext -layout`` keep spaces -> false removed).
+    Spurious longer-hex prefixes ("0xFFFFFFFF" -> 0xFFFF, "0x00000002" ->
+    0x0000, "0x51FA51FA..." -> 0x51FA, "0x0112FF" -> 0x0112) cancel because
+    BOTH sides use nob (snapshot and live share the same longer-hex
+    strings today, verified 302/118/124/56/151 exact). Inline ".." ranges
+    (cap 1024, like the test scraper, not the parser's 64) plus snapshot
+    multiline "..." bare-endpoint windows (8 lines, like the test scraper;
+    no-op on joined live text) expand history/timer spans on both sides.
+    Bare-x rescue (``xEDE0`` typo, missing leading 0) on both; discard
+    ``0xEFF0`` typo (means 0xEDF0, cf. spec_parser.DOC_TYPO_REGISTER_IDS)
+    on both. Never raises (empty input -> empty set; caller treats empty
+    live as unextractable, never stale).
+    """
+    try:
+        if not text:
+            return set()
+        t = _strip_language_tags(text)
+        ids: set[int] = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})", t)}
+        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", t):
+            try:
+                a, b = int(m.group(1), 16), int(m.group(2), 16)
+            except Exception:
+                continue
+            if 0 < b - a <= 1024:
+                ids.update(range(a, b + 1))
+        lines = t.splitlines()
+        for i, line in enumerate(lines):
+            if re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\s*\.\.\.\s*$", line):
+                try:
+                    a = int(re.match(r"^\s*0[xX]([0-9A-Fa-f]{4})", line).group(1), 16)  # type: ignore[union-attr]
+                except Exception:
+                    continue
+                for nxt in lines[i + 1 : i + 9]:
+                    m2 = re.match(r"^\s*(0[xX][0-9A-Fa-f]{4})\s*$", nxt)
+                    if m2:
+                        try:
+                            b = int(m2.group(1), 16)
+                        except Exception:
+                            break
+                        if 0 < b - a <= 1024:
+                            ids.update(range(a, b + 1))
+                        break
+        for m in re.finditer(r"(?<![0-9A-Za-z])x([0-9A-Fa-f]{4})\b", t, flags=re.IGNORECASE):
+            try:
+                ids.add(int(m.group(1), 16))
+            except Exception:
+                continue
+        ids.discard(0xEFF0)
+        return ids
+    except Exception:
+        return set()
+
+
+def _table_cmap_ids(pdf_bytes: bytes) -> set[int]:
+    """Decode BlueSolar 1-byte subset-font tables via ToUnicode (stdlib).
+
+    BlueSolar tables use 1-byte subset fonts (TT5F6/ TT5E6) with ToUnicode
+    CMaps (``<00><ff>``); stdlib literal extraction yields glyph codes, not
+    ASCII, so table IDs (0x0400 etc) are missed while prose IDs are found.
+    Decoding every ``(...)``/``<...>`` fragment through the largest 1-byte
+    CMap restores them (verified: std 224 + cmap 147 = 302 == snapshot nob
+    302). Other specs use WinAnsi (no ToUnicode tables) or 2-byte
+    Identity-H (Orion, but std nob already captures tables after language
+    stripping, verified 118==118), so this union is a no-op there (no
+    1-byte cmaps or empty). Skips huge hex blobs (>2000 chars, binary) like
+    :func:`extract_pdf_text`. Never raises: returns ``set()`` on failure.
+    """
+    try:
+        if not pdf_bytes:
+            return set()
+        stream_re = re.compile(rb"stream(?:\r\n|\r|\n)(.*?)endstream", re.DOTALL)
+        chunks: list[bytes] = []
+        for m in stream_re.finditer(bytes(pdf_bytes)):
+            raw = m.group(1).strip(b"\r\n")
+            try:
+                chunks.append(zlib.decompress(raw))
+            except Exception:
+                try:
+                    chunks.append(zlib.decompress(m.group(1)))
+                except Exception:
+                    continue
+        cmaps: list[dict[int, str]] = []
+        for dec in chunks:
+            if b"begincmap" not in dec or b"<00><ff>" not in dec:
+                continue
+            if b"<0000>" in dec:
+                continue  # 2-byte Identity-H (Orion), not 1-byte tables
+            try:
+                txt = dec.decode("latin-1")
+            except Exception:
+                continue
+            cmap: dict[int, str] = {}
+            for line in txt.splitlines():
+                hexes = re.findall(r"<([0-9A-Fa-f]+)>", line)
+                if len(hexes) == 3:
+                    try:
+                        s1, s2, d = int(hexes[0], 16), int(hexes[1], 16), int(hexes[2], 16)
+                    except Exception:
+                        continue
+                    for k in range(s1, s2 + 1):
+                        try:
+                            cmap[k] = chr(d + (k - s1))
+                        except Exception:
+                            continue
+                elif len(hexes) == 2 and "begin" not in line:
+                    try:
+                        s, d = int(hexes[0], 16), int(hexes[1], 16)
+                    except Exception:
+                        continue
+                    if s not in cmap:
+                        try:
+                            cmap[s] = chr(d)
+                        except Exception:
+                            continue
+            if cmap:
+                cmaps.append(cmap)
+        if not cmaps:
+            return set()
+        table_cmap = max(cmaps, key=len)
+        combo = b"\n".join(chunks)
+        tok = re.compile(rb"\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>")
+        parts: list[str] = []
+        for tm in tok.finditer(combo):
+            t = tm.group(0)
+            if t.startswith(b"("):
+                inner = t[1:-1]
+                parts.append("".join(table_cmap.get(bb, "") for bb in inner))
+            else:
+                hexs = re.sub(rb"\s", b"", t[1:-1])
+                if not hexs or len(hexs) > 2000:
+                    continue
+                if len(hexs) % 2 == 1:
+                    hexs += b"0"
+                try:
+                    raw = bytes.fromhex(hexs.decode("ascii"))
+                except Exception:
+                    continue
+                parts.append("".join(table_cmap.get(bb, "") for bb in raw))
+        joined = "".join(parts)
+        ids = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})", joined)}
+        ids.discard(0xEFF0)
+        return ids
+    except Exception:
+        return set()
+
+
+def live_register_ids(pdf_bytes: bytes) -> set[int]:
+    """Live register/PID ID set from remote PDF bytes (stdlib-only).
+
+    Stdlib text (FlateDecode + regex, no ``pdftotext``) after language
+    stripping plus 1-byte table-CMap union (BlueSolar tables), with the
+    same nob/``..``/bare-x/typo handling as :func:`register_id_set_from_text`
+    on both sides (verified exact live==snapshot 2026-09-24:
+    302/118/124/56/151). Empty set means unextractable (caller -> unknown,
+    never stale): a marker-only PDF ("hello world") must skip, not fail as
+    removed-everything. Never raises.
+    """
+    try:
+        try:
+            text = extract_pdf_text(pdf_bytes)
+        except Exception:
+            return set()
+        if not text:
+            return set()
+        ids = register_id_set_from_text(text)
+        try:
+            ids |= _table_cmap_ids(pdf_bytes)
+        except Exception:
+            pass
+        return ids
+    except Exception:
+        return set()
+
+
 def normalize_snapshot_text(text: str) -> str:
     """Normalize extracted layout text for content comparison.
 
@@ -468,7 +667,7 @@ def verify_remote_content(specs_dir: Path, timeout: float = 60.0):
 def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
     """Real-directory freshness gate for the test suite (content-based).
 
-    Two stages per spec (stdlib-only, no ``pdftotext``):
+    Three stages per spec (stdlib-only, no ``pdftotext``):
 
     1. Header stage: each snapshot's own revision/date markers (via
        :func:`snapshot_revision_info`, content-based, never file mtimes)
@@ -480,26 +679,37 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
        as FRESH), so same-day falls through to the content stage below
        (consistent with check_specs STALE-UNKNOWN, but content-verified
        here instead of header-only unknown).
-    2. Content stage (when the header is newer OR same-day): the remote PDF is
+    2. Marker stage (when the header is newer OR same-day): the remote PDF is
        downloaded with stdlib ``urllib`` and revision evidence is mined
        from the raw bytes via :func:`extract_pdf_revision_info` (FlateDecode
        + regex, no ``pdftotext``). Matching markers mean a byte-level
        re-upload/re-export of the SAME revision (HTTP Last-Modified tracks
-       re-uploads, not revisions) -> FRESH despite the newer header. Markers
-       proving a NEWER revision -> STALE (suite must FAIL, detail names the
-       new revision). Unextractable markers or a failed download -> UNKNOWN
-       (loud warning naming the spec, suite SKIPs, never fails).
+       re-uploads, not revisions) -> provisionally FRESH despite the newer
+       header (ID stage below still runs). Markers proving a NEWER revision
+       -> STALE (suite must FAIL, detail names the new revision).
+       Unextractable markers or a failed download -> UNKNOWN (loud warning
+       naming the spec, suite SKIPs, never fails).
+    3. ID stage (when markers match): the live register/PID ID set (stdlib
+       :func:`live_register_ids`: FlateDecode + ToUnicode table decode, no
+       ``pdftotext``) is compared against the snapshot ID set (same nob/
+       ``..``/bare-x/typo handling on both sides, verified exact
+       302/118/124/56/151 live==snapshot 2026-09-24). A table edit keeping
+       Rev/date invisible to markers shows here as added/removed IDs ->
+       STALE naming them. Unextractable (empty live set, download failure)
+       -> UNKNOWN (loud skip, never fail and never pass on partial
+       evidence). No download when header-older (fast path above never
+       reaches here).
 
     Downloads are cached within a run (one fetch per spec max). Offline (no
     network at all) stays UNKNOWN as before.
 
     Returns ``(status, detail)`` with status one of ``"stale"`` (at least
-    one proven-newer online revision: suite must FAIL), ``"fresh"`` (every
-    spec verifiable and current: suite passes), ``"unknown"`` (anything
-    unverifiable: suite must SKIP, never fail and never pass on partial
-    evidence). Every spec is evaluated (no first-failure short-circuit);
-    the worst status wins (stale > unknown > fresh) and the detail names
-    every stale/unverifiable spec.
+    one proven-newer online revision or table change: suite must FAIL),
+    ``"fresh"`` (every spec verifiable and current: suite passes),
+    ``"unknown"`` (anything unverifiable: suite must SKIP, never fail and
+    never pass on partial evidence). Every spec is evaluated (no
+    first-failure short-circuit); the worst status wins (stale > unknown >
+    fresh) and the detail names every stale/unverifiable spec.
     """
     try:
         entries = list(OFFICIAL_SPECS.items())
@@ -514,7 +724,8 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
             unknowns.append(f"{key}.txt missing; freshness unverifiable")
             continue
         try:
-            label, local_date = snapshot_revision_info(txt_path.read_text(errors="ignore"))
+            snap_text = txt_path.read_text(errors="ignore")
+            label, local_date = snapshot_revision_info(snap_text)
         except Exception as e:
             unknowns.append(f"{key}.txt markers unparseable ({e})")
             continue
@@ -565,6 +776,11 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
             continue
         snap_mark = f"{label or 'unlabelled'} {local_date.isoformat()}"
         rem_mark = f"{rem_label or 'unlabelled'} {rem_date.isoformat() if rem_date else 'undated'}"
+        # Marker-newer -> STALE at once (no ID stage needed). Marker-match
+        # falls through to the ID stage below (table edits keeping Rev/date
+        # invisible must not pass as FRESH). Snapshot-ahead stays FRESH
+        # (remote older, no new table to catch).
+        _need_id_check = False
         if rem_date is not None:
             if rem_date > local_date:
                 stale.append(
@@ -572,27 +788,68 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
                 )
             elif rem_date == local_date:
                 if rem_label is None or label is None or rem_label == label:
-                    continue  # same-revision re-upload/re-export: FRESH
-                stale.append(
-                    f"{key}.txt online revision newer (remote {rem_mark} vs snapshot {snap_mark})"
-                )
+                    _need_id_check = True  # same revision: verify tables
+                else:
+                    stale.append(
+                        f"{key}.txt online revision newer (remote {rem_mark} vs snapshot {snap_mark})"
+                    )
             else:
                 continue  # snapshot ahead of remote content: FRESH
         else:
             # Date unextractable: decide on the label alone.
             if rem_label == label:
-                continue  # label match: FRESH
-            if rem_label is not None and label is not None:
+                _need_id_check = True  # label match: verify tables
+            elif rem_label is not None and label is not None:
                 stale.append(
                     f"{key}.txt online revision newer (remote {rem_mark} vs snapshot {snap_mark})"
                 )
             else:
                 unknowns.append(f"{key}.txt online revision partially unextractable ({rem_mark}); freshness unverifiable")
+        if not _need_id_check:
+            continue
+        # 3. ID stage: live vs snapshot register/PID sets (same handling
+        # both sides, stdlib-only). Mismatch -> STALE naming added/removed;
+        # unextractable/offline -> UNKNOWN (loud skip, never fail). Empty
+        # snapshot (synthetic fixtures with no IDs) skips (nothing to
+        # compare, fresh); empty live with non-empty snapshot is
+        # unextractable (marker-only PDF must skip, not fail as
+        # removed-everything).
+        try:
+            snap_ids = register_id_set_from_text(snap_text)
+        except Exception as e:
+            unknowns.append(f"{key}.txt snapshot register IDs unparseable ({e})")
+            continue
+        if not snap_ids:
+            continue  # synthetic fixture with no IDs: nothing to compare
+        try:
+            live_ids = live_register_ids(pdf_bytes)
+        except Exception as e:
+            unknowns.append(f"{key}.txt live register IDs unextractable ({e}); freshness unverifiable")
+            continue
+        if not live_ids:
+            unknowns.append(
+                f"{key}.txt live register IDs unextractable "
+                f"(no IDs recovered from online PDF, snapshot has IDs); freshness unverifiable"
+            )
+            continue
+        added = sorted(live_ids - snap_ids)
+        removed = sorted(snap_ids - live_ids)
+        if added or removed:
+            bits = []
+            if added:
+                bits.append(f"added {', '.join(f'0x{i:04X}' for i in added)}")
+            if removed:
+                bits.append(f"removed {', '.join(f'0x{i:04X}' for i in removed)}")
+            stale.append(
+                f"{key}.txt online register table changed ({'; '.join(bits)}) "
+                f"despite matching revision markers ({rem_mark} == {snap_mark})"
+            )
+        # else: ID sets match -> FRESH (fall through to next spec)
     if stale:
         return "stale", "; ".join(stale + unknowns)
     if unknowns:
         return "unknown", "; ".join(unknowns)
-    return "fresh", "all snapshots match their online revisions (header-or-content verified)"
+    return "fresh", "all snapshots match their online revisions (headers, markers, and register-ID sets verified)"
 
 
 def content_gate_verdict(results: dict) -> tuple:

@@ -1086,7 +1086,12 @@ class VEDirectTextParser:
         tables = self._device_column_starts(lines)
         self.unknown_units = []
 
-        label_re = re.compile(r"^\s{10,25}([A-Za-z0-9_#]+)\s{2,}(.*?)\s*$")
+        label_re = re.compile(r"^\s{10,25}([A-Za-z0-9_#.\-]+)\s{2,}(.*?)\s*$")
+        # Hyphen/dot in the label class (DC-IN, V.PV): the closed
+        # [A-Za-z0-9_#] missed future hyphen/dotted labels on BOTH sides
+        # (parser and count_doc_field_labels) while counts stayed green.
+        # Over-inclusive scraper + parser record both (zero-diff: no
+        # hyphen/dot label in current snapshots, verified).
         stoplist = {
             "Label", "Table", "The", "Note", "Victron", "General", "E-mail",
             "When", "Both", "Available", "60x",
@@ -1226,7 +1231,13 @@ class VEDirectTextParser:
         ]
         section = tail[: min(ends)] if ends else tail
         for line in section.splitlines():
-            m = re.match(r"^\s*([A-Za-z0-9\s/(),\-]+?)\s{2,}(\d{1,3})\s*$", line)
+            # Optional bullet tail (future "Future fault 99 •" rows): the
+            # shared EOL anchor hid bullet-tailed rows on both sides while
+            # EXPECTED_ERRORS stayed green (CS already tail-diverged). The
+            # scraper is tail-agnostic (\\b), so the parser records
+            # bullet-tailed rows too — zero-diff (snapshots carry no bullet
+            # tail, verified).
+            m = re.match(r"^\s*([A-Za-z0-9\s/(),\-]+?)\s{2,}(\d{1,3})(?:\s+•.*)?\s*$", line)
             if m:
                 desc = m.group(1).strip()
                 code = int(m.group(2))
