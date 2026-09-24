@@ -824,27 +824,32 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
     bullets (``Off ... 0 •``); live stdlib joins the whole CS section to a
     single line with ``\\x95`` bullets (``Off 0 \\x95 Low power 1 \\x95 ...``).
     Line-anchored snapshot parsers fail live ({} vs 15). This anchors only
-    the ``name code bullet`` suffix globally (``([+A-Za-z0-9]... ) code
-    [\\x95•]``), ignoring line breaks, so it yields exactly the 15 states
-    on both (verified live==snapshot 2026-09-24).     Over-inclusion is safe
-    (extra hits fail loudly); denylists (justified): leading ``[+A-Za-z0-9]``
-    with ``(?<!\\()`` excludes the ``(1) Load search`` footnote (live joins
-    it as ``... 1 \\x95 (1) Fault 2 ...`` — without the lookbehind the
+    the ``name code bullet`` suffix globally, ignoring line breaks, so it
+    yields exactly the 15 states on both (verified live==snapshot 2026-09-24).
+    Over-inclusion is safe (extra hits fail loudly). The name is structural:
+    EVERYTHING before the trailing code with no character-class restriction
+    (any characters except the row delimiters ``•``/``\\x95``/newline and the
+    footnote-furniture parens, see below), so a future ``*Boost 99`` /
+    ``V:PV 99`` / ``Charge:Fast 99`` state recovers EXACT (the old closed
+    ``[+A-Za-z0-9][A-Za-z /()\\-]*?`` silently misnamed ``*Boost 99`` as
+    ``Boost``, agreeing green with the true name lost). Bullets/newlines are
+    delimiters (never name characters: a state is one row); ``(``/``)`` are
+    excluded as footnote-furniture markers (live merges the "(1) Load search"
+    footnote into the Fault chunk as ``... 1 \\x95 (1)  Fault 2 ...`` — an
+    open leading paren would swallow "(1)  Fault" as the name and lose real
+    "Fault 2" silently). Denylists (justified): ``(?<!\\()`` plus the paren
+    exclusion keep the ``(1)`` footnote out (without the lookbehind a
     leading-digit widening starts inside ``(1)`` yielding ``1) Fault`` and
-    the guard skips it, losing real ``Fault 2``; the lookbehind forces the
-    match to start at ``Fault`` like the old ``[A-Za-z]`` did),
-    ``Bit``/``register`` guard excludes headers, and the ``MPPT Inverter
-    Charger`` device-header prefix contaminating the first live chunk is
-    stripped (3-word header, verified).
-    Leading ``[+A-Za-z0-9]`` (was ``[A-Za-z]``) preserves leading-digit names
-    (``2Fast Mode 99`` recovers exact, like the parser/scraper classes) and
-    leading-``+`` names (``+Boost Mode 99``, cf. the CS/ERR ``+`` rescue);
-    interior stays ``[A-Za-z /()\\-]`` (no digits/``+``/``:``), so interior
-    ``Mode2Fast``/``Bulk+Boost`` stay scraper-divergent (pinned). A future
-    ``:``/other-symbol CS name missed by the closed snapshot parser
-    is still scraped here (divergence, like the test-side CS scraper) — but
-    for freshness both sides use this tolerant form, so a CS rename reports
-    STALE live (stronger than regs, which stay invisible). Never raises.
+    loses real ``Fault 2``; the lookbehind forces the match to start at
+    ``Fault``); ``\\d+\\)``/``(\\d+)`` content guards reject bare
+    enumerations and merged footnote references; ``Bit``/``register`` guard
+    excludes headers; and the ``MPPT Inverter Charger`` device-header prefix
+    contaminating the first live chunk is stripped (substring strip: the open
+    interior also spans the section preamble on snapshot text, so the strip
+    is a contains-strip, verified exact on both). A future real state
+    starting with "(" would be missed here but caught by the line-anchored
+    parser/scraper (footnote carries no code there), failing loudly as
+    divergence instead of agreeing silently. Never raises.
     """
     try:
         if not text:
@@ -856,21 +861,26 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
         m_end = tail.find("The error code")
         sec = tail[:m_end] if m_end > 0 else tail[:5000]
         found: dict[int, str] = {}
-        for m in re.finditer(r"(?<!\()([+A-Za-z0-9][A-Za-z /()\-]*?)\s+(\d{1,3})\s*[\x95•]", sec):
+        for m in re.finditer(r"(?<!\()([^\s()\x95•][^\x95•\n]*?)\s+(\d{1,3})\s*[\x95•]", sec):
             name = m.group(1).strip()
-            # Live first chunk merges device header ("MPPT Inverter Charger
-            # Off"): strip the 3-word header, verified live-only (snapshots
-            # keep header on its own line without code, so no match there).
-            if name.startswith("MPPT"):
-                parts = name.split()
-                if len(parts) > 3 and parts[:3] == ["MPPT", "Inverter", "Charger"]:
-                    name = " ".join(parts[3:]).strip()
+            # Live first chunk merges the section preamble and device header
+            # ("... possible values. MPPT Inverter Charger Off"): strip
+            # everything through the header (verified live-only; snapshots
+            # match per-line so the strip is a no-op there — contains-strip
+            # because the open interior spans the preamble on snapshot text
+            # too, yielding the same prefix on both sides).
+            if "MPPT" in name and "Charger" in name:
+                name = name.split("Charger", 1)[1].strip()
             if not name or "Bit" in name or "register" in name:
                 continue
             # Backup for a bare "1) ..." enumeration without "(" (the
             # lookbehind already blocks "(1)" -> "1) ..."; real snapshot
-            # footnote carries no code/bullet, so zero-diff).
+            # footnote carries no code/bullet, so zero-diff). Footnote
+            # references merged into a name ("(1) Fault") are furniture,
+            # never a real state (real snapshot names carry no "(N)").
             if re.match(r"^\d+\)", name):
+                continue
+            if re.search(r"\(\d+\)", name):
                 continue
             try:
                 found[int(m.group(2))] = name
@@ -1095,16 +1105,27 @@ def compare_snapshot_structures(snap_text: str, live_text: str, key: str) -> lis
                     # Fallback for mocked layout-preserving where tolerant
                     # matches but snapshot-parser differs? Tolerant already
                     # exact on snapshots, so fallback only when tolerant
-                    # skips (empty). Keep snapshot-parser comparison guarded
-                    # like regs (skip on empty/mismatch, stale on ID-match).
+                    # skips (empty). Snapshot-parser comparison guarded like
+                    # regs (skip on empty/ID-mismatch, stale on ID-match):
+                    # real live stdlib text can yield NON-EMPTY garbage here
+                    # (e.g. glyph-soup lines matching the structural
+                    # name/code shape with foreign IDs like 535 while the
+                    # tolerant IDs still match exactly) — parser-ID mismatch
+                    # proves layout loss (tolerant IDs already proven
+                    # matching), so it skips, never stale. Only
+                    # layout-preserving (mocked) live with matching IDs
+                    # compares names.
                     try:
                         scs, lcs = sp.parse_cs_states(), lp.parse_cs_states()
-                        if scs and lcs and scs != lcs:
+                        if scs and lcs and set(lcs) == set(scs) and scs != lcs:
                             diffs.append(f"Text CS states {scs} vs {lcs}")
                     except Exception:
                         pass
                 se, le = sp.parse_errors(), lp.parse_errors()
-                if se and le and se != le:
+                # Same ID-match guard as regs/CS above (documented
+                # invisibility): live glyph-soup can yield non-empty garbage
+                # with foreign IDs; only matching ID sets compare names.
+                if se and le and set(le) == set(se) and se != le:
                     diffs.append(f"Text ERR codes differ")
                 # PID IDs tolerant (exact live 153==153, incl. 3-digit missed
                 # by 4-digit ID stage): live added/removed reports STALE live.

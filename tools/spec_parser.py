@@ -1249,6 +1249,32 @@ def _is_desc_continuation(line: str, base_indent: int = 13) -> bool:
     return not any(rx.match(line) for rx in _TEXT_CONT_EXCLUDE)
 
 
+#: Anchored content denylist for VE.Direct Text-mode ERR note/prose lines.
+#: With full-remainder ERR capture (no tail restriction) these lines would
+#: otherwise match structurally once layout drift gives them a 2+-space gap
+#: (today they miss via single-space gaps, so the list is zero-diff
+#: drift-defense, never load-bearing on snapshots): Note1/Note2 prose
+#: ("Note1: Error 19 can ...", "Note2: Error 21 can ..."), their wrapped
+#: continuations ("MPPT charger. Since version ...", "shutdown of the ...",
+#: "not persistent."), the section intro ("The error code ..." header and
+#: its "the possible values." continuation), and the next field header
+#: ("HSDS"). Each pattern is line-start anchored (never a bare substring):
+#: a future fault DESCRIPTION containing "shutdown"/"MPPT" mid-line (e.g.
+#: "Input shutdown ... 38") must still parse. The test-side ERR scraper
+#: mirrors this furniture list with its own copy (kept separate so the
+#: scraper stays independently shaped; both lists are pinned exact by the
+#: full-coverage tests).
+_ERR_FURNITURE_RES = (
+    re.compile(r"^\s*Note\d+:"),
+    re.compile(r"^\s*MPPT charger"),
+    re.compile(r"^\s*shutdown\b"),
+    re.compile(r"^\s*not persistent"),
+    re.compile(r"^\s*the possible values"),
+    re.compile(r"^\s*The error code"),
+    re.compile(r"^\s*HSDS\b"),
+)
+
+
 class VEDirectTextParser:
     """Parser for VE.Direct Text Mode Protocol 3.34 documentation."""
 
@@ -1298,26 +1324,25 @@ class VEDirectTextParser:
         tables = self._device_column_starts(lines)
         self.unknown_units = []
 
-        label_re = re.compile(r"^\s{8,32}([+A-Za-z0-9_#.\-]+)\s{2,}(.*?)\s*$")
-        # Hyphen/dot in the label class (DC-IN, V.PV): the closed
-        # [A-Za-z0-9_#] missed future hyphen/dotted labels on BOTH sides
-        # (parser and count_doc_field_labels) while counts stayed green.
-        # Over-inclusive scraper + parser record both (zero-diff: no
-        # hyphen/dot label in current snapshots, verified). Leading "+"
-        # ("+QZ mV Future"): the closed [A-Za-z0-9_#.-] missed it in counter
-        # AND parser while 63 stayed green; both now lead [+A-Za-z0-9_#.-]
-        # (other symbols verified absent as label starts in snapshots,
-        # zero-diff, 63 exact).
-        # Indent 8-32 (was 10-25): the shared narrow window missed
-        # off-column labels at indent 8 and 30 on BOTH sides (probe QZz
-        # mV Future at 8/30 missed by counter and parser, control 13
-        # caught, counts stayed green). Widened to 8-32 to handle
-        # layout drift: doc prints labels at 13, continuations at 58,
-        # footnotes at 25-27, furniture at 0, device headers at 101+;
-        # 8-32 includes 8/30 with margin while still excluding 0/58/101+.
-        # Counter stays wider (5-35) so 5-7/33-35 drift still diverges
-        # loudly. Stoplist + 2+-space gap keep zero-diff (all 63 snapshot
-        # labels at column 13, verified).
+        label_re = re.compile(r"^\s*(\S+)\s{2,}(.*?)\s*$")
+        # Structural label match (position, not charset/indent): the token
+        # is ANY non-space run (no character-class restriction, so future
+        # V:PV / DC/IN / *QZ labels cannot share a charset blind spot with
+        # the counter by construction) at ANY indent (layout drift to
+        # <=4 / >=36 is still a label row; footnotes at 25-27,
+        # continuations at 58, furniture at 0 and device headers at 101+
+        # are excluded by STRUCTURE, not indent: they carry only single
+        # spaces after their first token, never the 2+-space column gap a
+        # label row requires). Content denylist below covers only lines
+        # that structurally look like label rows: the three "Label Units
+        # ..." table headers (indent 18, 2+ gaps) and the "60x ..."
+        # device-column headers. Zero-diff: all 63 snapshot labels sit at
+        # column 13 with 2+ gaps (verified); footnote/cont/footer lines
+        # carry single-space gaps and miss the pattern entirely. The
+        # counter (tests/test_spec_parsers.py) is WIDER (any gap): a
+        # single-space label row still diverges loudly there, and
+        # stoplist-colliding labels ("Note") diverge too — indent/charset
+        # no longer diverge, gap/stoplist still do.
         stoplist = {
             "Label", "Table", "The", "Note", "Victron", "General", "E-mail",
             "When", "Both", "Available", "60x",
@@ -1434,23 +1459,23 @@ class VEDirectTextParser:
         m_end = re.search(r"^\s*ERR\s*$", tail, re.MULTILINE)
         section = tail[: m_end.start()] if m_end else tail
         for line in section.splitlines():
-            # Leading-digit names ("2Fast Mode 99 •", cf. the error side
-            # which already leads [A-Za-z0-9]): the old leading-[A-Za-z]
-            # missed them in parser AND scraper while EXPECTED_CS stayed
-            # green. Interior digits ("Mode2Fast") stay scraper-divergent
-            # (pinned by test_cs_scraper_name_divergence), so only the
-            # leading class widens here. The "(" footnote ("(1) Load
-            # search") still misses (leading paren). Zero-diff: all
-            # snapshot CS names start with a letter (pinned by full
-            # coverage). Leading "+" ("+Boost Mode 99 •"): the closed
-            # [A-Za-z0-9] missed it in parser AND scraper while counts
-            # stayed green; both now lead [+A-Za-z0-9] (other symbols like
-            # ":"/"*"/"-" verified absent as CS row starts in snapshots,
-            # so widening to "+" only is zero-diff; interior stays closed
-            # so "Bulk+Boost"/"Charge:Fast" stay scraper-divergent, pinned).
-            m = re.match(r"^\s*([+A-Za-z0-9][A-Za-z\s/()\-]*?)\s+(\d{1,3})\s+(?:•|\d)", line)
+            # Structural CS row: name is EVERYTHING before the trailing
+            # code (no leading-character and no interior class restriction,
+            # so a future "*Boost 99" / "V:PV 99" / "DC/IN 99" row cannot
+            # share a charset blind spot with the scraper by construction);
+            # the code is extracted positionally (name/code gap, then a
+            # device-bullet or digit tail). Content denylists for known
+            # furniture: the "Bit ..."/"register ..." table header, the
+            # "(1) Load search" footnote (starts with "(", never a real
+            # state), and bare "N) ..." enumerations. Zero-diff: all 15
+            # snapshot names start with a letter (pinned by full coverage).
+            m = re.match(r"^\s*(.+?)\s+(\d{1,3})\s+(?:•|\d)", line)
             if m:
                 name = m.group(1).strip()
+                if "Bit" in name or "register" in name:
+                    continue
+                if name.startswith("(") or re.match(r"^\d+\)", name):
+                    continue
                 code = int(m.group(2))
                 states[code] = name
         return states
@@ -1471,18 +1496,24 @@ class VEDirectTextParser:
         ]
         section = tail[: min(ends)] if ends else tail
         for line in section.splitlines():
-            # Optional bullet tail (future "Future fault 99 •" rows): the
-            # shared EOL anchor hid bullet-tailed rows on both sides while
-            # EXPECTED_ERRORS stayed green (CS already tail-diverged). The
-            # scraper is tail-agnostic (\\b), so the parser records
-            # bullet-tailed rows too — zero-diff (snapshots carry no bullet
-            # tail, verified). Leading "+" ("+Fault mode 99"): the closed
-            # [A-Za-z0-9] missed it in parser AND scraper while counts
-            # stayed green; both now lead [+A-Za-z0-9] (other symbols
-            # verified absent as ERR row starts in snapshots, zero-diff;
-            # interior stays as-is so "+"/":"/"." interiors stay
-            # scraper-divergent where pinned).
-            m = re.match(r"^\s*([+A-Za-z0-9][A-Za-z0-9\s/(),\-]*?)\s{2,}(\d{1,3})(?:\s+•.*)?\s*$", line)
+            # Structural ERR row: name is EVERYTHING before the trailing
+            # code (no leading-character and no interior class restriction,
+            # so a future "*Boost fault 99" / "DC/IN fault 99" row cannot
+            # share a charset blind spot with the scraper by construction);
+            # the code is extracted positionally (name/code 2+-space column
+            # gap) and the capture runs through end-of-line (NO tail
+            # restriction, so a future "Future fault 99 (see note)" row
+            # with trailing prose parses with name "Future fault" instead
+            # of being missed by a shared EOL-or-bullet tail on both sides
+            # while EXPECTED_ERRORS stays green). Content denylist: note /
+            # prose / header lines (see _ERR_FURNITURE_RES) can never be
+            # rows. Zero-diff: all 20 snapshot names start with a letter
+            # and carry no trailing prose (pinned by full coverage). The
+            # scraper (tests/test_spec_parsers.py) is WIDER (any gap): a
+            # single-space row still diverges loudly there.
+            if any(rx.match(line) for rx in _ERR_FURNITURE_RES):
+                continue
+            m = re.match(r"^\s*(.+?)\s{2,}(\d{1,3})\b.*$", line)
             if m:
                 desc = m.group(1).strip()
                 code = int(m.group(2))

@@ -103,44 +103,45 @@ EXPECTED_COUNTS = {
 
 
 def count_doc_field_labels(section: str) -> set[str]:
-    """Independent Text-mode label counter, deliberately shaped unlike the
-    parser's ``^\\s{8,32}...\\s{2,}`` on both axes while staying exact: it
-    anchors the label column WIDE (5-35; the doc prints every label
-    at column 13, prose/footnotes sit at 25-27, furniture at 0,
-    continuations at 58, device headers at 101+) and tolerates ANY
-    inter-column gap (``\\s+``), whereas the parser anchors the gap
-    (``\\s{2,}``) over a narrower 8-32 indent window. A single-space label row —
-    missed by the parser's gap rule — is still counted here, so it fails
-    loudly as a parser-vs-counter mismatch instead of passing ``len==63``
-    on both sides. Indent over-inclusion (5-35 vs parser 8-32): an
-    off-column label at indent 8 or 30 (layout drift) is scraped here
-    and (now) parsed too — honest pass — while a drift to 5-7 or 33-35
-    is still scraped here but missed by the parser, failing loudly as
-    divergence instead of being missed by both (probe ``QZz`` at 8/30
-    caught by both, at 5/35 caught here only). The stoplist stays
-    explicit (Label + footnote-prose starters Available/The/When/the at
-    25-27): the widened window newly includes footnote prose (25-27),
-    which the old narrow 10-20 window excluded by indent alone; these
-    four are denylisted with justification (verified: only these four
-    prose starters match the widened pattern in the fields section, and
-    no snapshot label collides with them, so 63 stay exact). A future
-    doc label colliding with a parser stoplist word ("Note", "When",
-    ...) is therefore still counted here and fails loudly against the
-    parser instead of being missed by both.     Label class is
-    OVER-INCLUSIVE on hyphen/dot/plus ([+A-Za-z0-9_#.\\-], cf. parser): the
-    shared closed [A-Za-z0-9_#] missed future DC-IN/V.PV rows on both
-    sides while counts stayed green; this side accepts hyphen/dot/plus so
-    such a row ("+QZ mV Future", now parsed too) is scraped here and (now)
-    parsed too — set-equality fails loudly if either side regresses.
-    Verified: this
+    """Independent Text-mode label counter, structural on both axes while
+    staying exact: the label token is ANY non-space run (no charset
+    restriction, so future ``V:PV`` / ``DC/IN`` / ``*QZ`` labels cannot
+    share a charset blind spot with the parser by construction) at ANY
+    indent (layout drift to <=4 / >=36 still counts; footnotes at 25-27,
+    continuations at 58, furniture at 0 and device headers at 101+ are
+    excluded by STRUCTURE, not indent: with the counter's any-gap
+    ``\\s+`` every multi-token line matches structurally, so furniture is
+    excluded by an explicit content denylist instead). The denylist below
+    is the complete first-token furniture of the current fields section
+    (verified: 75 distinct first-tokens match structurally, 63 are labels,
+    these 12 are the entire remainder): table headers (Label, 60x),
+    section intro (The), footnote prose (Available, When, the, batches, —
+    the wrapped "batches, with PID 0x300 ..." line), continuations (Amount,
+    Depth, Number — "Depth of the deepest discharge" etc.), footers
+    (Victron, General — "General phone: ..." carries E-mail mid-line).
+    Deliberately NOT denylisted (divergence proofs): "Note" (parser
+    stoplist word — a colliding future label is counted here but skipped
+    by the parser, see test_text_field_counter_stoplist_divergence) and
+    "MPPT" (a REAL label; the footnote "MPPT 75/15 ..." line yields the
+    same token and dedups at distinct-level, so 63 stay exact). Bare
+    footnote numbers / bare URLs are single-token lines (no gap) and miss
+    structurally. A single-space label row is still counted here but
+    missed by the parser's ``\\s{2,}`` rule (gap divergence, see
+    test_text_field_counter_gap_divergence); indent/charset no longer
+    diverge (both sides structural), gap/stoplist still do. Verified: this
     yields exactly the 63 doc fields on the current snapshot with no prose
-    false positives (no hyphen/dot/plus label in snapshots; all 63 labels at
-    column 13)."""
-    _deny = {"Label", "Available", "The", "When", "the"}
+    false positives (all 63 labels at column 13)."""
+    _deny = {
+        "Label", "60x",  # table headers ("Label Units ...", device columns)
+        "The",  # section intro ("The units used ...") + "The VE.Direct ..." footnote
+        "Available", "When", "the", "batches,",  # footnote prose starters
+        "Amount", "Depth", "Number",  # description-continuation starters
+        "Victron", "General",  # page footers
+    }
     return {
         m.group(1)
         for line in section.splitlines()
-        for m in [re.match(r"^\s{5,35}([+A-Za-z0-9_#.\-]+)\s+", line)]
+        for m in [re.match(r"^\s*(\S+)\s+", line)]
         if m and m.group(1) not in _deny
     }
 
@@ -194,75 +195,92 @@ def scrape_doc_ids(text: str) -> set[int]:
 
 
 def scrape_doc_cs_codes(section: str) -> dict[int, str]:
-    """Independent CS counter: OVER-INCLUSIVE name with NO tail requirement.
+    """Independent CS counter: structural name with NO tail requirement.
 
-    The parser anchors the trailing device-column marker (``\\s+(•|\\d)``)
-    and a closed name class (letters/space/slash/parens/hyphen), so a row
-    without trailing bullets or with ``+``/``:``/digit names is missed by the
-    parser while the suite stays green. This scraper anchors only the ``name
-    code`` prefix, ignores the tail entirely, and captures the name with an
-    open ``([+A-Za-z0-9].+?)`` (any chars after a leading plus/letter-or-digit) —
-    a bullet-less, ``+``-leading (``+Boost Mode 99 •``, now parsed too),
-    ``:``, or leading-digit ("2Fast Mode 99 •", which
-    the parser now accepts too) row is still counted, so it fails loudly as
-    scraper-vs-parser mismatch. Over-inclusion is the safe direction: extra
-    hits fail via the invented-IDs-style set-equality, while under-inclusion
-    would hide the same blind spot on both sides. Denylists (explicit,
-    justified): the leading-``[+A-Za-z0-9]`` still excludes the
-    "(1) Load search" footnote (starts with "("), and the "Bit"/"register"
-    guard excludes the table header; verified exact against the snapshot CS
+    The parser anchors the trailing device-column marker (``\\s+(•|\\d)``);
+    this scraper anchors only the ``name code`` prefix (``\\b``) and
+    captures the name as EVERYTHING before the trailing code (no
+    leading-character and no interior class restriction, so a ``*Boost`` /
+    ``V:PV`` / ``Bulk+Boost`` / ``Charge:Fast`` / ``Mode2Fast`` row cannot
+    share a charset blind spot with the parser by construction) — such rows
+    are still counted here and (now) parsed too, failing loudly via
+    set-equality if either side regresses. Over-inclusion is the safe
+    direction: extra hits fail via the invented-IDs-style set-equality,
+    while under-inclusion sharing the parser's closed class is the bug.
+    Denylists (explicit, justified): the "(1) Load search" footnote
+    (starts with "(", never a real state; carries no code anyway) and bare
+    "N) ..." enumerations are skipped, and the "Bit"/"register" guard
+    excludes the table header; verified exact against the snapshot CS
     section with a WIDER bound than the parser (scraper scans to "The error
     code ..." prose, parser stops at the "^ERR$" header — see
     test_cs_states_full_coverage): the extra ERR header + blank carry no
     ``name code`` pattern, so the wider scan stays exact while a row past
-    the parser bound is still scraped here (bound-divergence test). Zero-diff:
-    no snapshot CS row starts with "+" (verified), so the widened leading
-    class adds no hits."""
+    the parser bound is still scraped here (bound-divergence test).
+    Zero-diff: all 15 snapshot CS names start with a letter (verified), so
+    the open name adds no hits. Gap independence is preserved (scraper
+    ``\\s+`` vs parser bullet-tail): a bullet-less row still diverges (see
+    test_cs_counter_bullet_gap_divergence)."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*([+A-Za-z0-9].+?)\s+(\d{1,3})\b", line)
+        m = re.match(r"^\s*(.+?)\s+(\d{1,3})\b", line)
         if m:
             name = m.group(1).strip()
             # Header guard (same as parser): "Bit ...", "register ..." lines are not states.
             if "Bit" in name or "register" in name:
+                continue
+            # Footnote furniture (same as parser): "(1) Load search" starts
+            # with "(", bare "N) ..." enumerations are not states.
+            if name.startswith("(") or re.match(r"^\d+\)", name):
                 continue
             found[int(m.group(2))] = name
     return found
 
 
 def scrape_doc_error_codes(section: str) -> dict[int, str]:
-    """Independent error counter: OVER-INCLUSIVE name, permissive gap,
-    BULLET-TAIL-AGNOSTIC (copies the CS tail-independence spirit).
+    """Independent error counter: structural name, permissive gap,
+    FULL-REMAINDER tail (copies the CS tail-independence spirit).
 
-    The parser requires a 2+-space gap plus a closed name class
-    (``[A-Za-z0-9\\s/(),\\-]``), so a single-space row or a ``+``/``:``/``.``
-    name is missed with no counter to catch it. This scraper tolerates ANY
-    gap (``\\s+``), ignores a bullet tail (``(?:\\s+•.*)?``), and captures
-    the name with an open ``([+A-Za-z0-9].+?)`` — a single-space,
-    ``+``-leading (``+Fault mode 99``, now parsed too), ``:``/``.`` or
-    bullet-tailed (``Future fault 99 •``) row is still
-    counted and fails loudly as scraper-vs-parser mismatch. The shared EOL
-    anchor hid bullet-tailed rows on both sides while EXPECTED_ERRORS
-    stayed green; bullet-tail-agnostic closes it. Fully tail-agnostic
-    (``\\b``, the literal CS pattern) over-matches here: Note1/Note2 prose
-    ("Note1: Error 19 can ...", "Since version 1.15 ...") contains mid-line
-    codes that ``\\b`` catches (verified: ``{1: ..., 19: 'Note1: Error',
-    21: 'Note2: Error'}`` spurious), so this scraper allows EOL-or-bullet
-    only — still catches ``99 •`` while keeping notes out. Over-inclusion
-    is safe (extra hits fail loudly); under-inclusion sharing the parser's
-    closed class is the bug. Denylist (justified): note prose ends in
-    words, never in a bare code/bullet-tail, so EOL-or-bullet keeps it out;
-    verified exact against the snapshot ERR section with a WIDER bound than
+    The parser requires a 2+-space gap and runs its capture through
+    end-of-line; this scraper tolerates ANY gap (``\\s+``) and also runs
+    through end-of-line (``.*``: EOL, bullet tails AND trailing prose like
+    "Future fault 99 (see note)" all match), capturing the name as
+    EVERYTHING before the trailing code (no leading-character and no
+    interior class restriction, so ``*Boost`` / ``:`` / ``.`` names cannot
+    share a charset blind spot with the parser by construction) — such
+    rows are still counted here and (now) parsed too, failing loudly via
+    set-equality if either side regresses. Over-inclusion is safe (extra
+    hits fail loudly); under-inclusion sharing the parser's closed class
+    is the bug. Denylists (explicit, justified): with the any-gap +
+    full-remainder shape, Note1/Note2 prose ("Note1: Error 19 can ...",
+    "MPPT charger. Since version ...", "shutdown of the ...") would match
+    structurally (single-space ``name code`` + remainder), so note/prose/
+    header lines are excluded by anchored content (mirrors the parser's
+    _ERR_FURNITURE_RES furniture list with a separate copy so the scraper
+    stays independently shaped; both pinned exact by full coverage).
+    Verified exact against the snapshot ERR section with a WIDER bound than
     the parser (scraper scans to "Historical data" prose, parser stops at
     "^HSDS$" — see test_error_codes_full_coverage): the extra HSDS header
-    + blank carry no ``name code`` pattern, so the wider scan stays exact
-    while a row past the parser bound is still scraped here
-    (bound-divergence test). Zero-diff: snapshot ERR rows carry no bullet
-    tail, so EOL-or-bullet matches exactly the EOL set; no snapshot ERR row
-    starts with "+" (verified), so the widened leading class adds no hits."""
+    + blank + notes carry no unscratched ``name code`` pattern once
+    furniture-denylisted, so the wider scan stays exact while a row past
+    the parser bound is still scraped here (bound-divergence test).
+    Zero-diff: all 20 snapshot ERR names start with a letter and carry no
+    trailing prose (verified). Gap independence is preserved (scraper
+    ``\\s+`` vs parser ``\\s{2,}``): a single-space row still diverges (see
+    test_error_counter_single_space_divergence)."""
+    _note_deny = (
+        re.compile(r"^\s*Note\d+:"),
+        re.compile(r"^\s*MPPT charger"),
+        re.compile(r"^\s*shutdown\b"),
+        re.compile(r"^\s*not persistent"),
+        re.compile(r"^\s*the possible values"),
+        re.compile(r"^\s*The error code"),
+        re.compile(r"^\s*HSDS\b"),
+    )
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*([+A-Za-z0-9].+?)\s+(\d{1,3})(?:\s+•.*)?\s*$", line)
+        if any(rx.match(line) for rx in _note_deny):
+            continue
+        m = re.match(r"^\s*(.+?)\s+(\d{1,3})\b.*$", line)
         if m:
             found[int(m.group(2))] = m.group(1).strip()
     return found
@@ -1852,33 +1870,66 @@ class TestSpecParsers(unittest.TestCase):
         self.assertFalse(any(lb.startswith("+") for lb in snap_labels))
         self.assertFalse(any(lb.startswith("+") for lb in self.text_fields))
 
+    def test_text_field_label_symbol_charset(self):
+        """Shared closed label charset hid symbol labels on both sides
+        (probes ``V:PV`` / ``DC/IN`` / ``*QZ`` yielded counter set() and
+        parser {} while 63 stayed green — reproduced synthetically before
+        the fix). Both sides now take the label token structurally (any
+        non-space run, no charset restriction), so the probes pass honestly
+        with exact label/units/descriptions on both sides; neither side can
+        share a charset blind spot by construction. Zero-diff: no snapshot
+        label contains ``:``/``/``/``*`` (verified, 63 exact on both
+        sides)."""
+        base = "The units used by the serial interface are as follows:\n"
+        end = "Table I Supported Text-mode fields\n"
+        for label in ("V:PV", "DC/IN", "*QZ"):
+            with self.subTest(label=label):
+                section = (
+                    base
+                    + "             V                   mV                       Main voltage\n"
+                    + f"             {label}                 mV                       Future quantity\n"
+                    + end
+                )
+                self.assertIn(label, count_doc_field_labels(section))
+                fields = VEDirectTextParser(section).parse_fields()
+                self.assertIn(label, fields)
+                self.assertEqual(fields[label].units, "mV")
+                self.assertEqual(fields[label].description, "Future quantity")
+        # Zero-diff controls: snapshots carry no symbol labels (63 exact).
+        text = self.raw_texts["text"]
+        start = text.find("The units used by the serial interface are as follows:")
+        snap_labels = count_doc_field_labels(text[start:text.find("Table I Supported Text-mode fields")])
+        self.assertEqual(len(snap_labels), EXPECTED_COUNTS["fields"])
+        self.assertFalse(any(set(lb) & set(":/*") for lb in snap_labels))
+        self.assertFalse(any(set(lb) & set(":/*") for lb in self.text_fields))
+
     def test_text_field_label_indent_off_column(self):
-        """Shared indent window hid off-column labels on both sides (probe
+        """Structural indent on both sides (cycle-14 fix): the shared
+        narrow indent window hid off-column labels on both sides (probe
         ``QZz mV Future`` at indent 8 and 30 missed by counter 10-20 and
-        parser 10-25, control 13 caught, counts stayed green). Counter is
-        over-inclusive (5-35) and the parser handles 8-32, so the probe
-        now passes honestly on both sides. Control: all 63 snapshot
-        labels sit at column 13 (zero-diff). Divergence: 5-7/33-35 stay
-        counter-only (parser 8-32 misses), proving independence."""
+        parser 10-25, control 13 caught, counts stayed green). Both sides
+        now accept ANY indent (position-independent; furniture excluded by
+        structure/content, not columns), so drift to 5-7/33-35 — and to
+        <=4/>=36, missed by both before — passes honestly with exact
+        label/units on both sides. Remaining divergence axes (proving the
+        counter/parser pair is still independent): single-space rows
+        (test_text_field_counter_gap_divergence) and stoplist-colliding
+        labels (test_text_field_counter_stoplist_divergence) — indent and
+        charset no longer diverge, gap/stoplist still do."""
         def _row(indent: int, label: str = "QZz") -> str:
             return " " * indent + label + " " * 17 + "mV" + " " * 23 + "Future quantity\n"
 
         base = "The units used by the serial interface are as follows:\n"
         end = "Table I Supported Text-mode fields\n"
-        # Honest pass: 8/30 caught by BOTH (was missed by both before).
-        for indent in (8, 13, 30):
+        # Honest pass at every indent: control 13, former 8/30 pair, former
+        # 5/35 divergence pair, and extreme <=4/>=36 (missed by both before).
+        for indent in (0, 2, 4, 5, 7, 8, 13, 30, 33, 35, 36, 50, 70):
             with self.subTest(indent=indent):
                 section = base + _row(indent) + end
                 self.assertIn("QZz", count_doc_field_labels(section))
                 fields = VEDirectTextParser(section).parse_fields()
                 self.assertIn("QZz", fields)
                 self.assertEqual(fields["QZz"].units, "mV")
-        # Divergence: 5 and 35 caught by over-inclusive counter only.
-        for indent in (5, 35):
-            with self.subTest(divergence=indent):
-                section = base + _row(indent) + end
-                self.assertIn("QZz", count_doc_field_labels(section))
-                self.assertNotIn("QZz", VEDirectTextParser(section).parse_fields())
         # Zero-diff control: snapshots carry only column-13 labels.
         # Note: footnote prose starting with a real label word ("MPPT
         # 75/15 ..." at indent 26, single-space gap) also matches the
@@ -2244,12 +2295,20 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(99, VEDirectTextParser(section).parse_cs_states())
 
     def test_cs_scraper_name_divergence(self):
-        """Proves the CS scraper is over-inclusive on names (structural
-        guidance): synthetic ``+``/``:``/digit names are scraped here yet
-        dropped by both the parser and the OLD closed scraper class
-        (letters/space/slash/parens/hyphen), i.e. they would fail loudly as
-        scraper-vs-parser mismatch instead of being missed by both while
-        hardcoded EXPECTED_CS stays green."""
+        """Structural names on both sides (cycle-14 fix, was pinned
+        divergence): synthetic interior-symbol names (``Bulk+Boost``,
+        ``Charge:Fast``) and interior-digit names (``Mode2Fast``) are now
+        scraped AND parsed with exact names (honest pass) — the shared
+        closed name class that hid them on both sides while hardcoded
+        EXPECTED_CS stayed green is gone: names are everything before the
+        trailing code on both sides, so neither side can share a charset
+        blind spot by construction. Set-equality still fails loudly if
+        either side regresses. Remaining divergence axes (proving the
+        scraper/parser pair is still independent): bullet-less rows
+        (test_cs_counter_bullet_gap_divergence), past-bound rows
+        (test_cs_bound_divergence), and live-vs-layout tolerant extraction.
+        Zero-diff: snapshot names all start with a letter (pinned by
+        test_cs_states_full_coverage)."""
         section = (
             "The state of operation. See the table below\n"
             "                        Off                                   0      •\n"
@@ -2262,21 +2321,22 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(scraped[100], "Charge:Fast")
         self.assertEqual(scraped[101], "Mode2Fast")
         parsed = VEDirectTextParser(section).parse_cs_states()
-        self.assertNotIn(99, parsed)
-        self.assertNotIn(100, parsed)
-        self.assertNotIn(101, parsed)
+        self.assertEqual(parsed[99], "Bulk+Boost")
+        self.assertEqual(parsed[100], "Charge:Fast")
+        self.assertEqual(parsed[101], "Mode2Fast")
 
     def test_cs_leading_digit_name_rescue_divergence(self):
         """Leading-digit CS names ("2Fast Mode 99 •") were missed by BOTH
         the parser and the scraper (leading ``[A-Za-z]`` required) while
-        EXPECTED_CS and the set-equality stayed green. Both now accept a
-        leading digit (like the error side, which already leads
-        ``[A-Za-z0-9]``), so the probe passes honestly with its true name
-        on both sides. Interior digits ("Mode2Fast") stay scraper-only
-        (pinned by test_cs_scraper_name_divergence), so only the leading
-        class widens here. Controls: the "(1) Load search" footnote (leading
-        "(") stays excluded on both sides; snapshot names all start with a
-        letter, so zero-diff holds (pinned by test_cs_states_full_coverage).
+        EXPECTED_CS and the set-equality stayed green. Both now take the
+        name structurally (everything before the trailing code), so the
+        probe passes honestly with its true name on both sides — like
+        interior symbols/digits (see test_cs_scraper_name_divergence),
+        which are honest-pass too since cycle-14. Controls: the
+        "(1) Load search" footnote (leading "(" furniture) stays excluded
+        on both sides via the explicit paren denylist; snapshot names all
+        start with a letter, so zero-diff holds (pinned by
+        test_cs_states_full_coverage).
         Note: fetch_specs.tolerant_cs_states now recovers this probe exact
         too (see test_tolerant_cs_leading_digit_exact), so snapshot-vs-live
         tolerant agreement carries the true name."""
@@ -2297,12 +2357,13 @@ class TestSpecParsers(unittest.TestCase):
     def test_tolerant_cs_leading_digit_exact(self):
         """Leading-digit CS names recover EXACT in tolerant_cs_states (fix,
         formerly pinned when fetch_specs was out of scope): its global
-        bullet-anchored search now starts the name at ``[+A-Za-z0-9]`` with
-        ``(?<!\\()`` (like the parser/scraper classes), so "2Fast Mode 99 •"
+        bullet-anchored search takes the name structurally (everything
+        before the trailing code, no charset restriction) with
+        ``(?<!\\()`` plus paren-furniture exclusion, so "2Fast Mode 99 •"
         recovers exact (was MISNAMED as "Fast Mode", agreeing green with the
         true name lost). Footnote ``(1)`` (live joins it as ``... 1 \\x95
-        (1) Fault 2 ...``) stays out via the lookbehind — without it the
-        widening starts inside ``(1)`` yielding ``1) Fault`` and loses real
+        (1) Fault 2 ...``) stays out via the lookbehind + paren exclusion —
+        without them the open name swallows "(1)  Fault" and loses real
         ``Fault 2`` live (verified live 15==15 today). Real snapshot
         footnote carries no code/bullet (zero-diff). Zero-diff: tolerant
         output on the current snapshot is exactly the 15 EXPECTED_CS states;
@@ -2329,18 +2390,51 @@ class TestSpecParsers(unittest.TestCase):
         )
         self.assertEqual(tolerant_cs_states(foot), {})
 
+    def test_tolerant_cs_leading_symbol_exact(self):
+        """Leading-symbol CS names recover EXACT in tolerant_cs_states: the
+        probe ``*Boost 99`` was MISNAMED as ``{99: 'Boost'}`` (true name
+        lost) while snapshot-vs-live tolerant agreement stayed green —
+        reproduced synthetically before the fix. The global bullet-anchored
+        search now takes the name structurally (everything before the
+        trailing code, raw token preserved exactly, no stripping), so the
+        probe recovers ``{99: '*Boost'}``. The MPPT-header strip is
+        load-bearing live (first chunk merges the device header), so it is
+        kept and applied to the raw name (recorded raw, compared raw).
+        Zero-diff: snapshot tolerant output still equals EXPECTED_CS (15
+        exact) and live agrees (live==snapshot 15; skipped offline)."""
+        from fetch_specs import tolerant_cs_states
+
+        probe = (
+            "The state of operation dummy\n"
+            "                        *Boost                                99     •\n"
+            "                       The error code dummy\n"
+        )
+        # Fixed behavior: raw name preserved exactly (was "Boost").
+        self.assertEqual(tolerant_cs_states(probe), {99: "*Boost"})
+        # Zero-diff: snapshot tolerant states equal doc truth exactly.
+        self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
+        # Live agrees (skipped unless network is present, like the other
+        # live tests): the same raw-name comparison on the online PDF.
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        snap_text = (specs_dir / "VE.Direct-Protocol-3.34.txt").read_text(errors="ignore")
+        try:
+            pdf_bytes = download_pdf_bytes(fetch_specs.OFFICIAL_SPECS["VE.Direct-Protocol-3.34"]["url"], timeout=30.0)
+        except OSError as e:
+            self.skipTest(f"live download unreachable, skipping: {e}")
+        self.assertEqual(tolerant_cs_states(extract_pdf_text(pdf_bytes)), tolerant_cs_states(snap_text))
+
     def test_cs_err_leading_plus_rescue(self):
         """Leading-``+`` CS/ERR names ("+Boost Mode 99 •" / "+Fault mode 99")
         were missed by BOTH the parser and the scrapers (leading
-        ``[A-Za-z0-9]`` required) while counts stayed green. Both now lead
-        ``[+A-Za-z0-9]`` (other symbols verified absent as row starts in
-        snapshots, zero-diff), so the probes pass honestly with exact names
-        on both sides plus tolerant_cs_states. Interior ``+``/``:``/``.``
-        ("Bulk+Boost", "Charge:Fast", "Dotted.Name") stay scraper-divergent
-        (pinned by the scraper-name tests), so only the leading class widens
-        here. Controls: "(1) Load search" footnote still excluded; snapshot
-        CS/ERR names all start with a letter (zero-diff, pinned by full
-        coverage). Divergence probes with leading-plus names."""
+        ``[A-Za-z0-9]`` required) while counts stayed green. Both sides now
+        take names structurally (everything before the trailing code, no
+        leading-character restriction — like interior ``+``/``:``/``.``
+        since cycle-14, see the scraper-name tests), so the probes pass
+        honestly with exact names on both sides plus tolerant_cs_states.
+        Controls: "(1) Load search" footnote still excluded via the
+        explicit paren denylist; snapshot CS/ERR names all start with a
+        letter (zero-diff, pinned by full coverage). Divergence probes
+        with leading-plus names."""
         from fetch_specs import tolerant_cs_states
 
         cs_sec = (
@@ -2364,8 +2458,8 @@ class TestSpecParsers(unittest.TestCase):
             "                       The error code dummy\n"
         )
         self.assertEqual(tolerant_cs_states(probe), {99: "+Boost Mode"})
-        # Controls: footnote still excluded on line-anchored sides (leading
-        # "(" never matches ^\\s*[+A-Za-z0-9]); tolerant snapshot stays exact.
+        # Controls: footnote still excluded on line-anchored sides (explicit
+        # paren denylist, never a real state); tolerant snapshot stays exact.
         foot_cs = cs_sec + "                        (1) Load search                     98     •\n"
         self.assertNotIn(98, scrape_doc_cs_codes(foot_cs))
         self.assertNotIn(98, VEDirectTextParser(foot_cs).parse_cs_states())
@@ -2376,6 +2470,51 @@ class TestSpecParsers(unittest.TestCase):
         m_wide = re.search(r"Historical data", tail)
         self.assertIsNotNone(m_wide)
         self.assertEqual(scrape_doc_error_codes(tail[: m_wide.start()]), self.specs["text"].parse_errors())
+
+    def test_cs_err_leading_symbol_divergence(self):
+        """Shared leading ``[+A-Za-z0-9]`` hid other-symbol CS/ERR rows on
+        both sides (probe ``*Boost  99  •`` missed by scraper and parser
+        while EXPECTED_CS stayed green — reproduced synthetically before
+        the fix). Both sides now take names structurally (everything before
+        the trailing code, no leading-character restriction, furniture-
+        denylisted), so the probes pass honestly with exact names on both
+        sides. Zero-diff: no snapshot CS/ERR name starts with ``*``
+        (15/20 exact, pinned by the full-coverage tests)."""
+        from fetch_specs import tolerant_cs_states
+
+        cs_sec = (
+            "The state of operation. See the table below\n"
+            "                        Off                                   0      •\n"
+            "                        *Boost                                99     •\n"
+        )
+        self.assertEqual(scrape_doc_cs_codes(cs_sec)[99], "*Boost")
+        self.assertEqual(VEDirectTextParser(cs_sec).parse_cs_states()[99], "*Boost")
+        err_sec = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        *Boost fault                                                        99\n"
+        )
+        self.assertEqual(scrape_doc_error_codes(err_sec)[99], "*Boost fault")
+        self.assertEqual(VEDirectTextParser(err_sec).parse_errors()[99], "*Boost fault")
+        # Tolerant live form recovers the leading symbol exact too (was
+        # MISNAMED as "Boost", see test_tolerant_cs_leading_symbol_exact).
+        probe = (
+            "The state of operation dummy\n"
+            "                        *Boost                                99     •\n"
+            "                       The error code dummy\n"
+        )
+        self.assertEqual(tolerant_cs_states(probe), {99: "*Boost"})
+        # Controls: footnote still excluded on line-anchored sides (explicit
+        # paren denylist); snapshots carry no leading-symbol rows.
+        foot_cs = cs_sec + "                        (1) Load search                     98     •\n"
+        self.assertNotIn(98, scrape_doc_cs_codes(foot_cs))
+        self.assertNotIn(98, VEDirectTextParser(foot_cs).parse_cs_states())
+        text = self.raw_texts["text"]
+        pos = text.find("The state of operation. See the table below")
+        tail = text[pos:]
+        cs_names = list(scrape_doc_cs_codes(tail).values())
+        self.assertFalse(any(n.startswith("*") for n in cs_names))
+        self.assertFalse(any(n.startswith("*") for n in self.specs["text"].parse_cs_states().values()))
 
     def test_cs_bound_divergence(self):
         """Proves the CS scraper bound is wider/different than the parser's
@@ -2454,12 +2593,22 @@ class TestSpecParsers(unittest.TestCase):
         )
 
     def test_error_scraper_name_divergence(self):
-        """Proves the error scraper is over-inclusive on names: synthetic
-        ``+``/``:``/``.`` names are scraped here yet dropped by both the
-        parser and the OLD closed class, i.e. they would fail loudly instead
-        of being missed by both while hardcoded EXPECTED_ERRORS stays green.
-        Control: digit names (e.g. Mode2Fast) were already covered by both
-        sides, so only ``+``/``:``/``.`` prove the new axis."""
+        """Structural names on both sides (cycle-14 fix, was pinned
+        divergence): synthetic interior-symbol names (``Bulk+Boost fault``,
+        ``Charge:Fast fault``, ``Dotted.Name fault``) are now scraped AND
+        parsed with exact names (honest pass) — the shared closed name
+        class that hid them on both sides while hardcoded EXPECTED_ERRORS
+        stayed green is gone: names are everything before the trailing
+        code on both sides, so neither side can share a charset blind spot
+        by construction. Set-equality still fails loudly if either side
+        regresses. Remaining divergence axes (proving the scraper/parser
+        pair is still independent): single-space rows
+        (test_error_counter_single_space_divergence), past-bound rows
+        (test_error_bound_divergence), and trailing-prose rows stay honest
+        only when both sides keep full-remainder capture
+        (test_error_trailing_prose_divergence). Zero-diff: snapshot names
+        all start with a letter and carry no trailing prose (pinned by
+        test_error_codes_full_coverage)."""
         section = (
             "The error code of the device (relevant when the device is in the fault state)\n"
             "                        No error                                                            0\n"
@@ -2472,9 +2621,9 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(scraped[100], "Charge:Fast fault")
         self.assertEqual(scraped[102], "Dotted.Name fault")
         parsed = VEDirectTextParser(section).parse_errors()
-        self.assertNotIn(99, parsed)
-        self.assertNotIn(100, parsed)
-        self.assertNotIn(102, parsed)
+        self.assertEqual(parsed[99], "Bulk+Boost fault")
+        self.assertEqual(parsed[100], "Charge:Fast fault")
+        self.assertEqual(parsed[102], "Dotted.Name fault")
 
     def test_error_bound_divergence(self):
         """Proves the ERR scraper bound is wider/different than the parser's
@@ -2514,10 +2663,12 @@ class TestSpecParsers(unittest.TestCase):
         """Shared EOL anchor hid bullet-tailed error rows on both sides
         (probe ``Future fault 99 •`` missed by scraper and parser while
         EXPECTED_ERRORS stayed green; CS already tail-diverged). Scraper is
-        bullet-tail-agnostic (EOL-or-bullet, not shared EOL) and the parser
-        records bullet-tailed rows too, so the probe now passes honestly on
-        both sides. Control: snapshots carry no bullet tail (zero-diff,
-        full coverage stays exact)."""
+        full-remainder (EOL, bullet tails AND trailing prose all match) and
+        the parser captures through end-of-line too, so the probe now
+        passes honestly on both sides. Control: snapshots carry no bullet
+        tail (zero-diff, full coverage stays exact). Trailing prose beyond
+        bullets is covered by test_error_trailing_prose_divergence; note
+        prose stays out via the content denylist on both sides."""
         section = (
             "The error code of the device (relevant when the device is in the fault state)\n"
             "                        No error                                                            0\n"
@@ -2536,6 +2687,41 @@ class TestSpecParsers(unittest.TestCase):
         pos = text.find("The error code of the device (relevant when the device is in the fault state)")
         tail = text[pos:]
         self.assertNotIn("•", tail[: tail.find("HSDS") if "HSDS" in tail else len(tail)])
+
+    def test_error_trailing_prose_divergence(self):
+        """Shared EOL-or-bullet tail hid trailing-prose ERR rows on both
+        sides (probe ``Future fault  99 (see note)`` missed by scraper and
+        parser while EXPECTED_ERRORS stayed green — reproduced synthetically
+        before the fix). Both sides now capture the full remainder through
+        end-of-line (no tail restriction) with the code extracted
+        positionally, so the probe passes honestly with name "Future fault"
+        (trailing prose is not part of the name) on both sides. Note prose
+        stays out via the anchored content denylist on both sides (verified
+        below). Zero-diff: no snapshot ERR row carries trailing prose (20
+        exact, pinned by test_error_codes_full_coverage)."""
+        section = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        Future fault                                                        99 (see note)\n"
+        )
+        self.assertEqual(scrape_doc_error_codes(section)[99], "Future fault")
+        self.assertEqual(VEDirectTextParser(section).parse_errors()[99], "Future fault")
+        # Controls: note lines stay excluded on both sides (content
+        # denylist, not tail shape), and snapshots carry no trailing prose.
+        notes = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                       Note1: Error 19 can be ignored, this condition regularly occurs\n"
+            "                       MPPT charger. Since version 1.15 this error will no longer be reported.\n"
+        )
+        self.assertNotIn(19, scrape_doc_error_codes(notes))
+        self.assertNotIn(19, VEDirectTextParser(notes).parse_errors())
+        self.assertNotIn(1, scrape_doc_error_codes(notes))
+        text = self.raw_texts["text"]
+        pos = text.find("The error code of the device (relevant when the device is in the fault state)")
+        tail = text[pos:]
+        err_section = tail[: tail.find("HSDS") if "HSDS" in tail else len(tail)]
+        self.assertFalse(any(re.search(r"\d{1,3}\s+\(", line) for line in err_section.splitlines()))
 
     def test_capabilities_against_doc(self):
         """Capability bits asserted against the doc maps (incl. Orion 28-31)."""
