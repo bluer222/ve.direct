@@ -117,6 +117,21 @@ _SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:\.\d+)?|-)$")
 _ID_TOKEN_RE = re.compile(r"^0[xX][0-9A-Fa-f]{4}$")
 _ID_TOKEN_BARE_X_RE = re.compile(r"^[xX][0-9A-Fa-f]{4}$")
 
+#: Split-typo ID "0x HHHH" (space inside the token, cf. the "0 xHHHH"
+#: spaced typo and the "xHHHH" missing-0 typo): after whitespace-splitting
+#: this is TWO tokens ("0x", "HHHH"), so the single-token _ID_TOKEN_RE
+#: above misses it everywhere (section tables, ID-only rows, BMV/Phoenix
+#: loops, both test-side scrapers) while counts stay green. Rescued at the
+#: token level wherever a table row is split (see _split_typed_row and the
+#: BMV/Phoenix token-merge below) plus the line-level pre-filters and both
+#: scrapers. Verified zero-diff: no "0x HHHH" occurrence in any current
+#: snapshot, so no prose false positives; a future split row is now
+#: rescued instead of missed by all sides. Prose "(register 0x...)"
+#: mentions and ".." range headers keep the glued shape (pinned by the
+#: typo-evidence test); only single-row table paths rescue the split form.
+_ID_TOKEN_SPLIT_PREFIXES = ("0x", "0X")
+_HEX4_RE = re.compile(r"^[0-9A-Fa-f]{4}$")
+
 
 def _normalize_dtype(raw: str) -> Tuple[str, str]:
     """Normalize a dtype-column token to the module convention.
@@ -153,17 +168,32 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False) -> Optional[T
     typo = False
     if _ID_TOKEN_RE.match(idtok):
         rid = int(idtok, 16)
+        rest = tokens[1:]
     elif allow_bare_x_prefix and _ID_TOKEN_BARE_X_RE.match(idtok):
         # Doc typo: "xEDE0 Battery low temperature level" (missing leading
         # 0; cf. BlueSolar-HEX 0xEDE0 with identical metadata).
         rid = int(idtok[1:], 16)
         typo = True
+        rest = tokens[1:]
+    elif (
+        idtok in _ID_TOKEN_SPLIT_PREFIXES
+        and len(tokens) >= 4
+        and _HEX4_RE.match(tokens[1])
+    ):
+        # Doc typo: "0x EDF0 ..." (space inside the ID token; cf. the
+        # "0 xHHHH" spaced typo). Two tokens after splitting, so the
+        # single-token rescues above never fire; the remainder starts at
+        # tokens[2:]. Typo-flagged like the xEDE0 rescue.
+        rid = int(tokens[1], 16)
+        typo = True
+        rest = tokens[2:]
     else:
         return None
     if tokens[1] == "=":
         # Product-ID prose ("0xA3F0 = Orion XS ..."), not a table row.
         return None
-    rest = tokens[1:]
+    if not rest:
+        return None
 
     def is_dtype_like(tok: str) -> bool:
         return bool(_DTYPE_RE.match(tok) or _FOOTNOTE_DTYPE_RE.match(tok))
@@ -244,17 +274,22 @@ class BlueSolarHEXParser:
         section = self._section_text()
 
         for line in section.splitlines():
-            if not re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\b", line):
+            # Split-typo IDs ("0x HHHH") pass the same gate: the optional
+            # inner whitespace mirrors the _split_typed_row rescue (zero-diff:
+            # no snapshot line matches the split form, verified).
+            if not re.match(r"^\s*0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4})\b", line):
                 continue
             # Skip known prose-note lines that happen to start with a
             # register-looking ID. Each pattern is anchored to its exact note
             # text: a bare "firmware version" substring would also drop any
             # future table row whose description mentions firmware versions.
-            if re.match(r"^\s*0[xX]EDEF will always\b", line):
+            # The optional inner whitespace keeps split-typo prose excluded
+            # the same way (no snapshot split prose, zero-diff).
+            if re.match(r"^\s*0[xX]\s*EDEF will always\b", line):
                 continue  # Note 4 continuation on 0xEDEA ("will always reports ...")
-            if re.match(r"^\s*0[xX]A046 and higher\)", line):
+            if re.match(r"^\s*0[xX]\s*A046 and higher\)", line):
                 continue  # Note 3 continuation ("0xA046 and higher). A VE.Direct TX ...")
-            if re.match(r"^\s*0[xX]0300\)", line):
+            if re.match(r"^\s*0[xX]\s*0300\)", line):
                 continue  # History intro ("0x0300). The history registers are ...")
 
             # Token-anchored split (not \s{2,} gaps): tolerates single-space
@@ -397,11 +432,34 @@ class BlueSolarHEXParser:
         for line in region.splitlines():
             if "..." in line or ".." in line or "|" in line or "=" in line:
                 continue
-            m = re.match(r"^\s*(0[xX][0-9A-Fa-f]{4})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
-            if not m:
-                continue
-            rid = int(m.group(1), 16)
-            desc = m.group(2).strip()
+            # Split-typo IDs ("0x HHHH", see _ID_TOKEN_SPLIT_PREFIXES) share
+            # this row shape; the inner whitespace is stripped for int().
+            # Zero-diff: no snapshot ID-only row uses the split form.
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+            dm = None
+            if m:
+                rid = int(m.group(1).replace(" ", ""), 16)
+                desc = m.group(2).strip()
+            else:
+                # Decimal ID-only rows without dtype tail ("60961 Future
+                # history record"): no 0x prefix and no scale/type columns,
+                # so the hex paths above miss them while the dtype-tailed
+                # decimal scan misses them too (no dtype token). Same
+                # capitalized-description table shape as the hex ID-only
+                # rows (mirrors that regex, including the [A-Z] start).
+                # Year guard: bare 4-digit calendar years (Phoenix "2016"
+                # line-wrap, revision-log years) are prose, not registers;
+                # the description requirement already excludes bare years
+                # and hyphenated dates (which carry "-" not " " after the
+                # digits). Zero-diff: no snapshot history-region line
+                # matches (verified; counts pinned by EXPECTED_COUNTS).
+                dm = re.match(r"^\s*(\d{4,5})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+                if not dm:
+                    continue
+                rid = int(dm.group(1))
+                if 1900 <= rid <= 2100:
+                    continue
+                desc = dm.group(2).strip()
             if any(w in desc for w in ("MPPT", "BlueSolar", "SmartSolar", "VE.Can", "Inverter", "Charger")):
                 continue
             if rid in regs or rid in DOC_TYPO_REGISTER_IDS:
@@ -416,7 +474,7 @@ class BlueSolarHEXParser:
                 unit=None,
                 access="W" if write_only else "R",
                 source="BlueSolar-HEX",
-                notes="ID-only row; no scale/type columns in doc",
+                notes=("ID-only decimal row; no scale/type columns in doc" if dm is not None else "ID-only row; no scale/type columns in doc"),
             )
 
     def _parse_detail_mentions(self, regs: Dict[int, ParsedRegister]) -> None:
@@ -562,13 +620,28 @@ class OrionXSHEXParser:
         for line in region.splitlines():
             if "..." in line or ".." in line or "|" in line or "=" in line:
                 continue
-            m = re.match(r"^\s*(0[xX][0-9A-Fa-f]{4})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
-            if not m:
-                # Single-line ".." range already handled; dotted triple
-                # ("0x1070..0x1098  Cycle history ...") is range-expanded.
-                continue
-            rid = int(m.group(1), 16)
-            desc = m.group(2).strip()
+            # Split-typo IDs ("0x HHHH", see _ID_TOKEN_SPLIT_PREFIXES) share
+            # this row shape; the inner whitespace is stripped for int().
+            # Zero-diff: no snapshot ID-only row uses the split form.
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+            dm = None
+            if m:
+                rid = int(m.group(1).replace(" ", ""), 16)
+                desc = m.group(2).strip()
+            else:
+                # Decimal ID-only rows without dtype tail (same shape/guard
+                # rationale as the BlueSolar handler above: capitalized
+                # description, year guard for calendar-year prose).
+                # Zero-diff: no snapshot history-region line matches.
+                dm = re.match(r"^\s*(\d{4,5})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+                if not dm:
+                    # Single-line ".." range already handled; dotted triple
+                    # ("0x1070..0x1098  Cycle history ...") is range-expanded.
+                    continue
+                rid = int(dm.group(1))
+                if 1900 <= rid <= 2100:
+                    continue
+                desc = dm.group(2).strip()
             if any(w in desc for w in ("MPPT", "BlueSolar", "SmartSolar", "Orion", "VE.Can")):
                 continue
             if rid in regs or rid in DOC_TYPO_REGISTER_IDS:
@@ -584,7 +657,7 @@ class OrionXSHEXParser:
                 unit=None,
                 access="W" if write_only else "R",
                 source="Orion-XS-HEX",
-                notes="ID-only row; no scale/type columns in doc, access default documented here",
+                notes=("ID-only decimal row; no scale/type columns in doc, access default documented here" if dm is not None else "ID-only row; no scale/type columns in doc, access default documented here"),
             )
 
     def _parse_detail_mentions(self, regs: Dict[int, ParsedRegister]) -> None:
@@ -708,6 +781,15 @@ class BMV7xxHEXParser:
             # column anchors the split: Display is the token before it, the
             # description is everything between the ID and Display.
             tokens = line.split()
+            # Split-typo ID ("0x HHHH", see _ID_TOKEN_SPLIT_PREFIXES): rejoin
+            # the two ID tokens so the column math below is unchanged.
+            # Zero-diff: no snapshot line starts with a bare "0x" token.
+            if (
+                len(tokens) >= 4
+                and tokens[0] in _ID_TOKEN_SPLIT_PREFIXES
+                and _HEX4_RE.match(tokens[1])
+            ):
+                tokens = [tokens[0] + tokens[1]] + tokens[2:]
             if len(tokens) < 3 or not _ID_TOKEN_RE.match(tokens[0]):
                 continue
             if tokens[1] == "=":
@@ -872,6 +954,15 @@ class PhoenixInverterHEXParser:
             if "VE_REG_" not in line:
                 continue
             tokens = line.split()
+            # Split-typo ID ("0x HHHH", see _ID_TOKEN_SPLIT_PREFIXES): rejoin
+            # the two ID tokens so the column math below is unchanged.
+            # Zero-diff: no snapshot line starts with a bare "0x" token.
+            if (
+                len(tokens) >= 4
+                and tokens[0] in _ID_TOKEN_SPLIT_PREFIXES
+                and _HEX4_RE.match(tokens[1])
+            ):
+                tokens = [tokens[0] + tokens[1]] + tokens[2:]
             if len(tokens) < 3 or not re.fullmatch(r"0[xX][0-9A-Fa-f]{4}", tokens[0]):
                 continue
 
@@ -1017,12 +1108,19 @@ _UNKNOWN_UNIT_MAX_LEN = 32
 #: OR/ERR/CS/LOAD/HSDS/H11-H14/BMV/FW/PID/SER#/MODE/WARN/MPPT/MON): the
 #: single-space fallback below takes the first whitespace-separated token as
 #: the unit candidate, so these description starters must be denylisted to
-#: stay exact (zero diff) on current docs. Over-inclusion principle: a future
-#: unit colliding with one of these words would be missed here, but the list
-#: is explicit and reviewable, and the single-space divergence test proves the
-#: fallback catches non-denylisted units (e.g. "Hz"). Verified: every
-#: snapshot empty-Units remainder's first token is in this set, so the
-#: fallback stays empty on current docs.
+#: stay exact (zero diff) on current docs. The denylist excuses only
+#: bullet-tailed remainders (genuine device rows: every fields-table row
+#: carries >= 1 device bullet, asserted by the devices test, and the
+#: bullet-less H1/H4/H5/H10 footnote rows early-return before the fallback):
+#: a bullet-less remainder starting with one of these words ("Alarm Some new
+#: quantity" with single spaces) is layout collapse or a future shape, so it
+#: records loudly instead of leaking into the description silently. Likewise
+#: a future unit colliding with one of these words on a genuine
+#: bullet-tailed row would still be missed here, but the list is explicit
+#: and reviewable, and the single-space divergence test proves the fallback
+#: catches non-denylisted units (e.g. "Hz"). Verified: every snapshot
+#: empty-Units fallback input carries a bullet tail and its first token is
+#: in this set, so the fallback stays empty on current docs.
 _SINGLE_SPACE_DESC_DENY = frozenset({
     "Alarm", "Model", "State", "Error", "Firmware", "Number", "Day", "Load",
     "Device", "DC", "Tracker", "Off", "Product", "Relay", "Serial", "Warning",
@@ -1079,14 +1177,34 @@ def _split_text_units_desc(
         else:
             # Single-space fallback: no column gap (layout collapse or future
             # single-spaced unit). Record the first token unless it is a known
-            # description starter (denylisted above to stay exact).
+            # description starter on a bullet-tailed (genuine device) row
+            # (denylisted above to stay exact); a bullet-less denylisted
+            # starter ("Alarm Some new quantity") records loudly instead of
+            # leaking into the description silently. A leading numeric token
+            # ("1 W Some power row") never letter-matches alone, so it is
+            # combined with the next token ("1 W", the spaced variant of the
+            # "1W" unit) mirroring the two-space gate's full pre-gap
+            # candidate, which already records "1 W". Descriptions never
+            # start with a digit (bare footnotes early-return above), so the
+            # digit path stays empty on current docs.
             toks = head.strip().split()
             if toks:
                 cand1 = toks[0].strip()
                 shape1 = re.sub(r"\d[\d\s,]*$", "", cand1).strip() or cand1
-                if cand1 not in _SINGLE_SPACE_DESC_DENY and _UNKNOWN_UNIT_CAND_RE.search(shape1):
-                    if unknown_sink is not None:
+                if _UNKNOWN_UNIT_CAND_RE.search(shape1):
+                    if cand1 in _SINGLE_SPACE_DESC_DENY and "•" in rest:
+                        pass  # genuine empty-Units device row, exact on docs
+                    elif unknown_sink is not None:
                         unknown_sink.append((label, cand1))
+                elif (
+                    len(toks) >= 2
+                    and re.fullmatch(r"\d[\d.,]*", cand1)
+                ):
+                    combined = f"{cand1} {toks[1].strip()}"
+                    shape_c = re.sub(r"\d[\d\s,]*$", "", combined).strip() or combined
+                    if _UNKNOWN_UNIT_CAND_RE.search(shape_c):
+                        if unknown_sink is not None:
+                            unknown_sink.append((label, combined))
     return units, rest.split("•", 1)[0].strip()
 
 
@@ -1294,7 +1412,16 @@ class VEDirectTextParser:
         m_end = re.search(r"^\s*ERR\s*$", tail, re.MULTILINE)
         section = tail[: m_end.start()] if m_end else tail
         for line in section.splitlines():
-            m = re.match(r"^\s*([A-Za-z][A-Za-z\s/()\-]*?)\s+(\d{1,3})\s+(?:•|\d)", line)
+            # Leading-digit names ("2Fast Mode 99 •", cf. the error side
+            # which already leads [A-Za-z0-9]): the old leading-[A-Za-z]
+            # missed them in parser AND scraper while EXPECTED_CS stayed
+            # green. Interior digits ("Mode2Fast") stay scraper-divergent
+            # (pinned by test_cs_scraper_name_divergence), so only the
+            # leading class widens here. The "(" footnote ("(1) Load
+            # search") still misses (leading paren). Zero-diff: all
+            # snapshot CS names start with a letter (pinned by full
+            # coverage).
+            m = re.match(r"^\s*([A-Za-z0-9][A-Za-z\s/()\-]*?)\s+(\d{1,3})\s+(?:•|\d)", line)
             if m:
                 name = m.group(1).strip()
                 code = int(m.group(2))

@@ -158,13 +158,20 @@ def scrape_doc_ids(text: str) -> set[int]:
     still scraped here and then fails loudly as scraped-but-unparsed (or
     as an invented-ID mismatch), instead of being missed by both sides.
     Over-scan false positives are guarded by the strict bare-ID line
-    match plus the 1024-span cap. The 0X prefix is uppercase-X rescued
+    match plus the 1024-span cap.     The 0X prefix is uppercase-X rescued
     (``0[xX]``, like the parser's xEDE0/0XEDF0 rescue): the docs print hex
     both ways, and a case-sensitive ``0x`` here would miss the same future
     uppercase row the parser now rescues, hiding the blind spot on both
     sides. Verified zero-diff: no ``0XHHHH`` occurrence in any current
-    snapshot, so no prose false positives."""
+    snapshot, so no prose false positives.
+    The ``0x HHHH`` split typo (space inside the ID token, cf. the parser's
+    token-level rescue) is rescued here too (``0[xX]\\s+HHHH``): after
+    whitespace-splitting the parser sees two tokens, so a glued-only
+    scraper would miss the same future split row the parser now rescues.
+    Verified zero-diff: no ``0x HHHH`` occurrence in any current snapshot."""
     ids = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})\b", text)}
+    for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", text):
+        ids.add(int(m.group(1), 16))
     for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", text):
         a, b = int(m.group(1), 16), int(m.group(2), 16)
         if 0 < b - a <= 1024:
@@ -191,22 +198,23 @@ def scrape_doc_cs_codes(section: str) -> dict[int, str]:
     without trailing bullets or with ``+``/``:``/digit names is missed by the
     parser while the suite stays green. This scraper anchors only the ``name
     code`` prefix, ignores the tail entirely, and captures the name with an
-    open ``([A-Za-z].+?)`` (any chars after a leading letter) — a bullet-less
-    or ``+``/``:``/digit row is still counted, so it fails loudly as
+    open ``([A-Za-z0-9].+?)`` (any chars after a leading letter-or-digit) —
+    a bullet-less, ``+``/``:``, or leading-digit ("2Fast Mode 99 •", which
+    the parser now accepts too) row is still counted, so it fails loudly as
     scraper-vs-parser mismatch. Over-inclusion is the safe direction: extra
     hits fail via the invented-IDs-style set-equality, while under-inclusion
     would hide the same blind spot on both sides. Denylists (explicit,
-    justified): the leading-``[A-Za-z]`` excludes the "(1) Load search"
-    footnote (starts with "("), and the "Bit"/"register" guard excludes the
-    table header; verified exact against the snapshot CS section with a
-    WIDER bound than the parser (scraper scans to "The error code ..." prose,
-    parser stops at the "^ERR$" header — see test_cs_states_full_coverage):
-    the extra ERR header + blank carry no ``name code`` pattern, so the
-    wider scan stays exact while a row past the parser bound is still
-    scraped here (bound-divergence test)."""
+    justified): the leading-``[A-Za-z0-9]`` still excludes the
+    "(1) Load search" footnote (starts with "("), and the "Bit"/"register"
+    guard excludes the table header; verified exact against the snapshot CS
+    section with a WIDER bound than the parser (scraper scans to "The error
+    code ..." prose, parser stops at the "^ERR$" header — see
+    test_cs_states_full_coverage): the extra ERR header + blank carry no
+    ``name code`` pattern, so the wider scan stays exact while a row past
+    the parser bound is still scraped here (bound-divergence test)."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*([A-Za-z].+?)\s+(\d{1,3})\b", line)
+        m = re.match(r"^\s*([A-Za-z0-9].+?)\s+(\d{1,3})\b", line)
         if m:
             name = m.group(1).strip()
             # Header guard (same as parser): "Bit ...", "register ..." lines are not states.
@@ -321,7 +329,27 @@ def scrape_decimal_ids(text: str) -> set[int]:
     on all four current HEX snapshots (before/after). The spaced-typo half
     is uppercase-X rescued (``0\\s+[xX]``, like the 0XEDF0 rescue): a future
     "0 XEDF0" row would otherwise be missed by parser, hex scraper, and
-    this scan together. Verified zero-diff: no ``0\\s+XHHHH`` in snapshots."""
+    this scan together. Verified zero-diff: no ``0\\s+XHHHH`` in snapshots.
+    Further widened to dtype-LESS ID-only rows (``^\\s*\\d{4,5}\\s+[A-Z]``
+    with no dtype tail, e.g. "60961      Future history record"): the
+    dtype-tail halves above miss them while the hex parser/scraper miss
+    them too (no ``0x``), staying green while a row is missed. Shape
+    justification: line-leading only (ID-only rows are table rows; a
+    mid-line bare number is a count/date, so the tailless scan does NOT
+    repeat the mid-line widening) with a capitalized description (mirrors
+    the parsers' hex ID-only ``[A-Z]`` row shape). Date-like denylist
+    (explicit, justified): bare 4-digit calendar years 1900-2100 are
+    skipped — the Phoenix snapshot wraps "production stopped in November /
+    2016" (a bare line-leading year), and revision logs carry years
+    ("15-11-2021", "2021-09-06", "14 April 2025"); hyphenated dates already
+    miss the shape (``-`` after the digits, not ``\\s+[A-Z]``) and bare
+    years miss it (no description), but a wrapped "2016 Production ..."
+    line would false-positive without the year guard. Verified: zero hits
+    on all four current HEX snapshots (before/after). The typo half also
+    rescues the ``0x HHHH`` split typo (``0[xX]\\s+HHHH``, cf. the
+    parser's token-level rescue): "0x EDF0" is missed by the glued hex
+    scrape, the dtype-tailed halves, and the single-token ID regex alike.
+    Verified zero-diff: no ``0x HHHH`` in snapshots."""
     ids: set[int] = set()
     for line in text.splitlines():
         # Line-leading table-shaped decimal (original coverage).
@@ -340,8 +368,18 @@ def scrape_decimal_ids(text: str) -> set[int]:
             re.IGNORECASE,
         ):
             ids.add(int(m_mid.group(1)))
+        # Dtype-less ID-only widening (justified above): line-leading
+        # decimal + capitalized description, no dtype required. Year
+        # denylist keeps calendar-year prose out.
+        m_tail = re.match(r"^\s*(\d{4,5})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+        if m_tail:
+            rid = int(m_tail.group(1))
+            if not 1900 <= rid <= 2100:
+                ids.add(rid)
         for m2 in re.finditer(r"(?<!\w)0\s+[xX]([0-9A-Fa-f]{4})\b", line):
             ids.add(int(m2.group(1), 16))
+        for m3 in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", line):
+            ids.add(int(m3.group(1), 16))
     return ids
 
 
@@ -850,6 +888,46 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(60961, BlueSolarHEXParser(synthetic).parse_registers())
         self.assertNotIn(60961, scrape_doc_ids(synthetic))
 
+    def test_decimal_id_only_no_dtype_tail_divergence(self):
+        """Proves the dtype-less decimal widening catches ID-only rows missed
+        by every dtype-tailed strategy: a synthetic "60961      Future
+        history record" row (no dtype tail) is found by the widened
+        scrape_decimal_ids yet missed by scrape_doc_ids (no ``0x``) — the
+        old dtype-tailed scan missed it too while counts stayed green — and
+        the history-region parsers now handle it honestly (struct/R, like
+        the hex ID-only rows) instead of staying green-but-missed. Controls:
+        zero widened-scan hits on all four current HEX snapshots (pinned
+        empty-or-same), hyphenated/bare dates stay out ("15-11-2021 some
+        change", bare "2016", "2021-09-06" carry "-" or no description, and
+        a wrapped "2016 Production ..." line is year-denylisted)."""
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), set())
+        synthetic = "60961      Future history record\n"
+        self.assertEqual(scrape_decimal_ids(synthetic), {60961})
+        self.assertNotIn(60961, scrape_doc_ids(synthetic))
+        # Parser handling (honest pass on both sides): history-region
+        # decimal ID-only rows parse as struct/R, mirroring hex ID-only.
+        from spec_parser import OrionXSHEXParser
+
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                text = (
+                    "Restore factory defaults\n"
+                    "60961      Future history record\n"
+                    "1.2 Asynchronous items\n"
+                )
+                probe = cls(text).parse_registers()[60961]
+                self.assertEqual(probe.description, "Future history record")
+                self.assertEqual(probe.data_type, "struct")
+                self.assertEqual(probe.access, "R")
+                self.assertIsNone(probe.scale)
+        # Date-like denylist controls (must stay out of the widened scan).
+        self.assertEqual(scrape_decimal_ids("15-11-2021 some change\n"), set())
+        self.assertEqual(scrape_decimal_ids("2016\n"), set())
+        self.assertEqual(scrape_decimal_ids("5) 2021-09-06\n"), set())
+        self.assertEqual(scrape_decimal_ids("2016 Production stopped note\n"), set())
+
     def test_uppercase_0X_id_rescue_divergence(self):
         """Proves uppercase-0X IDs are rescued (not missed by all three):
         a synthetic "0XEDF0" typed row is now parsed AND hex-scraped, and a
@@ -879,6 +957,71 @@ class TestSpecParsers(unittest.TestCase):
         self.assertIn(0xEDF0, scrape_doc_ids(typed))
         spaced = "0 XEDF0    Spaced uppercase typo   0.01        un16        A\n"
         self.assertIn(0xEDF0, scrape_decimal_ids(spaced))
+
+    def test_split_0x_space_id_rescue_divergence(self):
+        """Proves ``0x HHHH`` split-typo IDs are rescued (not missed by all
+        three): a synthetic "0x EDF0" typed row is now parsed (section
+        tables, ID-only rows, BMV/Phoenix loops via token rejoin) AND
+        hex-scraped AND decimal-scraped — the glued-only ``0xHHHH`` /
+        ``0\\s+x`` / single-token ID regex missed all three while counts
+        stayed green. Rescue-style like the existing xEDE0/0X handling.
+        Control: zero ``0x HHHH`` occurrences in any current HEX snapshot,
+        so the widened match is zero-diff (no prose false positives)."""
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(
+                    re.findall(r"0[xX] +[0-9A-Fa-f]{4}\b", self.raw_texts[key]), [],
+                    f"{key} snapshot gained split-typo prose",
+                )
+        from spec_parser import (
+            BMV7xxHEXParser,
+            OrionXSHEXParser,
+            PhoenixInverterHEXParser,
+            _split_typed_row,
+        )
+
+        # Token-level rescue (single-token ID regex misses the two-token ID).
+        row = _split_typed_row("0x EDF0    Split typo  0.01  un16  A")
+        self.assertIsNotNone(row)
+        assert row is not None
+        rid, desc, scale_str, dtype_raw, unit_str, typo = row
+        self.assertEqual(rid, 0xEDF0)
+        self.assertTrue(typo)
+        self.assertEqual(dtype_raw, "un16")
+        # Section tables (BlueSolar + Orion, incl. the 0x-section pre-filter).
+        typed = (
+            "1.1 Get and Set items\n"
+            "0x EDF0    Split typo  0.01  un16  A\n"
+            "1.2 Asynchronous items\n"
+        )
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                parsed = cls(typed).parse_registers()
+                self.assertIn(0xEDF0, parsed)
+                self.assertEqual(parsed[0xEDF0].data_type, "un16")
+        # History ID-only rows (BlueSolar + Orion).
+        id_only = (
+            "Restore factory defaults\n"
+            "0x EDF0    Split typo record\n"
+            "1.2 Asynchronous items\n"
+        )
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(id_only=cls.__name__):
+                self.assertIn(0xEDF0, cls(id_only).parse_registers())
+        # BMV + Phoenix loops (token rejoin; Phoenix needs its VE_REG_ name).
+        bmv = BMV7xxHEXParser(
+            "hdr\n0x EDF0     Split typo               -         un16        A\nftr"
+        ).parse_registers()
+        self.assertIn(0xEDF0, bmv)
+        self.assertEqual(bmv[0xEDF0].data_type, "un16")
+        phx = PhoenixInverterHEXParser(
+            "0x EDF0 VE_REG_SPLIT_TYPO R/W un16 1 V\n"
+        ).parse_registers()
+        self.assertIn(0xEDF0, phx)
+        self.assertEqual(phx[0xEDF0].name, "VE_REG_SPLIT_TYPO")
+        # Both scrapers rescue the split form (was missed by both).
+        self.assertIn(0xEDF0, scrape_doc_ids("0x EDF0    Split typo  0.01  un16  A\n"))
+        self.assertIn(0xEDF0, scrape_decimal_ids("0x EDF0    Split typo  0.01  un16  A\n"))
 
     def test_write_hint_phrase_divergence(self):
         """Proves write-hint detection is phrase-guarded, not bare-substring:
@@ -1374,9 +1517,10 @@ class TestSpecParsers(unittest.TestCase):
         its description by ONE space ("Hz Some new quantity", layout collapse)
         never split on 2+ spaces, so the old gate leaked it into the
         description with unknown_units==[] and suite green. The fallback
-        records the first token (denylisting known description starters to
-        stay exact on snapshots). Control: a real empty-Units description
-        ("Alarm reason") stays unrecorded."""
+        records the first token (denylisting known description starters on
+        genuine bullet-tailed device rows to stay exact on snapshots).
+        Control: a real empty-Units description ("Alarm reason" with its
+        device bullet, as every snapshot row carries) stays unrecorded."""
         section = (
             "The units used by the serial interface are as follows:\n"
             "             QZz                 Hz Some new quantity\n"
@@ -1386,15 +1530,114 @@ class TestSpecParsers(unittest.TestCase):
         fields = parser.parse_fields()
         self.assertEqual(parser.unknown_units, [("QZz", "Hz")])
         self.assertEqual(fields["QZz"].units, "")
-        # Control: known description starter never records (denylisted).
+        # Control: known description starter on a genuine bullet-tailed
+        # device row never records (denylisted). Bullet-tailed because every
+        # snapshot empty-Units row carries device bullets (the devices test
+        # asserts no field parses without devices); the bullet-less
+        # denylisted-starter shape records loudly instead (see
+        # test_text_unknown_single_space_denylisted_starter_recorded).
         ctrl = (
             "The units used by the serial interface are as follows:\n"
-            "             AR                  Alarm reason\n"
+            "             AR                  Alarm reason                   •\n"
             "Table I Supported Text-mode fields\n"
         )
         parser2 = VEDirectTextParser(ctrl)
         parser2.parse_fields()
         self.assertEqual(parser2.unknown_units, [])
+
+    def test_text_unknown_single_space_denylisted_starter_recorded(self):
+        """Regression for the denylisted-starter hole: a bullet-less
+        single-space remainder starting with a denylisted description word
+        ("Alarm Some new quantity") leaked into the description with
+        unknown_units==[] and suite green, while the two-space gate
+        ("Alarm  Some new quantity") records ("Alarm"). The denylist now
+        excuses only bullet-tailed (genuine device) rows — every snapshot
+        empty-Units row carries device bullets (devices never empty),
+        while the bullet-less H1/H4/H5/H10 footnote rows early-return
+        before the fallback — so the bullet-less starter records loudly.
+        Control: the bullet-tailed genuine row stays unrecorded (zero-diff
+        on snapshots, pinned by test_text_unknown_units_empty)."""
+        from spec_parser import _split_text_units_desc
+
+        sink: list = []
+        units, desc = _split_text_units_desc(
+            "Alarm Some new quantity", label="QZz", unknown_sink=sink
+        )
+        self.assertEqual(units, "")
+        self.assertEqual(sink, [("QZz", "Alarm")])
+        # Two-space gate symmetry (already recorded before the fix).
+        sink2: list = []
+        _split_text_units_desc(
+            "Alarm  Some new quantity", label="QZz", unknown_sink=sink2
+        )
+        self.assertEqual(sink2, [("QZz", "Alarm")])
+        # Control: bullet-tailed genuine device row stays denylisted.
+        sink3: list = []
+        units3, _ = _split_text_units_desc(
+            "Alarm reason                   •", label="AR", unknown_sink=sink3
+        )
+        self.assertEqual(units3, "")
+        self.assertEqual(sink3, [])
+
+    def test_text_unknown_single_space_digit_leading_unit_recorded(self):
+        """Regression for the digit-leading hole: a single-space remainder
+        starting with a digit ("1 W Some power row") failed the letter
+        check on its first token ("1") with unknown_units==[] and suite
+        green, while the two-space gate ("1 W  Some power row") records
+        ("1 W"). The fallback now combines a leading numeric token with
+        the next one ("1 W", the spaced variant of the "1W" unit),
+        mirroring the two-space full pre-gap candidate. Control: snapshot
+        fallback inputs never start with a digit (descriptions never do;
+        bare footnotes early-return), so zero-diff holds (pinned by
+        test_text_unknown_units_empty plus the 63-field full map)."""
+        from spec_parser import _split_text_units_desc
+
+        sink: list = []
+        units, desc = _split_text_units_desc(
+            "1 W Some power row", label="QZz", unknown_sink=sink
+        )
+        self.assertEqual(units, "")
+        self.assertEqual(desc, "1 W Some power row")
+        self.assertEqual(sink, [("QZz", "1 W")])
+        # Two-space gate symmetry (already recorded before the fix).
+        sink2: list = []
+        _split_text_units_desc(
+            "1 W  Some power row", label="QZz", unknown_sink=sink2
+        )
+        self.assertEqual(sink2, [("QZz", "1 W")])
+        # Zero-diff: no snapshot remainder that actually reaches the
+        # single-space fallback starts with a digit (bare footnotes like
+        # H4 "11" early-return; vocab rows like "0.01 kWh ..." match the
+        # units vocabulary; two-space remainders split on the column gap).
+        from spec_parser import _TEXT_FOOTNOTE_RE, _TEXT_UNITS_RE
+
+        text = self.raw_texts["text"]
+        start = text.find("The units used by the serial interface are as follows:")
+        end = text.find("Table I Supported Text-mode fields")
+        import re as _re
+
+        label_re = _re.compile(r"^\s{8,32}([A-Za-z0-9_#.\-]+)\s{2,}(.*?)\s*$")
+        stoplist = {
+            "Label", "Table", "The", "Note", "Victron", "General", "E-mail",
+            "When", "Both", "Available", "60x",
+        }
+        digit_first = []
+        for line in text[start:end].splitlines():
+            m = label_re.match(line)
+            if not m or m.group(1) in stoplist:
+                continue
+            rest = m.group(2)
+            if _TEXT_UNITS_RE.match(rest):
+                continue
+            if _re.fullmatch(r"\d[\d\s,]*", rest.strip()):
+                continue
+            head = rest.split("•", 1)[0]
+            if len(_re.split(r"\s{2,}", head.strip(), maxsplit=1)) == 2:
+                continue
+            toks = head.strip().split()
+            if toks and toks[0][:1].isdigit():
+                digit_first.append((m.group(1), rest))
+        self.assertEqual(digit_first, [])
 
     def test_text_unknown_overlong_unit_recorded(self):
         """Regression for the 32-char silent drop: a future unit longer than
@@ -1891,6 +2134,59 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(99, parsed)
         self.assertNotIn(100, parsed)
         self.assertNotIn(101, parsed)
+
+    def test_cs_leading_digit_name_rescue_divergence(self):
+        """Leading-digit CS names ("2Fast Mode 99 •") were missed by BOTH
+        the parser and the scraper (leading ``[A-Za-z]`` required) while
+        EXPECTED_CS and the set-equality stayed green. Both now accept a
+        leading digit (like the error side, which already leads
+        ``[A-Za-z0-9]``), so the probe passes honestly with its true name
+        on both sides. Interior digits ("Mode2Fast") stay scraper-only
+        (pinned by test_cs_scraper_name_divergence), so only the leading
+        class widens here. Controls: the "(1) Load search" footnote (leading
+        "(") stays excluded on both sides; snapshot names all start with a
+        letter, so zero-diff holds (pinned by test_cs_states_full_coverage).
+        Note: fetch_specs.tolerant_cs_states (frozen, see the pin test
+        below) recovers this probe MISNAMED as "Fast Mode", so a
+        snapshot-vs-live tolerant agreement would also stay green with the
+        true name lost."""
+        section = (
+            "The state of operation. See the table below\n"
+            "                        Off                                   0      •\n"
+            "                        2Fast Mode                            99     •\n"
+        )
+        scraped = scrape_doc_cs_codes(section)
+        self.assertEqual(scraped[99], "2Fast Mode")
+        parsed = VEDirectTextParser(section).parse_cs_states()
+        self.assertEqual(parsed[99], "2Fast Mode")
+        # Controls: footnote still excluded (leading paren, not alnum).
+        foot = section + "                        (1) Load search                     98     •\n"
+        self.assertNotIn(98, scrape_doc_cs_codes(foot))
+        self.assertNotIn(98, VEDirectTextParser(foot).parse_cs_states())
+
+    def test_tolerant_cs_leading_digit_misnaming_pinned(self):
+        """Pins the known fetch_specs.tolerant_cs_states limitation for
+        leading-digit CS names (src-frozen: tools/fetch_specs.py is not
+        editable here, so document + pin instead of fixing): its global
+        bullet-anchored search starts the name at ``[A-Za-z]``
+        (tools/fetch_specs.py:659), so "2Fast Mode 99 •" recovers MISNAMED
+        as "Fast Mode" — the leading "2" is silently stripped. Because the
+        live-vs-snapshot structure guard compares tolerant output on BOTH
+        sides, a future leading-digit rename would agree green
+        ("Fast Mode" == "Fast Mode") with the true name lost on both.
+        Zero-diff: tolerant output on the current snapshot is exactly the
+        15 EXPECTED_CS states (letter-leading names unaffected)."""
+        from fetch_specs import tolerant_cs_states
+
+        probe = (
+            "The state of operation dummy\n"
+            "                        2Fast Mode                            99     •\n"
+            "                       The error code dummy\n"
+        )
+        # Current behavior (limitation): leading digit stripped, misnamed.
+        self.assertEqual(tolerant_cs_states(probe), {99: "Fast Mode"})
+        # Zero-diff: snapshot tolerant states equal doc truth exactly.
+        self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
 
     def test_cs_bound_divergence(self):
         """Proves the CS scraper bound is wider/different than the parser's
