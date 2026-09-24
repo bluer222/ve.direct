@@ -659,6 +659,13 @@ class BMV7xxHEXParser:
 
     def __init__(self, text: str):
         self.text = text
+        #: ``(rid, candidate)`` short-layout rows whose Unit cell did not
+        #: match the closed vocabulary (see parse_registers). Empty for the
+        #: current snapshot; the suite asserts it stays empty so a newly
+        #: introduced bare unit (e.g. Hz) breaks loudly until explicitly
+        #: allowlisted with justification (Text unknown-units gate pattern).
+        #: Allowlists excuse missing doc data, never dropped unknown tokens.
+        self.unknown_units: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> BMV7xxHEXParser:
@@ -666,6 +673,7 @@ class BMV7xxHEXParser:
 
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
+        self.unknown_units = []
         for line in self.text.splitlines():
             # Token-anchored split (not 2+-whitespace gaps): rows such as the
             # monitor short-layout lines may use single spaces between
@@ -745,6 +753,21 @@ class BMV7xxHEXParser:
             elif anchor is not None:
                 # Short layout (product info / monitor / historic): the scale
                 # is embedded in the Unit column ("0.01 V", "0.001A").
+                # Closed vocabulary (V/A/W/Ah/seconds/minutes/min./K/% plus
+                # scale-embedded "0.01 V"/"0.001A"/"0.01 kWh" via the
+                # scale+next-token gate): a future bare unit (e.g. "Hz" with
+                # no numeric factor, probe 0x0303 "Hz" -> None vs control
+                # "W" -> "W") would drop to None while SCALE_NONE_ALLOW and
+                # UNIT_NONE_ALLOW excuse the allowlisted ID, staying green.
+                # Loud gate (Text unknown-units pattern): bare letter-bearing
+                # Unit tokens that survive neither gate are recorded as
+                # (rid, candidate) even on allowlisted IDs — allowlists
+                # excuse missing doc data, never dropped unknown tokens.
+                # "0.01 Hz" (with factor) is preserved as "Hz" via the
+                # scale gate (fails via allowlist-drift when allowlisted),
+                # so only factor-less drops record here. Zero-diff: all
+                # snapshot short-layout rows either capture a unit or carry
+                # "-" / empty (no letters), verified.
                 is_write_only = "(write only)" in desc.lower()
                 for j, p in enumerate(rest):
                     p_clean = p.strip()
@@ -761,6 +784,15 @@ class BMV7xxHEXParser:
                             continue
                     if p_clean in ["V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"]:
                         unit = p_clean
+                if unit is None:
+                    for p in rest:
+                        cand = p.strip()
+                        # Footnote-glued unknowns ("Hz11"): strip trailing
+                        # footnote run for the letter check but record raw.
+                        shape = re.sub(r"\d[\d\s,]*$", "", cand).strip() or cand
+                        if _UNKNOWN_UNIT_CAND_RE.search(shape):
+                            self.unknown_units.append((rid, cand))
+                            break
 
             if "(write only)" in desc.lower():
                 access = "WRITE_ONLY"
@@ -791,6 +823,14 @@ class PhoenixInverterHEXParser:
 
     def __init__(self, text: str):
         self.text = text
+        #: ``(rid, access)`` rows whose Access cell is not in the closed
+        #: {R, W, R/W} vocabulary (R/(W) normalizes to R). Empty for the
+        #: current snapshot; the suite asserts it stays empty so a newly
+        #: introduced form (e.g. W/(R)) breaks loudly until explicitly
+        #: allowlisted (unknown-units gate pattern). Allowlists never hide
+        #: dropped tokens — here the access check ``continue``s on unknown
+        #: forms, staying green while a change is missed.
+        self.unknown_accesses: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> PhoenixInverterHEXParser:
@@ -798,6 +838,7 @@ class PhoenixInverterHEXParser:
 
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
+        self.unknown_accesses = []
         for line in self.text.splitlines():
             # Token-split (not 2+-whitespace split): rows such as 0xEB99 use
             # single spaces between columns. Register names contain no spaces.
@@ -815,6 +856,14 @@ class PhoenixInverterHEXParser:
                 # conditional write); the library models CAPABILITIES_BLE as
                 # read-only, so the read side is the comparable access.
                 access = "R"
+            # Loud gate for unknown access forms (e.g. future "W/(R)"):
+            # the access check ``continue``s on unmapped forms, staying
+            # green while a change is missed. Recorded here even though
+            # the comparison skips them — skipping excuses no DB mapping,
+            # never a dropped doc token. Zero-diff: snapshots carry only
+            # R/W/R/W (R/(W) normalized above), verified.
+            if access not in ("R", "W", "R/W"):
+                self.unknown_accesses.append((rid, access))
             dtype = "unknown"
             if len(tokens) >= 4 and re.match(r"^(un8|un16|un24|un32|sn8|sn16|sn32|string\d*|-)$", tokens[3], re.IGNORECASE):
                 dtype = tokens[3].strip().lower()
@@ -1086,12 +1135,22 @@ class VEDirectTextParser:
         tables = self._device_column_starts(lines)
         self.unknown_units = []
 
-        label_re = re.compile(r"^\s{10,25}([A-Za-z0-9_#.\-]+)\s{2,}(.*?)\s*$")
+        label_re = re.compile(r"^\s{8,32}([A-Za-z0-9_#.\-]+)\s{2,}(.*?)\s*$")
         # Hyphen/dot in the label class (DC-IN, V.PV): the closed
         # [A-Za-z0-9_#] missed future hyphen/dotted labels on BOTH sides
         # (parser and count_doc_field_labels) while counts stayed green.
         # Over-inclusive scraper + parser record both (zero-diff: no
         # hyphen/dot label in current snapshots, verified).
+        # Indent 8-32 (was 10-25): the shared narrow window missed
+        # off-column labels at indent 8 and 30 on BOTH sides (probe QZz
+        # mV Future at 8/30 missed by counter and parser, control 13
+        # caught, counts stayed green). Widened to 8-32 to handle
+        # layout drift: doc prints labels at 13, continuations at 58,
+        # footnotes at 25-27, furniture at 0, device headers at 101+;
+        # 8-32 includes 8/30 with margin while still excluding 0/58/101+.
+        # Counter stays wider (5-35) so 5-7/33-35 drift still diverges
+        # loudly. Stoplist + 2+-space gap keep zero-diff (all 63 snapshot
+        # labels at column 13, verified).
         stoplist = {
             "Label", "Table", "The", "Note", "Victron", "General", "E-mail",
             "When", "Both", "Available", "60x",

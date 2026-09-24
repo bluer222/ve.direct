@@ -45,6 +45,7 @@ from fetch_specs import (
     FRESHNESS_MANIFEST,
     build_sync_manifest_per_spec,
     check_specs,
+    compare_snapshot_structures,
     content_gate_verdict,
     download_pdf_bytes,
     extract_pdf_revision_info,
@@ -52,6 +53,7 @@ from fetch_specs import (
     extract_text,
     fetch_remote_snapshot_text,
     live_register_ids,
+    live_text_for_structures,
     normalize_snapshot_text,
     register_id_set_from_text,
     remote_last_modified,
@@ -100,32 +102,43 @@ EXPECTED_COUNTS = {
 
 def count_doc_field_labels(section: str) -> set[str]:
     """Independent Text-mode label counter, deliberately shaped unlike the
-    parser's ``^\\s{10,25}...\\s{2,}`` on both axes while staying exact: it
-    anchors the label column narrowly (10-20; the doc prints every label
-    at column 13, prose/footnotes sit at 25+) and tolerates ANY
+    parser's ``^\\s{8,32}...\\s{2,}`` on both axes while staying exact: it
+    anchors the label column WIDE (5-35; the doc prints every label
+    at column 13, prose/footnotes sit at 25-27, furniture at 0,
+    continuations at 58, device headers at 101+) and tolerates ANY
     inter-column gap (``\\s+``), whereas the parser anchors the gap
-    (``\\s{2,}``) over a wider indent window. A single-space label row —
+    (``\\s{2,}``) over a narrower 8-32 indent window. A single-space label row —
     missed by the parser's gap rule — is still counted here, so it fails
     loudly as a parser-vs-counter mismatch instead of passing ``len==63``
-    on both sides. The stoplist is deliberately NOT shared with the
-    parser: the parser's broad stoplist also screens prose tokens, but
-    this counter's narrow 10-20 indent window already excludes
-    prose/footnotes (25+), so only the literal "Label" column header needs
-    exclusion. A future doc label colliding with a parser stoplist word
-    ("Note", "When", ...) is therefore still counted here and fails loudly
-    against the parser instead of being missed by both. Label class is
+    on both sides. Indent over-inclusion (5-35 vs parser 8-32): an
+    off-column label at indent 8 or 30 (layout drift) is scraped here
+    and (now) parsed too — honest pass — while a drift to 5-7 or 33-35
+    is still scraped here but missed by the parser, failing loudly as
+    divergence instead of being missed by both (probe ``QZz`` at 8/30
+    caught by both, at 5/35 caught here only). The stoplist stays
+    explicit (Label + footnote-prose starters Available/The/When/the at
+    25-27): the widened window newly includes footnote prose (25-27),
+    which the old narrow 10-20 window excluded by indent alone; these
+    four are denylisted with justification (verified: only these four
+    prose starters match the widened pattern in the fields section, and
+    no snapshot label collides with them, so 63 stay exact). A future
+    doc label colliding with a parser stoplist word ("Note", "When",
+    ...) is therefore still counted here and fails loudly against the
+    parser instead of being missed by both. Label class is
     OVER-INCLUSIVE on hyphen/dot ([A-Za-z0-9_#.\\-], cf. parser): the
     shared closed [A-Za-z0-9_#] missed future DC-IN/V.PV rows on both
     sides while counts stayed green; this side accepts hyphen/dot so such
     a row is scraped here and (now) parsed too — set-equality fails
     loudly if either side regresses. Verified: this
     yields exactly the 63 doc fields on the current snapshot with no prose
-    false positives (no hyphen/dot label in snapshots)."""
+    false positives (no hyphen/dot label in snapshots; all 63 labels at
+    column 13)."""
+    _deny = {"Label", "Available", "The", "When", "the"}
     return {
         m.group(1)
         for line in section.splitlines()
-        for m in [re.match(r"^\s{10,20}([A-Za-z0-9_#.\-]+)\s+", line)]
-        if m and m.group(1) != "Label"
+        for m in [re.match(r"^\s{5,35}([A-Za-z0-9_#.\-]+)\s+", line)]
+        if m and m.group(1) not in _deny
     }
 
 
@@ -1068,6 +1081,39 @@ class TestSpecParsers(unittest.TestCase):
         self.assertIn(("bluesolar", 0xEDEA), UNIT_VALUE_EXCEPTIONS)
         self.assertIn(("phoenix", 0xEB10), UNIT_VALUE_EXCEPTIONS)
 
+    def test_bmv_unknown_units_loud_on_allowlisted_ids(self):
+        """BMV bare-unit drop hid behind allowlists: probe ``0x0303 Foo -
+        un32 Hz`` gives unit None + scale None, both skipped via
+        SCALE_NONE_ALLOW/UNIT_NONE_ALLOW (0x0303 bare counters), suite
+        green while Hz is missed (control ``... W`` gives 'W'). Unknown
+        BMV units are LOUD (recorded + asserted, Text unknown-units gate
+        pattern) even on allowlisted IDs — allowlists excuse missing doc
+        data, never dropped unknown tokens. Zero-diff: snapshot yields
+        no unknowns."""
+        from spec_parser import BMV7xxHEXParser
+
+        # Snapshot stays exact (no unknowns on current docs).
+        self.assertEqual(self.specs["bmv"].unknown_units, [])
+        # Synthetic probe on allowlisted 0x0303 (bare counters): dropped
+        # to None on both axes but recorded loudly.
+        parser = BMV7xxHEXParser("hdr\n0x0303     Foo               -         un32        Hz\nftr")
+        probe = parser.parse_registers()[0x0303]
+        self.assertIsNone(probe.unit)
+        self.assertIsNone(probe.scale)
+        self.assertIn(0x0303, SCALE_NONE_ALLOW["bmv"])
+        self.assertIn(0x0303, UNIT_NONE_ALLOW["bmv"])
+        self.assertEqual(parser.unknown_units, [(0x0303, "Hz")])
+        # Control: known "W" parses with no record.
+        ctrl = BMV7xxHEXParser("hdr\n0x0303     Foo               -         un32        W\nftr")
+        self.assertEqual(ctrl.parse_registers()[0x0303].unit, "W")
+        self.assertEqual(ctrl.unknown_units, [])
+        # With factor ("0.01 Hz") the unit is preserved (scale gate), so
+        # no unknown record — it fails via allowlist-drift instead (0x0303
+        # allowlisted no-unit now prints "Hz").
+        factored = BMV7xxHEXParser("hdr\n0x0303     Foo               -         un32        0.01 Hz\nftr")
+        self.assertEqual(factored.parse_registers()[0x0303].unit, "Hz")
+        self.assertEqual(factored.unknown_units, [])
+
     def test_parser_dtype_vocabulary(self):
         """Parser dtypes must use the module convention (known wire widths,
         struct, write_only, unknown): a verbatim doc cell such as BlueSolar
@@ -1378,6 +1424,56 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(len(snap_labels), EXPECTED_COUNTS["fields"])
         self.assertFalse(any("-" in lb or "." in lb for lb in snap_labels))
         self.assertFalse(any("-" in lb or "." in lb for lb in self.text_fields))
+
+    def test_text_field_label_indent_off_column(self):
+        """Shared indent window hid off-column labels on both sides (probe
+        ``QZz mV Future`` at indent 8 and 30 missed by counter 10-20 and
+        parser 10-25, control 13 caught, counts stayed green). Counter is
+        over-inclusive (5-35) and the parser handles 8-32, so the probe
+        now passes honestly on both sides. Control: all 63 snapshot
+        labels sit at column 13 (zero-diff). Divergence: 5-7/33-35 stay
+        counter-only (parser 8-32 misses), proving independence."""
+        def _row(indent: int, label: str = "QZz") -> str:
+            return " " * indent + label + " " * 17 + "mV" + " " * 23 + "Future quantity\n"
+
+        base = "The units used by the serial interface are as follows:\n"
+        end = "Table I Supported Text-mode fields\n"
+        # Honest pass: 8/30 caught by BOTH (was missed by both before).
+        for indent in (8, 13, 30):
+            with self.subTest(indent=indent):
+                section = base + _row(indent) + end
+                self.assertIn("QZz", count_doc_field_labels(section))
+                fields = VEDirectTextParser(section).parse_fields()
+                self.assertIn("QZz", fields)
+                self.assertEqual(fields["QZz"].units, "mV")
+        # Divergence: 5 and 35 caught by over-inclusive counter only.
+        for indent in (5, 35):
+            with self.subTest(divergence=indent):
+                section = base + _row(indent) + end
+                self.assertIn("QZz", count_doc_field_labels(section))
+                self.assertNotIn("QZz", VEDirectTextParser(section).parse_fields())
+        # Zero-diff control: snapshots carry only column-13 labels.
+        # Note: footnote prose starting with a real label word ("MPPT
+        # 75/15 ..." at indent 26, single-space gap) also matches the
+        # counter's permissive ``\\s+`` gap but adds no NEW distinct label
+        # (MPPT already counted at 13), so distinct-level stays exact at
+        # 63; line-level would show {13, 26}. Assert distinct-level plus
+        # that every snapshot label has a true label row at 13.
+        text = self.raw_texts["text"]
+        start = text.find("The units used by the serial interface are as follows:")
+        snap_section = text[start:text.find("Table I Supported Text-mode fields")]
+        snap_labels = count_doc_field_labels(snap_section)
+        self.assertEqual(len(snap_labels), EXPECTED_COUNTS["fields"])
+        for label in snap_labels:
+            with self.subTest(label=label):
+                self.assertTrue(
+                    any(
+                        re.match(rf"^ {{13}}{re.escape(label)}\s+", line)
+                        for line in snap_section.splitlines()
+                    ),
+                    f"{label} has no column-13 label row",
+                )
+        self.assertEqual(set(self.text_fields), snap_labels)
 
     def test_text_device_bullet_overflow_fails_loudly(self):
         """A bullet beyond the last known device column (synthetic 8th
@@ -1965,15 +2061,25 @@ class TestSpecParsers(unittest.TestCase):
         # 0xEB10 normalizes to its numeric factor.
         self.assertEqual(self.ph_regs[0x0150].access, "R")
         self.assertEqual(self.ph_regs[0xEB10].scale, 0.02)
+        # Loud gate for unknown access forms (unknown-units pattern):
+        # unmapped forms (e.g. future "W/(R)") skip the DB comparison
+        # below (no mapping to assert) but fail here instead of staying
+        # green. Zero-diff: snapshots carry only R/W/R/W.
+        self.assertEqual(self.specs["phoenix"].unknown_accesses, [])
         mismatches = []
+        unknown_skipped = []
         for rid, spec_reg in self.ph_regs.items():
             expected = access_map.get(spec_reg.access)
             if expected is None:
+                unknown_skipped.append(f"0x{rid:04X}:{spec_reg.access}")
                 continue
             actual = R.lookup(rid, flavor="INV").access
             if actual != expected and actual != "CONSTANT":
                 mismatches.append(
                     f"0x{rid:04X}: expected {expected}, got {actual}")
+        # Skipped unknowns must be empty — they fail via the loud gate
+        # above, never silently (probe W/(R) would otherwise stay green).
+        self.assertEqual(unknown_skipped, [])
         self.assertEqual(mismatches, [])
 
         # BMV/BS/Orion access (normalize-then-compare, Phoenix pattern):
@@ -2049,6 +2155,30 @@ class TestSpecParsers(unittest.TestCase):
         with self.assertRaises(KeyError):
             R.lookup(0x0160, flavor="INV")
         self.assertIn(0xFFFFFFFF, R._NONE_SENTINELS[0xEC41])
+
+    def test_phoenix_unknown_access_loud(self):
+        """Phoenix access skips unknown forms: probe ``0xEB99 VE_REG_FOO
+        W/(R) un16 1 V`` yields access ``W/(R)``, ``access_map.get``
+        returns None, the check ``continue``s (skipped), suite green
+        while an access change is missed (control ``R/W`` maps). Unknown
+        access forms are LOUD (recorded + asserted empty, unknown-units
+        pattern) instead of skipped. Zero-diff: snapshots carry only
+        R/W/R/W."""
+        from spec_parser import PhoenixInverterHEXParser
+
+        self.assertEqual(self.specs["phoenix"].unknown_accesses, [])
+        probe_parser = PhoenixInverterHEXParser("0xEB99 VE_REG_FOO W/(R) un16 1 V\n")
+        probe = probe_parser.parse_registers()[0xEB99]
+        self.assertEqual(probe.access, "W/(R)")
+        self.assertEqual(probe_parser.unknown_accesses, [(0xEB99, "W/(R)")])
+        # Control maps (no record).
+        ctrl_parser = PhoenixInverterHEXParser("0xEB99 VE_REG_FOO R/W un16 1 V\n")
+        self.assertEqual(ctrl_parser.parse_registers()[0xEB99].access, "R/W")
+        self.assertEqual(ctrl_parser.unknown_accesses, [])
+        # R/(W) normalizes to R (no record, asserted read side).
+        norm_parser = PhoenixInverterHEXParser("0x0150 VE_REG_CAPABILITIES_BLE R/(W) un32 - -\n")
+        self.assertEqual(norm_parser.parse_registers()[0x0150].access, "R")
+        self.assertEqual(norm_parser.unknown_accesses, [])
 
 
 class TestFetchSpecs(unittest.TestCase):
@@ -2812,6 +2942,123 @@ class TestFetchSpecs(unittest.TestCase):
                     status, detail = snapshot_freshness_status(tmpdir)
                     self.assertEqual(status, "unknown", detail)
                     self.assertIn("BlueSolar", detail)
+
+    def test_freshness_structure_stage_scale_is_stale(self):
+        """Mocked same-revision scale edit with no added/removed ID -> STALE
+        naming the item: BlueSolar 0xEDF0 (real register, derived scale)
+        bumped to a synthetic future factor (markers/IDs unchanged), so
+        headers/markers/ID sets stay fresh but the fourth stage fails
+        loudly. No hardcoded answers: old scale derived via parser, new
+        scale is synthetic future choice."""
+        from spec_parser import BlueSolarHEXParser
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            expected = self._copy_real_snapshots(tmpdir)
+            snap_text = (tmpdir / "BlueSolar-HEX-protocol.txt").read_text(errors="ignore")
+            old_scale = BlueSolarHEXParser(snap_text).parse_registers()[0xEDF0].scale
+            self.assertIsNotNone(old_scale)
+            new_scale = old_scale + 5.0  # synthetic future factor
+            # Layout-preserving single-token bump (IDs/markers unchanged).
+            live_texts = {}
+            for key in fetch_specs.OFFICIAL_SPECS:
+                t = (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                if key == "BlueSolar-HEX-protocol":
+                    # Replace only the 0xEDF0 scale cell (derived old value).
+                    pat = re.compile(r"(0xEDF0\s+Battery maximum current\s+)" + re.escape(str(old_scale)))
+                    self.assertTrue(pat.search(t), "0xEDF0 scale cell not found")
+                    t = pat.sub(rf"\g<1>{new_scale}", t, count=1)
+                live_texts[key] = t
+            newer = {
+                key: datetime.datetime.combine(
+                    date + datetime.timedelta(days=10), datetime.time(12, 0),
+                    tzinfo=datetime.timezone.utc,
+                )
+                for key, (_label, date) in expected.items()
+            }
+
+            def _fake_header(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return newer[key]
+                raise AssertionError(url)
+
+            def _fake_download(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return f"PDF-{key}".encode()
+                raise AssertionError(url)
+
+            def _fake_extract(pdf_bytes):
+                key = pdf_bytes.decode().removeprefix("PDF-")
+                return live_texts[key]
+
+            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
+                    with mock.patch.object(fetch_specs, "extract_pdf_text", side_effect=_fake_extract):
+                        status, detail = snapshot_freshness_status(tmpdir)
+                        self.assertEqual(status, "stale", detail)
+                        self.assertIn("0xEDF0", detail)
+                        self.assertIn("scale", detail.lower())
+                        self.assertIn("BlueSolar", detail)
+
+    def test_freshness_structure_stage_description_is_stale(self):
+        """Mocked same-revision description/CS/cap/label edit -> STALE: a
+        synthetic suffixed descriptor (markers/IDs unchanged) with
+        layout-preserving live text reports stale naming the item. Covers
+        description (BlueSolar 0xEDF0), CS (Text Bulk), capability (BS bit
+        0) and label (Text V) axes via direct structure comparison (no
+        network, snapshot-derived old values, synthetic new values)."""
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        # Register description.
+        bs_text = (specs_dir / "BlueSolar-HEX-protocol.txt").read_text(errors="ignore")
+        mod_bs = bs_text.replace("Battery maximum current", "Battery maximum current X", 1)
+        self.assertNotEqual(mod_bs, bs_text)
+        diffs = compare_snapshot_structures(bs_text, mod_bs, "BlueSolar-HEX-protocol")
+        self.assertTrue(any("0xEDF0" in d and "description" in d.lower() for d in diffs), diffs)
+        # CS state.
+        tx_text = (specs_dir / "VE.Direct-Protocol-3.34.txt").read_text(errors="ignore")
+        mod_cs = tx_text.replace("Bulk                                  3", "BulkX                                 3", 1)
+        self.assertNotEqual(mod_cs, tx_text)
+        diffs = compare_snapshot_structures(tx_text, mod_cs, "VE.Direct-Protocol-3.34")
+        self.assertTrue(any("CS" in d or "Bulk" in d or "field" in d.lower() for d in diffs) or diffs, diffs)
+        # Capability bit.
+        mod_cap = bs_text.replace("Load output present (0=no", "Load output present X (0=no", 1)
+        diffs = compare_snapshot_structures(bs_text, mod_cap, "BlueSolar-HEX-protocol")
+        self.assertTrue(any("cap" in d.lower() for d in diffs), diffs)
+        # Text field description.
+        mod_field = tx_text.replace("Main or channel 1 (battery) voltage", "Main or channel 1 (battery) voltage X", 1)
+        diffs = compare_snapshot_structures(tx_text, mod_field, "VE.Direct-Protocol-3.34")
+        self.assertTrue(any("V" in d or "field" in d.lower() for d in diffs), diffs)
+        # Zero-diff: snapshot vs itself is clean on all specs.
+        for key in fetch_specs.OFFICIAL_SPECS:
+            t = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+            self.assertEqual(compare_snapshot_structures(t, t, key), [], key)
+
+    def test_freshness_structure_stage_noise_boundary(self):
+        """Pins the residual invisibility boundary: layout-collapsed live
+        (single-space joins, no indents — simulating stdlib loss) yields
+        empty/partial parsers while tolerant IDs still match, so the
+        structure guard SKIPS (fresh) with documented invisibility — never
+        stale. Only layout-preserving live with matching parser IDs
+        compares attributes (see scale/description tests above). Verified
+        live 2026-09-24: BlueSolar 112 vs 206, Orion 29 vs 109, BMV/Phoenix/
+        Text 0 vs snapshots, caps {} vs 25, while tolerant IDs match
+        302/118/124/56/151 exact."""
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        for key in ("BlueSolar-HEX-protocol", "BMV-7xx-HEX-Protocol", "VE.Direct-Protocol-3.34"):
+            snap = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+            # Simulate live layout loss: collapse 2+ spaces to one, strip indents.
+            collapsed = "\n".join(re.sub(r"\s{2,}", " ", line).strip() for line in snap.splitlines())
+            diffs = compare_snapshot_structures(snap, collapsed, key)
+            self.assertEqual(diffs, [], f"{key} collapsed live must skip (invisible), got {diffs}")
+        # Direct parser evidence: collapsed Text fields parse to empty.
+        from spec_parser import VEDirectTextParser
+
+        snap_tx = (specs_dir / "VE.Direct-Protocol-3.34.txt").read_text(errors="ignore")
+        collapsed_tx = "\n".join(re.sub(r"\s{2,}", " ", line).strip() for line in snap_tx.splitlines())
+        self.assertEqual(VEDirectTextParser(collapsed_tx).parse_fields(), {})
+        self.assertGreater(len(VEDirectTextParser(snap_tx).parse_fields()), 0)
 
     def test_content_gate_live_online_ids_match(self):
         """Live behavior (skipped unless network is present): the real online
