@@ -3432,14 +3432,15 @@ class TestSpecParsers(unittest.TestCase):
         """A shared 3-digit bound hid 4-digit CS/ERR codes on both sides
         (probes ``FutureState 1234`` / ``Future fault 1234`` missed by
         scrapers AND parsers while EXPECTED maps stayed green — reproduced
-        synthetically before the fix). All four patterns now accept up to 4
+        synthetically before the fix). All five patterns now accept up to 4
         digits (5-digit would collide with decimal register IDs and years),
-        so the probes pass honestly with exact codes/names on both sides.
-        The live tolerant CS extractor still uses the 3-digit bound
-        (tools/fetch_specs.py:883 — read-only here, reported not edited),
-        so it misses the probe: documented divergence below, failing loudly
-        in tolerant-vs-parser agreement once snapshots carry a 4-digit code.
-        Zero-diff: 15/20 exact on every side (pinned by full coverage)."""
+        so the probes pass honestly with exact codes/names on every side.
+        The live tolerant CS extractor now uses the same ``\\d{1,4}`` bound
+        (fixed: headroom over maxima 252/119, same justification as the
+        snapshot side), so a live-added 4-digit state recovers exact on both
+        snapshot and live-joined layouts instead of staying FRESH silently.
+        Zero-diff: 15/20 exact on every side (pinned by full coverage) plus
+        live==snapshot agreement today (skipped offline)."""
         from fetch_specs import tolerant_cs_states
 
         cs_sec = (
@@ -3456,12 +3457,29 @@ class TestSpecParsers(unittest.TestCase):
         )
         self.assertEqual(scrape_doc_error_codes(err_sec)[1234], "Future fault")
         self.assertEqual(VEDirectTextParser(err_sec).parse_errors()[1234], "Future fault")
-        # Divergence: the read-only tolerant extractor shares the old bound
-        # (tools/fetch_specs.py:883 ``(\\d{1,3})``) and misses the 4-digit
-        # probe while parser+scraper catch it — reported, not edited
-        # (fetch_specs.py is out of scope for this change).
-        self.assertNotIn(1234, tolerant_cs_states(cs_sec))
+        # Fixed: the tolerant extractor accepts 4-digit codes and recovers
+        # the probe exact (was ``assertNotIn`` when it shared the old
+        # ``(\\d{1,3})`` bound while parser+scraper caught it).
+        self.assertEqual(tolerant_cs_states(cs_sec)[1234], "FutureState")
+        # Live-joined form (single-line ``\\x95`` bullets) recovers exact
+        # too (only the 4-digit code asserted: the first chunk merges the
+        # section preamble into code 0's name live, as on real stdlib text).
+        live_style = (
+            "The state of operation dummy "
+            "Off 0 \x95 FutureState 1234 \x95"
+            "                       The error code dummy\n"
+        )
+        self.assertEqual(tolerant_cs_states(live_style)[1234], "FutureState")
         self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
+        # Live agrees today (skipped unless network is present, like the
+        # other live tests): online stdlib text still yields the 15 states.
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        snap_text = (specs_dir / "VE.Direct-Protocol-3.34.txt").read_text(errors="ignore")
+        try:
+            pdf_bytes = download_pdf_bytes(fetch_specs.OFFICIAL_SPECS["VE.Direct-Protocol-3.34"]["url"], timeout=30.0)
+        except OSError as e:
+            self.skipTest(f"live download unreachable, skipping: {e}")
+        self.assertEqual(tolerant_cs_states(extract_pdf_text(pdf_bytes)), tolerant_cs_states(snap_text))
         # Zero-diff: snapshot-wide scans stay exactly the doc maps.
         text = self.raw_texts["text"]
         pos = text.find("The state of operation. See the table below")
@@ -4481,6 +4499,67 @@ class TestFetchSpecs(unittest.TestCase):
         self.assertNotIn(0x0102, scale_dtype_map_from_text(prose_only))
         # Typo ID excluded like the ID stage.
         self.assertNotIn(0xEFF0, scale_dtype_map_from_text("0xEFF0 typo 0.1 un16 V "))
+
+    def test_targeted_scale_dtype_exponent_probes(self):
+        """Exponent scales parse exact in the live map (fix, was mis-parsed):
+        ``1e-2`` matched the trailing ``2`` as 2.0 and ``1E+1`` the ``1`` as
+        1.0 while ``0.01`` was correct — reproduced before the fix. The
+        number pattern now accepts the general float-with-exponent shape
+        (same as the snapshot-side ``_SCALE_TOKEN_RE``), so the probes yield
+        exact values. Zero-diff: no snapshot scale cell uses exponents, so
+        old-vs-new maps are identical on all five current snapshots (no
+        hardcoded answers: old pattern re-implemented inline for comparison).
+        """
+        from fetch_specs import scale_dtype_map_from_text
+
+        self.assertEqual(
+            scale_dtype_map_from_text("0xEDF0 Battery maximum current 1e-2 un16 A")[0xEDF0],
+            (0.01, "un16"),
+        )
+        self.assertEqual(
+            scale_dtype_map_from_text("0xEDF0 Battery maximum current 1E+1 un16 A")[0xEDF0],
+            (10.0, "un16"),
+        )
+        # Control: plain decimal still exact.
+        self.assertEqual(
+            scale_dtype_map_from_text("0xEDF0 Battery maximum current 0.01 un16 A")[0xEDF0],
+            (0.01, "un16"),
+        )
+        # Zero-diff on today's files: old pattern
+        # ``(-|\\d+\\.\\d+|\\d+)`` vs the fixed general float on all five
+        # snapshots (ground truth tests/specs/*.txt) — identical maps.
+        from fetch_specs import _strip_language_tags
+
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        for name in (
+            "BlueSolar-HEX-protocol.txt", "Orion-XS-HEX-protocol.txt",
+            "BMV-7xx-HEX-Protocol.txt",
+            "VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+            "VE.Direct-Protocol-3.34.txt",
+        ):
+            with self.subTest(spec=name):
+                text = (specs_dir / name).read_text(errors="ignore")
+                t = _strip_language_tags(text)
+                pos = [
+                    (m.start(), int(m.group(1), 16))
+                    for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})", t)
+                ]
+                old: dict[int, tuple] = {}
+                for idx, (p, rid) in enumerate(pos):
+                    if rid in old:
+                        continue
+                    nxt = pos[idx + 1][0] if idx + 1 < len(pos) else p + 120
+                    window = t[p : min(nxt, p + 120)]
+                    m = re.search(
+                        r"(-|\d+\.\d+|\d+)\s+(un8|un16|un24|un32|sn8|sn16|sn32)\b",
+                        window,
+                        flags=re.IGNORECASE,
+                    )
+                    if m:
+                        scale = None if m.group(1) == "-" else float(m.group(1))
+                        old[rid] = (scale, m.group(2).lower())
+                old.pop(0xEFF0, None)
+                self.assertEqual(scale_dtype_map_from_text(text), old)
 
     def test_targeted_scale_dtype_diffs_synthetic_pdf(self):
         """Mocked (offline, stdlib-only) proof that a same-revision live scale

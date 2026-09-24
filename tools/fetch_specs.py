@@ -743,7 +743,13 @@ def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]
             nxt = pos[idx + 1][0] if idx + 1 < len(pos) else p + maxdist
             window = t[p : min(nxt, p + maxdist)]
             m = re.search(
-                r"(-|\d+\.\d+|\d+)\s+(un8|un16|un24|un32|sn8|sn16|sn32)\b",
+                # General float-with-exponent (same shape as the
+                # snapshot-side _SCALE_TOKEN_RE): plain decimals plus
+                # "1e-2"/"1E+1". No snapshot scale cell uses exponents
+                # (verified), so this is zero-diff on current files while
+                # a future scientific-notation factor parses instead of
+                # matching the trailing digits (e.g. "1e-2" -> 2.0).
+                r"(-|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s+(un8|un16|un24|un32|sn8|sn16|sn32)\b",
                 window,
                 flags=re.IGNORECASE,
             )
@@ -880,7 +886,7 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
         m_end = tail.find("The error code")
         sec = tail[:m_end] if m_end > 0 else tail[:5000]
         found: dict[int, str] = {}
-        for m in re.finditer(r"(?<!\()((?:\([^\d\s)\x95•\n]|[^\s()\x95•])[^\x95•\n]*?)\s+(\d{1,3})\s*[\x95•]", sec):
+        for m in re.finditer(r"(?<!\()((?:\([^\d\s)\x95•\n]|[^\s()\x95•])[^\x95•\n]*?)\s+(\d{1,4})\s*[\x95•]", sec):
             name = m.group(1).strip()
             # Live first chunk merges the section preamble and device header
             # ("... possible values. MPPT Inverter Charger Off"): strip
