@@ -83,7 +83,6 @@ DOC_TYPO_REGISTER_IDS = frozenset({0xEFF0})
 #: READ_WRITE. Word-anchored (never a bare substring): "rewrite only" /
 #: "overwrite-only" must not match (no boundary inside "rewrite").
 _WRITE_ONLY_RE = re.compile(r"\(?\bwrite[\s\-]+only\b\)?", re.IGNORECASE)
-_WRITE_HINTS = ("restore default", "restore factory", "clear history", "zero current", "synchronize", "reset counter", "(write only)")
 
 #: Word-anchored regexes for _is_write_desc (plural-aware where the doc
 #: uses both forms). Substring matching ("restore" in desc) is the bug:
@@ -189,6 +188,20 @@ def _normalize_dtype(raw: str) -> Tuple[str, str]:
     return "unknown", f"doc dtype cell {t!r} gives no single wire width"
 
 
+def _strip_one_paren(tok: str) -> str:
+    """Strip one outer paren pair (Phoenix Scale-cell treatment).
+
+    ``"(0.1)"`` -> ``"0.1"``; anything else passes through. Used by the
+    section-table split and the BMV Step cell so parenthesized factors
+    parse honestly instead of leaking into the description with scale
+    None (cf. Phoenix ``p4_try`` handling).
+    """
+    t = tok.strip()
+    if len(t) >= 2 and t.startswith("(") and t.endswith(")"):
+        return t[1:-1].strip()
+    return tok
+
+
 def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink: Optional[List[Tuple[int, str]]] = None) -> Optional[Tuple[int, str, Optional[str], str, Optional[str], bool]]:
     """Token-split one HEX table row into ``(rid, desc, scale_token, dtype_token, unit, typo)``.
 
@@ -245,9 +258,14 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
     # Scale-anchored: "<desc...> <scale> <dtype> [unit...]". Footnote cells
     # ("(*4)") only anchor when no real wire width follows: a footnote
     # inside the description (e.g. "Display ... (*2) un8") must not split it.
+    # Parenthesized scale cells ("(0.1)", cf. Phoenix p4_try) anchor via
+    # the one-paren-stripped form (comma->dot at the callers); a
+    # parenthesized-but-unparsable cell ("(1x)") falls through to the
+    # loud gate below. Zero-diff: no snapshot scale cell is parenthesized.
     for footnote_ok in (False, True):
         for i, tok in enumerate(rest):
-            if not _SCALE_TOKEN_RE.match(tok) or i + 1 >= len(rest):
+            tok_try = _strip_one_paren(tok)
+            if not _SCALE_TOKEN_RE.match(tok_try) or i + 1 >= len(rest):
                 continue
             nxt = rest[i + 1]
             if _DTYPE_RE.match(nxt) or (
@@ -259,9 +277,14 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
                 if not desc:
                     return None
                 unit = " ".join(rest[i + 2:]).strip() or None
-                return rid, desc, tok, nxt, unit, typo
+                return rid, desc, tok_try, nxt, unit, typo
     # Dtype-anchored (scaleless display/mode rows): "<desc...> <dtype>
     # [unit...]". Real widths win over footnotes for the same reason.
+    # Loud gate covers parenthesized candidates too (Phoenix treatment):
+    # "(1x)" strips to scale-like-but-unparsable and records raw, while
+    # double-wrapped ("((0.1))") records via the digit-bearing paren
+    # fallback; honestly parsable ("(0.1)" -> "0.1") never reaches here
+    # (scale-anchored above) and never records.
     for footnote_ok in (False, True):
         for i, tok in enumerate(rest):
             if (_DTYPE_RE.match(tok) or (footnote_ok and _FOOTNOTE_DTYPE_RE.match(tok))):
@@ -270,8 +293,24 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
                     return None
                 if unknown_sink is not None and i >= 1:
                     cand = rest[i - 1]
-                    if _SCALE_LIKE_RE.match(cand) and not _SCALE_TOKEN_RE.match(cand):
-                        unknown_sink.append((rid, cand))
+                    # Footnote references ("(*2)", "(*1)") live inside the
+                    # description (e.g. BlueSolar 0x0403/0x0404/0x0406) and
+                    # are never Scale cells: excluded here (like the
+                    # scale-anchored footnote handling above) so stripping
+                    # their parens ("*2") does not record loudly.
+                    if _FOOTNOTE_DTYPE_RE.match(cand):
+                        pass
+                    else:
+                        cand_try = _strip_one_paren(cand)
+                        if _SCALE_LIKE_RE.match(cand_try) and not _SCALE_TOKEN_RE.match(cand_try):
+                            unknown_sink.append((rid, cand))
+                        elif (
+                            cand_try != cand
+                            and re.search(r"\d", cand)
+                            and "*" not in cand
+                            and not _SCALE_TOKEN_RE.match(cand_try)
+                        ):
+                            unknown_sink.append((rid, cand))
                 unit = " ".join(rest[i + 1:]).strip() or None
                 return rid, desc, None, tok, unit, typo
     return None
@@ -366,7 +405,7 @@ class BlueSolarHEXParser:
             if unit_str and "0XFFFF" in unit_str.upper():
                 sentinels.add(0xFFFF)
             # Write-hint detection for section-table rows (same _is_write_desc
-            # / _WRITE_HINTS logic as ID-only/detail rows): a command
+            # / _WRITE_HINT_RES logic as ID-only/detail rows): a command
             # description (e.g. "Restore defaults ...") in a typed table
             # parses as write_only/W instead of the R/W default, so the
             # schema W assertion catches it. Zero-diff: no current
@@ -635,14 +674,14 @@ class OrionXSHEXParser:
                 continue
             rid, desc, scale_str, dtype_raw, unit_str, typo = row
 
-            scale = None if scale_str in (None, "-") else float(scale_str)
+            scale = None if scale_str in (None, "-") else float(scale_str.replace(",", "."))
             dtype, dtype_note = _normalize_dtype(dtype_raw)
             sentinels = set()
             # Sentinel may print uppercase 0XFFFF; case-insensitive like IDs.
             if unit_str and "0XFFFF" in unit_str.upper():
                 sentinels.add(0xFFFF)
             # Write-hint detection for section-table rows (same _is_write_desc
-            # / _WRITE_HINTS logic as ID-only/detail rows): a command
+            # / _WRITE_HINT_RES logic as ID-only/detail rows): a command
             # description in a typed table parses as write_only/W instead of
             # the R/W default, so the schema W assertion catches it.
             # Zero-diff: no current Orion section-table row carries a write
@@ -817,8 +856,13 @@ class OrionXSHEXParser:
                 # only — so zero-diff; a future "1e-2" parses via float()).
                 # Comma-decimal ("0,1") parses via comma->dot; no snapshot
                 # single-field scale uses it (verified), so zero-diff.
+                # Dtype alternation is case-insensitive like every other dtype
+                # match (_DTYPE_RE, Phoenix dtypes): "UN16" normalizes to
+                # "un16" instead of demoting the detail ID. Zero-diff: no
+                # snapshot single-field Type cell is uppercase (verified).
                 m = re.match(
-                    r"^\s*\d+\s+.+?\s+(-|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)\s+(un\d+|sn\d+|string\d*)\s*(\S.*)?$", line
+                    r"^\s*\d+\s+.+?\s+(-|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)\s+(un\d+|sn\d+|string\d*)\s*(\S.*)?$", line,
+                    re.IGNORECASE,
                 )
                 if m:
                     scale = float(m.group(1).replace(",", ".")) if m.group(1) != "-" else None
@@ -955,12 +999,25 @@ class BMV7xxHEXParser:
                 # Step uses it (plain decimals/ints only), so zero-diff.
                 # Comma-decimal ("0,1") parses via comma->dot; no snapshot
                 # Step uses it (verified), so zero-diff.
-                if re.fullmatch(r"\d+([.,]\d+)?([eE][+-]?\d+)?", step):
-                    scale = float(step.replace(",", "."))
-                elif step and re.search(r"\d", step) and _SCALE_LIKE_RE.match(step):
+                # Parenthesized Step cell ("(0.1)", cf. Phoenix p4_try):
+                # strip one outer pair and parse honestly; a
+                # parenthesized-but-unparsable cell ("(1x)") records via
+                # the loud gate below instead of dropping silently (probe
+                # Step "(0.1)" gave scale None with empty unknown_scales
+                # while SCALE_NONE_ALLOW kept the suite green). No snapshot
+                # Step cell is parenthesized (verified), so zero-diff.
+                step_try = _strip_one_paren(step)
+                if re.fullmatch(r"\d+([.,]\d+)?([eE][+-]?\d+)?", step_try):
+                    scale = float(step_try.replace(",", "."))
+                elif step and re.search(r"\d", step) and "*" not in step and (
+                    (_SCALE_LIKE_RE.match(step_try) and not re.fullmatch(r"\d+([.,]\d+)?([eE][+-]?\d+)?", step_try))
+                    or (step_try != step and not re.fullmatch(r"\d+([.,]\d+)?([eE][+-]?\d+)?", step_try))
+                ):
                     # Loud unknown-scale gate (unknown-units pattern): a
                     # scale-like Step cell the strict shape rejects records
-                    # loudly even on allowlisted IDs.
+                    # loudly even on allowlisted IDs. The paren fallback
+                    # covers double-wrapped cells ("((0.1))") whose stripped
+                    # form still carries parens and misses _SCALE_LIKE_RE.
                     self.unknown_scales.append((rid, step))
                 if len(rest) > col + 2:
                     u = " ".join(rest[col + 2:]).strip()

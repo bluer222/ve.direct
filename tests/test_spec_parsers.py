@@ -1279,7 +1279,7 @@ class TestSpecParsers(unittest.TestCase):
 
     def test_section_table_write_hint_parsing(self):
         """Section-table rows with command descriptions must parse as
-        write_only/W (same _is_write_desc/_WRITE_HINTS logic as ID-only
+        write_only/W (same _is_write_desc/_WRITE_HINT_RES logic as ID-only
         rows): probe ``0xEDF0 Restore defaults ...`` in a section table
         parsed as R/W before the fix while the schema skipped R/W defaults,
         staying green while a write-only marker was missed. Zero-diff: no
@@ -3811,6 +3811,89 @@ class TestSpecParsers(unittest.TestCase):
         # Guards hold: years and ID rows never scrape as codes.
         self.assertNotIn(2021, scrape_doc_cs_codes("                        Revision year                         2021     •\n"))
         self.assertNotIn(0xEDF0, scrape_doc_cs_codes("                        Register 0xEDF0                     123      •\n"))
+
+    def test_orion_comma_section_scale_parsed(self):
+        """Orion section-table comma scale parses (not ValueError).
+        Probe ``0xEDF0 Foo 0,1 un16 V`` raised ValueError (bare float)
+        while BlueSolar parsed 0.1 (comma->dot) — reproduced synthetically
+        before the fix. Orion now comma->dots like its siblings. Zero-diff:
+        no snapshot scale cell uses a comma (verified), snapshots stay
+        206/109 with empty unknown_scales."""
+        from spec_parser import OrionXSHEXParser
+
+        probe = OrionXSHEXParser(
+            "1.1 Get and Set items\n"
+            "0xEDF0 Foo 0,1 un16 V\n"
+            "1.2 Asynchronous items\n"
+        )
+        self.assertAlmostEqual(probe.parse_registers()[0xEDF0].scale, 0.1)
+        self.assertEqual(probe.unknown_scales, [])
+        ctrl = BlueSolarHEXParser(
+            "1.1 Get and Set items\n"
+            "0xEDF0 Foo 0,1 un16 V\n"
+            "1.2 Asynchronous items\n"
+        )
+        self.assertAlmostEqual(ctrl.parse_registers()[0xEDF0].scale, 0.1)
+        self.assertEqual(self.specs["orion"].unknown_scales, [])
+        self.assertEqual(self.specs["bluesolar"].unknown_scales, [])
+
+    def test_parenthesized_scale_outside_phoenix(self):
+        """Parenthesized scales parse honestly outside Phoenix (not silent None).
+        Probes BlueSolar/Orion ``0xEDB3 (0.1)`` and BMV Step ``(0.1)`` yielded
+        scale None with empty unknown_scales while SCALE_NONE_ALLOW hid them
+        — reproduced synthetically before the fix. Same paren-strip +
+        loud-gate treatment as Phoenix now. Zero-diff: no snapshot scale
+        cell is parenthesized, snapshots stay 206/109/110 with empty gates."""
+        from spec_parser import BMV7xxHEXParser, OrionXSHEXParser
+
+        self.assertEqual(self.specs["bluesolar"].unknown_scales, [])
+        self.assertEqual(self.specs["orion"].unknown_scales, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                p = cls(
+                    "1.1 Get and Set items\n"
+                    "0xEDB3     Tracker mode             (0.1)       un16        -\n"
+                    "1.2 Asynchronous items\n"
+                )
+                probe = p.parse_registers()[0xEDB3]
+                self.assertAlmostEqual(probe.scale, 0.1)
+                self.assertEqual(probe.description, "Tracker mode")
+                self.assertEqual(p.unknown_scales, [])
+                bad = cls(
+                    "1.1 Get and Set items\n"
+                    "0xEDB3     Tracker mode             (1x)        un16        -\n"
+                    "1.2 Asynchronous items\n"
+                )
+                bad.parse_registers()
+                self.assertEqual(bad.unknown_scales, [(0xEDB3, "(1x)")])
+        bmv = BMV7xxHEXParser(
+            "hdr\n0xEDD0     Foo Bar               -         un16        0..1        0           (0.1)       V\nftr"
+        )
+        self.assertAlmostEqual(bmv.parse_registers()[0xEDD0].scale, 0.1)
+        self.assertEqual(bmv.unknown_scales, [])
+        bmv_bad = BMV7xxHEXParser(
+            "hdr\n0xEDD0     Foo Bar               -         un16        0..1        0           (1x)        V\nftr"
+        )
+        bmv_bad.parse_registers()
+        self.assertEqual(bmv_bad.unknown_scales, [(0xEDD0, "(1x)")])
+
+    def test_orion_single_field_dtype_case_insensitive(self):
+        """Orion single-field Bytes dtype matches case-insensitively.
+        Probe row ``0 Count 1 UN16`` yielded (None, None) vs lowercase
+        control ('un16', 1.0), silently demoting the detail ID — reproduced
+        synthetically before the fix. Alternation is now re.IGNORECASE like
+        every other dtype match. Zero-diff: snapshot single-field Types are
+        lowercase, snapshots stay 109 with empty unknown_scales."""
+        from spec_parser import OrionXSHEXParser
+
+        base = "registers 0x0150 dummy\nBytes Description Scale Type Unit\n0 Count 1 %s\n"
+        upper = OrionXSHEXParser(base % "UN16")
+        pos = (base % "UN16").find("registers 0x0150") + len("registers 0x0150 dummy")
+        self.assertEqual(upper._single_field_bytes_width(pos), ("un16", 1.0))
+        lower = OrionXSHEXParser(base % "un16")
+        pos2 = (base % "un16").find("registers 0x0150") + len("registers 0x0150 dummy")
+        self.assertEqual(lower._single_field_bytes_width(pos2), ("un16", 1.0))
 
 
 class TestFetchSpecs(unittest.TestCase):
