@@ -627,6 +627,196 @@ def live_text_for_structures(pdf_bytes: bytes) -> str:
         return t
 
 
+def _cmap_decoded_text(pdf_bytes: bytes) -> str:
+    """Decode BlueSolar 1-byte subset-font tables to ASCII (stdlib).
+
+    Same largest-1-byte-CMap path as :func:`_table_cmap_ids` but returning
+    the joined decoded string (not just IDs) so per-ID scale/dtype tokens
+    (``0.1``, ``un16``) recover live: stdlib literal extraction yields glyph
+    codes for BlueSolar tables while Orion/BMV/Phoenix tables are already
+    WinAnsi-readable. Digits/dtype tokens decode exactly (verified
+    0 scale/dtype mismatches live 2026-09-24); description letters may drop
+    glyphs missing from the largest CMap (e.g. ``minute`` -> ``minue``),
+    so only scale/dtype compare live — units/access stay pinned invisible.
+    Other specs return "" (no 1-byte CMaps, no-op). Never raises.
+    """
+    try:
+        if not pdf_bytes:
+            return ""
+        stream_re = re.compile(rb"stream(?:\r\n|\r|\n)(.*?)endstream", re.DOTALL)
+        chunks: list[bytes] = []
+        for m in stream_re.finditer(bytes(pdf_bytes)):
+            raw = m.group(1).strip(b"\r\n")
+            try:
+                chunks.append(zlib.decompress(raw))
+            except Exception:
+                try:
+                    chunks.append(zlib.decompress(m.group(1)))
+                except Exception:
+                    continue
+        cmaps: list[dict[int, str]] = []
+        for dec in chunks:
+            if b"begincmap" not in dec or b"<00><ff>" not in dec:
+                continue
+            if b"<0000>" in dec:
+                continue  # 2-byte Identity-H (Orion), not 1-byte tables
+            try:
+                txt = dec.decode("latin-1")
+            except Exception:
+                continue
+            cmap: dict[int, str] = {}
+            for line in txt.splitlines():
+                hexes = re.findall(r"<([0-9A-Fa-f]+)>", line)
+                if len(hexes) == 3:
+                    try:
+                        s1, s2, d = int(hexes[0], 16), int(hexes[1], 16), int(hexes[2], 16)
+                    except Exception:
+                        continue
+                    for k in range(s1, s2 + 1):
+                        try:
+                            cmap[k] = chr(d + (k - s1))
+                        except Exception:
+                            continue
+                elif len(hexes) == 2 and "begin" not in line:
+                    try:
+                        s, d = int(hexes[0], 16), int(hexes[1], 16)
+                    except Exception:
+                        continue
+                    if s not in cmap:
+                        try:
+                            cmap[s] = chr(d)
+                        except Exception:
+                            continue
+            if cmap:
+                cmaps.append(cmap)
+        if not cmaps:
+            return ""
+        table_cmap = max(cmaps, key=len)
+        combo = b"\n".join(chunks)
+        tok = re.compile(rb"\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>")
+        parts: list[str] = []
+        for tm in tok.finditer(combo):
+            t = tm.group(0)
+            if t.startswith(b"("):
+                inner = t[1:-1]
+                parts.append("".join(table_cmap.get(bb, "") for bb in inner))
+            else:
+                hexs = re.sub(rb"\s", b"", t[1:-1])
+                if not hexs or len(hexs) > 2000:
+                    continue
+                if len(hexs) % 2 == 1:
+                    hexs += b"0"
+                try:
+                    raw = bytes.fromhex(hexs.decode("ascii"))
+                except Exception:
+                    continue
+                parts.append("".join(table_cmap.get(bb, "") for bb in raw))
+        return "".join(parts)
+    except Exception:
+        return ""
+
+
+def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]:
+    """Global ID-anchored scale/dtype map for BlueSolar/Orion live text.
+
+    Snapshot parsers are line-anchored (``pdftotext -layout`` rows) and fail
+    on stdlib live joins (single-line, single-space); this anchors only
+    ``0xHHHH ... scale dtype`` globally (no ``\\\\b`` needed, like the ID
+    stage), trying every ID occurrence until one carries a scale+dtype
+    within ``maxdist`` chars and before the next ID (prose mentions like
+    ``register 0x0102. See also...`` carry no close dtype and are skipped,
+    the later table row is used). Scale-before-dtype only (BlueSolar/Orion
+    ``ID Desc Scale Type Unit`` layout); Phoenix ``Type Scale`` order and
+    BMV ``Display Type Unit``/Step layout need different anchoring (pinned,
+    not attempted here). Missing IDs skip (not alarms); mismatches report
+    via :func:`live_scale_dtype_diffs`. Never raises.
+    """
+    try:
+        if not text:
+            return {}
+        t = _strip_language_tags(text)
+        pos = [(m.start(), int(m.group(1), 16)) for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})", t)]
+        out: dict[int, tuple] = {}
+        for idx, (p, rid) in enumerate(pos):
+            if rid in out:
+                continue
+            nxt = pos[idx + 1][0] if idx + 1 < len(pos) else p + maxdist
+            window = t[p : min(nxt, p + maxdist)]
+            m = re.search(
+                r"(-|\d+\.\d+|\d+)\s+(un8|un16|un24|un32|sn8|sn16|sn32)\b",
+                window,
+                flags=re.IGNORECASE,
+            )
+            if m:
+                scale = None if m.group(1) == "-" else float(m.group(1))
+                out[rid] = (scale, m.group(2).lower())
+        out.pop(0xEFF0, None)  # doc-typo for 0xEDF0, cf. DOC_TYPO_REGISTER_IDS
+        return out
+    except Exception:
+        return {}
+
+
+def live_scale_dtype_diffs(snap_text: str, pdf_bytes: bytes, key: str) -> list[str]:
+    """Targeted live scale/dtype comparison for BlueSolar/Orion (stdlib).
+
+    Extracts per-ID ``(scale, dtype)`` from live PDF bytes (stdlib text plus
+    1-byte CMap-decoded tables for BlueSolar) via
+    :func:`scale_dtype_map_from_text` and diffs against the snapshot parser
+    (same ``ID Desc Scale Type Unit`` family). Missing IDs skip (layout loss
+    or prose-only IDs, never alarms); present IDs with differing scale/dtype
+    report ``"<Label> 0xXXXX scale/dtype ..."`` for STALE. Verified zero
+    false alarms live 2026-09-24 (Orion 0 mism, BlueSolar CMap 0 mism);
+    BMV/Phoenix/Text return [] by design (different layouts / no scales:
+    BMV Step/Unit-embedded, Phoenix Type-Scale order, Text no wire widths —
+    pinned invisible, see the structure-stage pin). Units/access stay
+    invisible even here (CMap drops description glyphs like ``t`` in
+    ``minute``; tables carry no access column) — only scale/dtype compare.
+    Never raises (empty on failure; caller stays fresh).
+    """
+    try:
+        if not snap_text or not pdf_bytes:
+            return []
+        if key not in ("BlueSolar-HEX-protocol", "Orion-XS-HEX-protocol"):
+            return []
+        try:
+            live_text = live_text_for_structures(pdf_bytes)
+        except Exception:
+            live_text = ""
+        if key == "BlueSolar-HEX-protocol":
+            try:
+                live_text = (live_text or "") + " " + _cmap_decoded_text(pdf_bytes)
+            except Exception:
+                pass
+        live_map = scale_dtype_map_from_text(live_text)
+        if not live_map:
+            return []
+        try:
+            from spec_parser import BlueSolarHEXParser, OrionXSHEXParser
+        except Exception:
+            return []
+        label = "BlueSolar" if key == "BlueSolar-HEX-protocol" else "Orion"
+        cls = BlueSolarHEXParser if key == "BlueSolar-HEX-protocol" else OrionXSHEXParser
+        try:
+            snap_regs = cls(snap_text).parse_registers()
+        except Exception:
+            return []
+        diffs: list[str] = []
+        for rid, reg in sorted(snap_regs.items()):
+            if reg.data_type in ("struct", "unknown", "write_only"):
+                continue
+            if rid not in live_map:
+                continue  # layout loss / prose-only / bare-x typo: skip, never alarm
+            ls, ld = live_map[rid]
+            if ls != reg.scale or ld != reg.data_type:
+                if ls != reg.scale:
+                    diffs.append(f"{label} 0x{rid:04X} scale {reg.scale} vs {ls}")
+                if ld != reg.data_type:
+                    diffs.append(f"{label} 0x{rid:04X} dtype {reg.data_type} vs {ld}")
+        return diffs
+    except Exception:
+        return []
+
+
 def tolerant_cs_states(text: str) -> dict[int, str]:
     """Bullet-anchored CS extraction exact on BOTH layouts (stdlib Paranoia).
 
@@ -634,14 +824,24 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
     bullets (``Off ... 0 •``); live stdlib joins the whole CS section to a
     single line with ``\\x95`` bullets (``Off 0 \\x95 Low power 1 \\x95 ...``).
     Line-anchored snapshot parsers fail live ({} vs 15). This anchors only
-    the ``name code bullet`` suffix globally (``([A-Za-z]... ) code
+    the ``name code bullet`` suffix globally (``([+A-Za-z0-9]... ) code
     [\\x95•]``), ignoring line breaks, so it yields exactly the 15 states
-    on both (verified live==snapshot 2026-09-24). Over-inclusion is safe
-    (extra hits fail loudly); denylists (justified): leading ``[A-Za-z]``
-    excludes the ``(1) Load search`` footnote, ``Bit``/``register`` guard
-    excludes headers, and the ``MPPT Inverter Charger`` device-header prefix
-    contaminating the first live chunk is stripped (3-word header, verified).
-    A future ``+``/``:``/digit CS name missed by the closed snapshot parser
+    on both (verified live==snapshot 2026-09-24).     Over-inclusion is safe
+    (extra hits fail loudly); denylists (justified): leading ``[+A-Za-z0-9]``
+    with ``(?<!\\()`` excludes the ``(1) Load search`` footnote (live joins
+    it as ``... 1 \\x95 (1) Fault 2 ...`` — without the lookbehind the
+    leading-digit widening starts inside ``(1)`` yielding ``1) Fault`` and
+    the guard skips it, losing real ``Fault 2``; the lookbehind forces the
+    match to start at ``Fault`` like the old ``[A-Za-z]`` did),
+    ``Bit``/``register`` guard excludes headers, and the ``MPPT Inverter
+    Charger`` device-header prefix contaminating the first live chunk is
+    stripped (3-word header, verified).
+    Leading ``[+A-Za-z0-9]`` (was ``[A-Za-z]``) preserves leading-digit names
+    (``2Fast Mode 99`` recovers exact, like the parser/scraper classes) and
+    leading-``+`` names (``+Boost Mode 99``, cf. the CS/ERR ``+`` rescue);
+    interior stays ``[A-Za-z /()\\-]`` (no digits/``+``/``:``), so interior
+    ``Mode2Fast``/``Bulk+Boost`` stay scraper-divergent (pinned). A future
+    ``:``/other-symbol CS name missed by the closed snapshot parser
     is still scraped here (divergence, like the test-side CS scraper) — but
     for freshness both sides use this tolerant form, so a CS rename reports
     STALE live (stronger than regs, which stay invisible). Never raises.
@@ -656,7 +856,7 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
         m_end = tail.find("The error code")
         sec = tail[:m_end] if m_end > 0 else tail[:5000]
         found: dict[int, str] = {}
-        for m in re.finditer(r"([A-Za-z][A-Za-z /()\-]*?)\s+(\d{1,3})\s*[\x95•]", sec):
+        for m in re.finditer(r"(?<!\()([+A-Za-z0-9][A-Za-z /()\-]*?)\s+(\d{1,3})\s*[\x95•]", sec):
             name = m.group(1).strip()
             # Live first chunk merges device header ("MPPT Inverter Charger
             # Off"): strip the 3-word header, verified live-only (snapshots
@@ -666,6 +866,11 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
                 if len(parts) > 3 and parts[:3] == ["MPPT", "Inverter", "Charger"]:
                     name = " ".join(parts[3:]).strip()
             if not name or "Bit" in name or "register" in name:
+                continue
+            # Backup for a bare "1) ..." enumeration without "(" (the
+            # lookbehind already blocks "(1)" -> "1) ..."; real snapshot
+            # footnote carries no code/bullet, so zero-diff).
+            if re.match(r"^\d+\)", name):
                 continue
             try:
                 found[int(m.group(2))] = name
@@ -737,12 +942,16 @@ def compare_snapshot_structures(snap_text: str, live_text: str, key: str) -> lis
     stripped) and PID IDs via :func:`tolerant_pid_ids` (153==153, scoped
     3/4-digit, incl. 3-digit missed by the 4-digit ID stage) ARE compared
     tolerantly — a CS rename or 3-digit PID added/removed reports STALE
-    live (not invisible). Residual invisibility (pinned by tests): scales,
-    units, access, register descriptions, text-field units/descriptions/
-    devices, ERR names, capability names, PID names/phasing stay invisible
-    on real live stdlib text (stay FRESH; glyph/layout loss + footer merges
-    for PID names 0xA072/0xA24A) — only layout-preserving (mocked) live
-    texts catch them. Bare-unit/bare-access drops are caught via
+    live (not invisible).     Residual invisibility (pinned by tests, narrowed by stage 3b): BMV/
+    Phoenix/Text scales, all units, access, register descriptions,
+    text-field units/descriptions/devices, ERR names, capability names, PID
+    names/phasing stay invisible on real live stdlib text (stay FRESH;
+    glyph/layout loss + footer merges for PID names 0xA072/0xA24A) — only
+    layout-preserving (mocked) live texts catch them. BlueSolar/Orion
+    scale/dtype edits are now visible live via :func:`live_scale_dtype_diffs`
+    (stage 3b, e.g. BlueSolar 0xEDF0 scale 0.1→5.1 reports STALE live);
+    an attribute-only edit in that family staying FRESH here is still
+    caught there. Bare-unit/bare-access drops are caught via
     unknown_units/unknown_accesses lists (same guard: live empty or
     ID-mismatch skips, ID-match diffs stale). Never raises (empty on
     parser/import failure; caller stays fresh).
@@ -1050,6 +1259,16 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
        -> UNKNOWN (loud skip, never fail and never pass on partial
        evidence). No download when header-older (fast path above never
        reaches here).
+    3b. Targeted scale/dtype stage (when ID sets match, BlueSolar/Orion
+        only): per-ID ``(scale, dtype)`` from live PDF bytes (stdlib text
+        plus 1-byte CMap-decoded tables for BlueSolar) via
+        :func:`live_scale_dtype_diffs` vs the snapshot parser. Mismatch
+        (e.g. ``BlueSolar 0xEDF0 scale 0.1 vs 5.1``) -> STALE. Guarded like
+        structures (missing/empty skips fresh, never unknown; verified zero
+        false alarms live 2026-09-24). Strictly stronger than structures for
+        scale/dtype attribute-only edits live; BMV/Phoenix/Text
+        scales/units/access/descriptions stay pinned invisible (different
+        layouts / no widths).
     4. Structure stage (when ID sets match): FULL parse (registers with
        scales/units/access, text fields, CS states, error codes,
        capability bits, PIDs) on the stdlib-extracted live text
@@ -1061,10 +1280,13 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
        partial/empty live (112 vs 206, 29 vs 109, 0 vs 110/48/63, caps {}
        vs 25) while tolerant IDs still match — parser-ID mismatch therefore
        SKIPS (fresh) with documented invisibility, never stale/unknown.
-       Only layout-preserving live (mocked snapshot-like) with matching
-       parser IDs compares attributes. Residual invisibility: ALL non-ID
-       attribute edits stay invisible on real live stdlib text (stay FRESH);
-       only mocked layout-preserving edits report STALE. Offline/
+        Only layout-preserving live (mocked snapshot-like) with matching
+        parser IDs compares attributes. Residual invisibility: BMV/Phoenix/
+        Text attribute edits plus BlueSolar/Orion units/access/descriptions
+        (and non-scale/dtype axes) stay invisible on real live stdlib text
+        (stay FRESH); BlueSolar/Orion scale/dtype edits now report STALE via
+        stage 3b above (stronger), only mocked layout-preserving edits report
+        STALE here. Offline/
        unextractable live text also skips (fresh here; ID-stage emptiness
        is unknown, structure-stage emptiness is layout loss with IDs
        already proven matching).
@@ -1214,6 +1436,29 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
                 f"despite matching revision markers ({rem_mark} == {snap_mark})"
             )
         else:
+            # 3b. Targeted live scale/dtype stage (ID sets match): per-ID
+            # ``(scale, dtype)`` from live PDF bytes (stdlib text plus 1-byte
+            # CMap-decoded tables for BlueSolar) vs snapshot parser, via
+            # :func:`live_scale_dtype_diffs`. Mismatch names the item
+            # (e.g. ``BlueSolar 0xEDF0 scale 0.1 vs 5.1``) -> STALE. Guarded
+            # like structures (missing IDs skip, empty live skips fresh,
+            # never unknown; BlueSolar/Orion family only — BMV Step/Unit,
+            # Phoenix Type-Scale order, Text no widths stay pinned invisible).
+            # Strictly stronger than the structure guard for scale/dtype
+            # attribute-only edits live (structure stays FRESH on collapsed
+            # text); it does not weaken that guard. Verified zero false
+            # alarms live 2026-09-24 (Orion/BlueSolar 0 mism).
+            try:
+                tdffs = live_scale_dtype_diffs(snap_text, pdf_bytes, key)
+            except Exception:
+                tdffs = []
+            if tdffs:
+                stale.append(
+                    f"{key}.txt online table structure changed "
+                    f"({'; '.join(tdffs[:5])}) "
+                    f"despite matching revision markers and IDs ({rem_mark} == {snap_mark})"
+                )
+                # Fall through to structures too (both name the change).
             # 4. Structure stage (ID sets match): FULL parse on live
             # stdlib text vs snapshot parse. Mismatch names the changed
             # item -> STALE. Noise guard inside

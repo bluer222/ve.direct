@@ -435,7 +435,18 @@ class BlueSolarHEXParser:
             # Split-typo IDs ("0x HHHH", see _ID_TOKEN_SPLIT_PREFIXES) share
             # this row shape; the inner whitespace is stripped for int().
             # Zero-diff: no snapshot ID-only row uses the split form.
-            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+            # Lowercase descriptions ("0x104F future history record"): the
+            # old [A-Z] start missed them in parser AND decimal scans while
+            # counts stayed green. Both now start [A-Za-z] (case-insensitive
+            # row-start). Date/prose denylist (explicit, justified): year
+            # guard for decimal below covers calendar years; hyphenated
+            # dates ("15-11-2021", "2021-09-06") miss the shape ("-" after
+            # digits, not "\\s+[A-Za-z]"); bare years/counts miss it (no
+            # description); footer "1351 JG Almere" is mid-line (not
+            # line-leading) and outside this history region; device-word
+            # guard below excludes product prose. Zero-diff: no snapshot
+            # history-region line matches the widened shape (verified).
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
             dm = None
             if m:
                 rid = int(m.group(1).replace(" ", ""), 16)
@@ -445,15 +456,16 @@ class BlueSolarHEXParser:
                 # history record"): no 0x prefix and no scale/type columns,
                 # so the hex paths above miss them while the dtype-tailed
                 # decimal scan misses them too (no dtype token). Same
-                # capitalized-description table shape as the hex ID-only
-                # rows (mirrors that regex, including the [A-Z] start).
+                # table shape as the hex ID-only rows (mirrors that regex,
+                # now [A-Za-z] start for lowercase "60961 future history
+                # record" probes).
                 # Year guard: bare 4-digit calendar years (Phoenix "2016"
                 # line-wrap, revision-log years) are prose, not registers;
                 # the description requirement already excludes bare years
                 # and hyphenated dates (which carry "-" not " " after the
                 # digits). Zero-diff: no snapshot history-region line
                 # matches (verified; counts pinned by EXPECTED_COUNTS).
-                dm = re.match(r"^\s*(\d{4,5})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+                dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
@@ -623,17 +635,23 @@ class OrionXSHEXParser:
             # Split-typo IDs ("0x HHHH", see _ID_TOKEN_SPLIT_PREFIXES) share
             # this row shape; the inner whitespace is stripped for int().
             # Zero-diff: no snapshot ID-only row uses the split form.
-            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+            # Lowercase descriptions (same widening/justification as the
+            # BlueSolar handler above: [A-Za-z] start, year guard for
+            # decimal, hyphenated/bare dates miss shape, footer mid-line
+            # and outside region, device-word guard below). Zero-diff: no
+            # snapshot history-region line matches.
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
             dm = None
             if m:
                 rid = int(m.group(1).replace(" ", ""), 16)
                 desc = m.group(2).strip()
             else:
                 # Decimal ID-only rows without dtype tail (same shape/guard
-                # rationale as the BlueSolar handler above: capitalized
-                # description, year guard for calendar-year prose).
+                # rationale as the BlueSolar handler above: now [A-Za-z]
+                # start for lowercase probes, year guard for calendar-year
+                # prose).
                 # Zero-diff: no snapshot history-region line matches.
-                dm = re.match(r"^\s*(\d{4,5})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+                dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
@@ -1280,12 +1298,16 @@ class VEDirectTextParser:
         tables = self._device_column_starts(lines)
         self.unknown_units = []
 
-        label_re = re.compile(r"^\s{8,32}([A-Za-z0-9_#.\-]+)\s{2,}(.*?)\s*$")
+        label_re = re.compile(r"^\s{8,32}([+A-Za-z0-9_#.\-]+)\s{2,}(.*?)\s*$")
         # Hyphen/dot in the label class (DC-IN, V.PV): the closed
         # [A-Za-z0-9_#] missed future hyphen/dotted labels on BOTH sides
         # (parser and count_doc_field_labels) while counts stayed green.
         # Over-inclusive scraper + parser record both (zero-diff: no
-        # hyphen/dot label in current snapshots, verified).
+        # hyphen/dot label in current snapshots, verified). Leading "+"
+        # ("+QZ mV Future"): the closed [A-Za-z0-9_#.-] missed it in counter
+        # AND parser while 63 stayed green; both now lead [+A-Za-z0-9_#.-]
+        # (other symbols verified absent as label starts in snapshots,
+        # zero-diff, 63 exact).
         # Indent 8-32 (was 10-25): the shared narrow window missed
         # off-column labels at indent 8 and 30 on BOTH sides (probe QZz
         # mV Future at 8/30 missed by counter and parser, control 13
@@ -1420,8 +1442,13 @@ class VEDirectTextParser:
             # leading class widens here. The "(" footnote ("(1) Load
             # search") still misses (leading paren). Zero-diff: all
             # snapshot CS names start with a letter (pinned by full
-            # coverage).
-            m = re.match(r"^\s*([A-Za-z0-9][A-Za-z\s/()\-]*?)\s+(\d{1,3})\s+(?:•|\d)", line)
+            # coverage). Leading "+" ("+Boost Mode 99 •"): the closed
+            # [A-Za-z0-9] missed it in parser AND scraper while counts
+            # stayed green; both now lead [+A-Za-z0-9] (other symbols like
+            # ":"/"*"/"-" verified absent as CS row starts in snapshots,
+            # so widening to "+" only is zero-diff; interior stays closed
+            # so "Bulk+Boost"/"Charge:Fast" stay scraper-divergent, pinned).
+            m = re.match(r"^\s*([+A-Za-z0-9][A-Za-z\s/()\-]*?)\s+(\d{1,3})\s+(?:•|\d)", line)
             if m:
                 name = m.group(1).strip()
                 code = int(m.group(2))
@@ -1449,8 +1476,13 @@ class VEDirectTextParser:
             # EXPECTED_ERRORS stayed green (CS already tail-diverged). The
             # scraper is tail-agnostic (\\b), so the parser records
             # bullet-tailed rows too — zero-diff (snapshots carry no bullet
-            # tail, verified).
-            m = re.match(r"^\s*([A-Za-z0-9\s/(),\-]+?)\s{2,}(\d{1,3})(?:\s+•.*)?\s*$", line)
+            # tail, verified). Leading "+" ("+Fault mode 99"): the closed
+            # [A-Za-z0-9] missed it in parser AND scraper while counts
+            # stayed green; both now lead [+A-Za-z0-9] (other symbols
+            # verified absent as ERR row starts in snapshots, zero-diff;
+            # interior stays as-is so "+"/":"/"." interiors stay
+            # scraper-divergent where pinned).
+            m = re.match(r"^\s*([+A-Za-z0-9][A-Za-z0-9\s/(),\-]*?)\s{2,}(\d{1,3})(?:\s+•.*)?\s*$", line)
             if m:
                 desc = m.group(1).strip()
                 code = int(m.group(2))

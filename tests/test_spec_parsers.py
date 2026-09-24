@@ -53,10 +53,12 @@ from fetch_specs import (
     extract_text,
     fetch_remote_snapshot_text,
     live_register_ids,
+    live_scale_dtype_diffs,
     live_text_for_structures,
     normalize_snapshot_text,
     register_id_set_from_text,
     remote_last_modified,
+    scale_dtype_map_from_text,
     snapshot_freshness_status,
     snapshot_revision_info,
     update_manifest_text,
@@ -124,20 +126,21 @@ def count_doc_field_labels(section: str) -> set[str]:
     no snapshot label collides with them, so 63 stay exact). A future
     doc label colliding with a parser stoplist word ("Note", "When",
     ...) is therefore still counted here and fails loudly against the
-    parser instead of being missed by both. Label class is
-    OVER-INCLUSIVE on hyphen/dot ([A-Za-z0-9_#.\\-], cf. parser): the
+    parser instead of being missed by both.     Label class is
+    OVER-INCLUSIVE on hyphen/dot/plus ([+A-Za-z0-9_#.\\-], cf. parser): the
     shared closed [A-Za-z0-9_#] missed future DC-IN/V.PV rows on both
-    sides while counts stayed green; this side accepts hyphen/dot so such
-    a row is scraped here and (now) parsed too — set-equality fails
-    loudly if either side regresses. Verified: this
+    sides while counts stayed green; this side accepts hyphen/dot/plus so
+    such a row ("+QZ mV Future", now parsed too) is scraped here and (now)
+    parsed too — set-equality fails loudly if either side regresses.
+    Verified: this
     yields exactly the 63 doc fields on the current snapshot with no prose
-    false positives (no hyphen/dot label in snapshots; all 63 labels at
+    false positives (no hyphen/dot/plus label in snapshots; all 63 labels at
     column 13)."""
     _deny = {"Label", "Available", "The", "When", "the"}
     return {
         m.group(1)
         for line in section.splitlines()
-        for m in [re.match(r"^\s{5,35}([A-Za-z0-9_#.\-]+)\s+", line)]
+        for m in [re.match(r"^\s{5,35}([+A-Za-z0-9_#.\-]+)\s+", line)]
         if m and m.group(1) not in _deny
     }
 
@@ -198,23 +201,26 @@ def scrape_doc_cs_codes(section: str) -> dict[int, str]:
     without trailing bullets or with ``+``/``:``/digit names is missed by the
     parser while the suite stays green. This scraper anchors only the ``name
     code`` prefix, ignores the tail entirely, and captures the name with an
-    open ``([A-Za-z0-9].+?)`` (any chars after a leading letter-or-digit) —
-    a bullet-less, ``+``/``:``, or leading-digit ("2Fast Mode 99 •", which
+    open ``([+A-Za-z0-9].+?)`` (any chars after a leading plus/letter-or-digit) —
+    a bullet-less, ``+``-leading (``+Boost Mode 99 •``, now parsed too),
+    ``:``, or leading-digit ("2Fast Mode 99 •", which
     the parser now accepts too) row is still counted, so it fails loudly as
     scraper-vs-parser mismatch. Over-inclusion is the safe direction: extra
     hits fail via the invented-IDs-style set-equality, while under-inclusion
     would hide the same blind spot on both sides. Denylists (explicit,
-    justified): the leading-``[A-Za-z0-9]`` still excludes the
+    justified): the leading-``[+A-Za-z0-9]`` still excludes the
     "(1) Load search" footnote (starts with "("), and the "Bit"/"register"
     guard excludes the table header; verified exact against the snapshot CS
     section with a WIDER bound than the parser (scraper scans to "The error
     code ..." prose, parser stops at the "^ERR$" header — see
     test_cs_states_full_coverage): the extra ERR header + blank carry no
     ``name code`` pattern, so the wider scan stays exact while a row past
-    the parser bound is still scraped here (bound-divergence test)."""
+    the parser bound is still scraped here (bound-divergence test). Zero-diff:
+    no snapshot CS row starts with "+" (verified), so the widened leading
+    class adds no hits."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*([A-Za-z0-9].+?)\s+(\d{1,3})\b", line)
+        m = re.match(r"^\s*([+A-Za-z0-9].+?)\s+(\d{1,3})\b", line)
         if m:
             name = m.group(1).strip()
             # Header guard (same as parser): "Bit ...", "register ..." lines are not states.
@@ -232,8 +238,9 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     (``[A-Za-z0-9\\s/(),\\-]``), so a single-space row or a ``+``/``:``/``.``
     name is missed with no counter to catch it. This scraper tolerates ANY
     gap (``\\s+``), ignores a bullet tail (``(?:\\s+•.*)?``), and captures
-    the name with an open ``([A-Za-z0-9].+?)`` — a single-space,
-    ``+``/``:``/``.`` or bullet-tailed (``Future fault 99 •``) row is still
+    the name with an open ``([+A-Za-z0-9].+?)`` — a single-space,
+    ``+``-leading (``+Fault mode 99``, now parsed too), ``:``/``.`` or
+    bullet-tailed (``Future fault 99 •``) row is still
     counted and fails loudly as scraper-vs-parser mismatch. The shared EOL
     anchor hid bullet-tailed rows on both sides while EXPECTED_ERRORS
     stayed green; bullet-tail-agnostic closes it. Fully tail-agnostic
@@ -251,10 +258,11 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     + blank carry no ``name code`` pattern, so the wider scan stays exact
     while a row past the parser bound is still scraped here
     (bound-divergence test). Zero-diff: snapshot ERR rows carry no bullet
-    tail, so EOL-or-bullet matches exactly the EOL set."""
+    tail, so EOL-or-bullet matches exactly the EOL set; no snapshot ERR row
+    starts with "+" (verified), so the widened leading class adds no hits."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*([A-Za-z0-9].+?)\s+(\d{1,3})(?:\s+•.*)?\s*$", line)
+        m = re.match(r"^\s*([+A-Za-z0-9].+?)\s+(\d{1,3})(?:\s+•.*)?\s*$", line)
         if m:
             found[int(m.group(2))] = m.group(1).strip()
     return found
@@ -330,14 +338,15 @@ def scrape_decimal_ids(text: str) -> set[int]:
     is uppercase-X rescued (``0\\s+[xX]``, like the 0XEDF0 rescue): a future
     "0 XEDF0" row would otherwise be missed by parser, hex scraper, and
     this scan together. Verified zero-diff: no ``0\\s+XHHHH`` in snapshots.
-    Further widened to dtype-LESS ID-only rows (``^\\s*\\d{4,5}\\s+[A-Z]``
-    with no dtype tail, e.g. "60961      Future history record"): the
-    dtype-tail halves above miss them while the hex parser/scraper miss
-    them too (no ``0x``), staying green while a row is missed. Shape
-    justification: line-leading only (ID-only rows are table rows; a
-    mid-line bare number is a count/date, so the tailless scan does NOT
-    repeat the mid-line widening) with a capitalized description (mirrors
-    the parsers' hex ID-only ``[A-Z]`` row shape). Date-like denylist
+    Further widened to dtype-LESS ID-only rows (``^\\s*\\d{4,5}\\s+[A-Za-z]``
+    with no dtype tail, e.g. "60961      Future history record" and lowercase
+    "60961      future history record"): the dtype-tail halves above miss them
+    while the hex parser/scraper miss them too (no ``0x``), staying green
+    while a row is missed. Shape justification: line-leading only (ID-only
+    rows are table rows; a mid-line bare number is a count/date, so the
+    tailless scan does NOT repeat the mid-line widening) with a
+    case-insensitive description start (mirrors the parsers' hex ID-only
+    ``[A-Za-z]`` row shape, now lowercase-capable). Date-like denylist
     (explicit, justified): bare 4-digit calendar years 1900-2100 are
     skipped — the Phoenix snapshot wraps "production stopped in November /
     2016" (a bare line-leading year), and revision logs carry years
@@ -369,9 +378,9 @@ def scrape_decimal_ids(text: str) -> set[int]:
         ):
             ids.add(int(m_mid.group(1)))
         # Dtype-less ID-only widening (justified above): line-leading
-        # decimal + capitalized description, no dtype required. Year
+        # decimal + case-insensitive description, no dtype required. Year
         # denylist keeps calendar-year prose out.
-        m_tail = re.match(r"^\s*(\d{4,5})\s+([A-Z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+        m_tail = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
         if m_tail:
             rid = int(m_tail.group(1))
             if not 1900 <= rid <= 2100:
@@ -888,6 +897,51 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(60961, BlueSolarHEXParser(synthetic).parse_registers())
         self.assertNotIn(60961, scrape_doc_ids(synthetic))
 
+    def test_midline_dtypeless_decimal_pinned(self):
+        """Pins the mid-line dtype-LESS boundary as uncovered-by-evidence:
+        "Some prose 60961 Future history record mention" (mid-line bare
+        decimal + capitalized words, no dtype tail) is missed by ALL scans
+        and parsers (line-leading ID-only scan, dtype-tailed mid-line scan,
+        hex scraper, history-region parsers) while counts stay green. A
+        widened mid-line tailless scan was attempted live and REJECTED:
+        ``(?<!\\w)\\d{4,5}\\s+[A-Z]...`` matches footer prose on all
+        snapshots ("Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The
+        Netherlands" -> 1351 + "JG Almere", 2 hits BlueSolar/BMV/Phoenix, 0
+        Orion), so widening would false-positive without a footer-specific
+        denylist that merely trades one blind spot for another. Line-leading
+        tailless stays (issue-4 fix); mid-line tailless stays pinned here —
+        do not widen without replacing this pin with a strictly better
+        zero-FP mechanism. Documents exactly what shape is uncovered."""
+        probe = "Some prose 60961 Future history record mention\n"
+        self.assertEqual(scrape_decimal_ids(probe), set())
+        self.assertNotIn(60961, scrape_doc_ids(probe))
+        self.assertNotIn(
+            60961,
+            BlueSolarHEXParser(
+                "Restore factory defaults\n" + probe + "1.2 Asynchronous items\n"
+            ).parse_registers(),
+        )
+        # Evidence: naive mid-line tailless widening false-positives on
+        # footer postcodes (verified live on snapshots).
+        import re as _re
+
+        fp_total = 0
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            text = self.raw_texts[key]
+            for line in text.splitlines():
+                if _re.match(r"^\s*\d{4,5}\s", line):
+                    continue
+                for mm in _re.finditer(r"(?<!\w)(\d{4,5})\s+([A-Z][A-Za-z0-9 _\-/().*]{3,})\b", line):
+                    rid = int(mm.group(1))
+                    if 1900 <= rid <= 2100:
+                        continue
+                    fp_total += 1
+                    break
+        # BlueSolar/BMV/Phoenix footers hit (1351 JG Almere); Orion has no
+        # such mid-line hit — the widening is still unreliable (non-zero FP
+        # on 3/4 specs), so the pin stands.
+        self.assertGreaterEqual(fp_total, 3)
+
     def test_decimal_id_only_no_dtype_tail_divergence(self):
         """Proves the dtype-less decimal widening catches ID-only rows missed
         by every dtype-tailed strategy: a synthetic "60961      Future
@@ -927,6 +981,55 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(scrape_decimal_ids("2016\n"), set())
         self.assertEqual(scrape_decimal_ids("5) 2021-09-06\n"), set())
         self.assertEqual(scrape_decimal_ids("2016 Production stopped note\n"), set())
+
+    def test_lowercase_id_only_row_rescue(self):
+        """Lowercase ID-only history rows ("60961 future history record" /
+        "0x104F future history record") were missed by hex/decimal scans and
+        parsers (``[A-Z]`` start required) while counts stayed green. Both
+        now start ``[A-Za-z]`` (case-insensitive row-start), so the probes
+        pass honestly with exact descriptions on all sides. Date/prose
+        denylist (explicit, justified): year guard 1900-2100 covers calendar
+        years; hyphenated dates ("15-11-2021", "2021-09-06") miss the shape
+        ("-" after digits, not "\\s+[A-Za-z]"); bare years/counts miss it
+        (no description); footer "1351 JG Almere" is mid-line (not
+        line-leading) and outside the history region (parsers) while the
+        global scraper stays exact (verified zero hits). Zero-diff: no
+        snapshot history-region line matches the widened shape (verified),
+        and the global decimal scan stays empty on all four HEX snapshots.
+        Divergence probes with lowercase names."""
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), set())
+        # Decimal lowercase probe: scraped + parsed honestly.
+        self.assertEqual(scrape_decimal_ids("60961      future history record\n"), {60961})
+        self.assertNotIn(60961, scrape_doc_ids("60961      future history record\n"))
+        from spec_parser import OrionXSHEXParser
+
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                text = (
+                    "Restore factory defaults\n"
+                    "60961      future history record\n"
+                    "1.2 Asynchronous items\n"
+                )
+                probe = cls(text).parse_registers()[60961]
+                self.assertEqual(probe.description, "future history record")
+                self.assertEqual(probe.data_type, "struct")
+                self.assertEqual(probe.access, "R")
+                self.assertIsNone(probe.scale)
+                # Hex lowercase probe: same honest pass (hex scraper already
+                # caught it via bare 0xHHHH, so this also proves parser
+                # alignment rather than a new scraper blind spot).
+                text_hex = (
+                    "Restore factory defaults\n"
+                    "0x104F      future history record\n"
+                    "1.2 Asynchronous items\n"
+                )
+                probe_hex = cls(text_hex).parse_registers()[0x104F]
+                self.assertEqual(probe_hex.description, "future history record")
+        # Controls: dates/years stay out of the widened scan.
+        self.assertEqual(scrape_decimal_ids("2016 production stopped note\n"), set())
+        self.assertEqual(scrape_decimal_ids("15-11-2021 some change\n"), set())
 
     def test_uppercase_0X_id_rescue_divergence(self):
         """Proves uppercase-0X IDs are rescued (not missed by all three):
@@ -1721,6 +1824,34 @@ class TestSpecParsers(unittest.TestCase):
         self.assertFalse(any("-" in lb or "." in lb for lb in snap_labels))
         self.assertFalse(any("-" in lb or "." in lb for lb in self.text_fields))
 
+    def test_text_field_label_leading_plus(self):
+        """Leading-``+`` text labels ("+QZ mV Future") were missed by BOTH
+        the counter and the parser (``[A-Za-z0-9_#.-]`` required) while 63
+        stayed green. Both now lead ``[+A-Za-z0-9_#.-]`` (other symbols
+        verified absent as label starts in snapshots, zero-diff), so the
+        probe passes honestly with exact label/units on both sides.
+        Zero-diff: no snapshot label starts with "+" (verified, 63 exact).
+        Divergence probe with a leading-plus label."""
+        section = (
+            "The units used by the serial interface are as follows:\n"
+            "             V                   mV                       Main voltage\n"
+            "             +QZ                 mV                       Future quantity\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        self.assertIn("+QZ", count_doc_field_labels(section))
+        fields = VEDirectTextParser(section).parse_fields()
+        self.assertIn("+QZ", fields)
+        self.assertEqual(fields["+QZ"].units, "mV")
+        self.assertEqual(fields["+QZ"].description, "Future quantity")
+        # Zero-diff controls: snapshots carry no plus label (63 exact).
+        text = self.raw_texts["text"]
+        start = text.find("The units used by the serial interface are as follows:")
+        end = text.find("Table I Supported Text-mode fields")
+        snap_labels = count_doc_field_labels(text[start:end])
+        self.assertEqual(len(snap_labels), EXPECTED_COUNTS["fields"])
+        self.assertFalse(any(lb.startswith("+") for lb in snap_labels))
+        self.assertFalse(any(lb.startswith("+") for lb in self.text_fields))
+
     def test_text_field_label_indent_off_column(self):
         """Shared indent window hid off-column labels on both sides (probe
         ``QZz mV Future`` at indent 8 and 30 missed by counter 10-20 and
@@ -2146,10 +2277,9 @@ class TestSpecParsers(unittest.TestCase):
         class widens here. Controls: the "(1) Load search" footnote (leading
         "(") stays excluded on both sides; snapshot names all start with a
         letter, so zero-diff holds (pinned by test_cs_states_full_coverage).
-        Note: fetch_specs.tolerant_cs_states (frozen, see the pin test
-        below) recovers this probe MISNAMED as "Fast Mode", so a
-        snapshot-vs-live tolerant agreement would also stay green with the
-        true name lost."""
+        Note: fetch_specs.tolerant_cs_states now recovers this probe exact
+        too (see test_tolerant_cs_leading_digit_exact), so snapshot-vs-live
+        tolerant agreement carries the true name."""
         section = (
             "The state of operation. See the table below\n"
             "                        Off                                   0      •\n"
@@ -2164,18 +2294,20 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(98, scrape_doc_cs_codes(foot))
         self.assertNotIn(98, VEDirectTextParser(foot).parse_cs_states())
 
-    def test_tolerant_cs_leading_digit_misnaming_pinned(self):
-        """Pins the known fetch_specs.tolerant_cs_states limitation for
-        leading-digit CS names (src-frozen: tools/fetch_specs.py is not
-        editable here, so document + pin instead of fixing): its global
-        bullet-anchored search starts the name at ``[A-Za-z]``
-        (tools/fetch_specs.py:659), so "2Fast Mode 99 •" recovers MISNAMED
-        as "Fast Mode" — the leading "2" is silently stripped. Because the
-        live-vs-snapshot structure guard compares tolerant output on BOTH
-        sides, a future leading-digit rename would agree green
-        ("Fast Mode" == "Fast Mode") with the true name lost on both.
-        Zero-diff: tolerant output on the current snapshot is exactly the
-        15 EXPECTED_CS states (letter-leading names unaffected)."""
+    def test_tolerant_cs_leading_digit_exact(self):
+        """Leading-digit CS names recover EXACT in tolerant_cs_states (fix,
+        formerly pinned when fetch_specs was out of scope): its global
+        bullet-anchored search now starts the name at ``[+A-Za-z0-9]`` with
+        ``(?<!\\()`` (like the parser/scraper classes), so "2Fast Mode 99 •"
+        recovers exact (was MISNAMED as "Fast Mode", agreeing green with the
+        true name lost). Footnote ``(1)`` (live joins it as ``... 1 \\x95
+        (1) Fault 2 ...``) stays out via the lookbehind — without it the
+        widening starts inside ``(1)`` yielding ``1) Fault`` and loses real
+        ``Fault 2`` live (verified live 15==15 today). Real snapshot
+        footnote carries no code/bullet (zero-diff). Zero-diff: tolerant
+        output on the current snapshot is exactly the 15 EXPECTED_CS states;
+        live comparison still agrees (live==snapshot 15). Divergence probe
+        with a leading-digit name."""
         from fetch_specs import tolerant_cs_states
 
         probe = (
@@ -2183,10 +2315,67 @@ class TestSpecParsers(unittest.TestCase):
             "                        2Fast Mode                            99     •\n"
             "                       The error code dummy\n"
         )
-        # Current behavior (limitation): leading digit stripped, misnamed.
-        self.assertEqual(tolerant_cs_states(probe), {99: "Fast Mode"})
+        # Fixed behavior: leading digit preserved, exact name.
+        self.assertEqual(tolerant_cs_states(probe), {99: "2Fast Mode"})
         # Zero-diff: snapshot tolerant states equal doc truth exactly.
         self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
+        # Footnote still excluded (real shape carries no code/bullet, so no
+        # match on either old or new expression; live "(1) Fault" join keeps
+        # Fault via the lookbehind, verified by the live-equality above).
+        foot = (
+            "The state of operation dummy\n"
+            "                           (1) Load search\n"
+            "                       The error code dummy\n"
+        )
+        self.assertEqual(tolerant_cs_states(foot), {})
+
+    def test_cs_err_leading_plus_rescue(self):
+        """Leading-``+`` CS/ERR names ("+Boost Mode 99 •" / "+Fault mode 99")
+        were missed by BOTH the parser and the scrapers (leading
+        ``[A-Za-z0-9]`` required) while counts stayed green. Both now lead
+        ``[+A-Za-z0-9]`` (other symbols verified absent as row starts in
+        snapshots, zero-diff), so the probes pass honestly with exact names
+        on both sides plus tolerant_cs_states. Interior ``+``/``:``/``.``
+        ("Bulk+Boost", "Charge:Fast", "Dotted.Name") stay scraper-divergent
+        (pinned by the scraper-name tests), so only the leading class widens
+        here. Controls: "(1) Load search" footnote still excluded; snapshot
+        CS/ERR names all start with a letter (zero-diff, pinned by full
+        coverage). Divergence probes with leading-plus names."""
+        from fetch_specs import tolerant_cs_states
+
+        cs_sec = (
+            "The state of operation. See the table below\n"
+            "                        Off                                   0      •\n"
+            "                        +Boost Mode                           99     •\n"
+        )
+        self.assertEqual(scrape_doc_cs_codes(cs_sec)[99], "+Boost Mode")
+        self.assertEqual(VEDirectTextParser(cs_sec).parse_cs_states()[99], "+Boost Mode")
+        err_sec = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        +Fault mode                                                         99\n"
+        )
+        self.assertEqual(scrape_doc_error_codes(err_sec)[99], "+Fault mode")
+        self.assertEqual(VEDirectTextParser(err_sec).parse_errors()[99], "+Fault mode")
+        # Tolerant live form recovers leading-plus exact too.
+        probe = (
+            "The state of operation dummy\n"
+            "                        +Boost Mode                           99     •\n"
+            "                       The error code dummy\n"
+        )
+        self.assertEqual(tolerant_cs_states(probe), {99: "+Boost Mode"})
+        # Controls: footnote still excluded on line-anchored sides (leading
+        # "(" never matches ^\\s*[+A-Za-z0-9]); tolerant snapshot stays exact.
+        foot_cs = cs_sec + "                        (1) Load search                     98     •\n"
+        self.assertNotIn(98, scrape_doc_cs_codes(foot_cs))
+        self.assertNotIn(98, VEDirectTextParser(foot_cs).parse_cs_states())
+        self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
+        text = self.raw_texts["text"]
+        pos = text.find("The error code of the device (relevant when the device is in the fault state)")
+        tail = text[pos:]
+        m_wide = re.search(r"Historical data", tail)
+        self.assertIsNotNone(m_wide)
+        self.assertEqual(scrape_doc_error_codes(tail[: m_wide.start()]), self.specs["text"].parse_errors())
 
     def test_cs_bound_divergence(self):
         """Proves the CS scraper bound is wider/different than the parser's
@@ -3533,7 +3722,15 @@ class TestFetchSpecs(unittest.TestCase):
         compares attributes (see scale/description tests above). Verified
         live 2026-09-24: BlueSolar 112 vs 206, Orion 29 vs 109, BMV/Phoenix/
         Text 0 vs snapshots, caps {} vs 25, while tolerant IDs match
-        302/118/124/56/151 exact."""
+        302/118/124/56/151 exact. Extended pin: a real-live attribute-only
+        edit with collapsed text — e.g. BlueSolar 0xEDF0 scale 0.1→5.1 with
+        no added/removed ID — stays FRESH here (only --sync+pdftotext would
+        catch it, which clean envs skip). That exact case is now caught live
+        by the targeted scale/dtype stage (stage 3b,
+        live_scale_dtype_diffs) for BlueSolar/Orion scale/dtype — see the
+        targeted tests below — while BMV/Phoenix/Text scales, all
+        units/access/descriptions, and BlueSolar/Orion units/access remain
+        pinned invisible here. Do not weaken this guard."""
         specs_dir = Path(__file__).resolve().parent / "specs"
         for key in ("BlueSolar-HEX-protocol", "BMV-7xx-HEX-Protocol", "VE.Direct-Protocol-3.34"):
             snap = (specs_dir / f"{key}.txt").read_text(errors="ignore")
@@ -3548,6 +3745,108 @@ class TestFetchSpecs(unittest.TestCase):
         collapsed_tx = "\n".join(re.sub(r"\s{2,}", " ", line).strip() for line in snap_tx.splitlines())
         self.assertEqual(VEDirectTextParser(collapsed_tx).parse_fields(), {})
         self.assertGreater(len(VEDirectTextParser(snap_tx).parse_fields()), 0)
+        # Exact-case evidence: collapsed BlueSolar with 0xEDF0 scale bumped
+        # stays FRESH here (structure guard blind), motivating stage 3b.
+        from spec_parser import BlueSolarHEXParser
+
+        snap_bs = (specs_dir / "BlueSolar-HEX-protocol.txt").read_text(errors="ignore")
+        old_scale = BlueSolarHEXParser(snap_bs).parse_registers()[0xEDF0].scale
+        self.assertIsNotNone(old_scale)
+        new_scale = old_scale + 5.0
+        pat = re.compile(r"(0xEDF0\s+Battery maximum current\s+)" + re.escape(str(old_scale)))
+        self.assertTrue(pat.search(snap_bs))
+        bumped = pat.sub(rf"\g<1>{new_scale}", snap_bs, count=1)
+        collapsed_bumped = "\n".join(re.sub(r"\s{2,}", " ", line).strip() for line in bumped.splitlines())
+        # Collapsed bumped vs collapsed snapshot: structure still skips
+        # (parser-ID mismatch from layout loss dominates), so FRESH here.
+        self.assertEqual(
+            compare_snapshot_structures(snap_bs, collapsed_bumped, "BlueSolar-HEX-protocol"), []
+        )
+
+    def test_targeted_scale_dtype_map_synthetic(self):
+        """Unit proof for the targeted live map: global ID-anchored
+        scale/dtype extraction catches a synthetic BlueSolar 0xEDF0 scale
+        bump (0.1→5.1, derived old value, synthetic new value) while prose
+        mentions without close dtype skip and missing IDs skip (never
+        alarms). No hardcoded answers: old scale derived via parser."""
+        from fetch_specs import scale_dtype_map_from_text
+        from spec_parser import BlueSolarHEXParser
+
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        snap_bs = (specs_dir / "BlueSolar-HEX-protocol.txt").read_text(errors="ignore")
+        old_scale = BlueSolarHEXParser(snap_bs).parse_registers()[0xEDF0].scale
+        self.assertIsNotNone(old_scale)
+        new_scale = old_scale + 5.0
+        live_txt = (
+            "ID Description Scale Type Unit "
+            f"0xEDF0 Battery maximum current {new_scale} un16 A "
+            "0xEDEF Battery voltage 1 un8 V "
+            "register 0x0102. See also chapter 1.3. "
+            "0x0100 Product Id - un32 -"
+        )
+        m = scale_dtype_map_from_text(live_txt)
+        self.assertEqual(m[0xEDF0], (new_scale, "un16"))
+        self.assertNotEqual(m[0xEDF0][0], old_scale)
+        # Prose mention without close dtype skips to the later table row.
+        prose_only = "must be used on register 0x0102. See also chapter 1.3. "
+        self.assertNotIn(0x0102, scale_dtype_map_from_text(prose_only))
+        # Typo ID excluded like the ID stage.
+        self.assertNotIn(0xEFF0, scale_dtype_map_from_text("0xEFF0 typo 0.1 un16 V "))
+
+    def test_targeted_scale_dtype_diffs_synthetic_pdf(self):
+        """Mocked (offline, stdlib-only) proof that a same-revision live scale
+        edit reports STALE via stage 3b: crafted FlateDecode PDFs carrying a
+        bumped BlueSolar/Orion 0xEDF0 scale (derived old + synthetic new)
+        yield diffs naming 0xEDF0/scale, while matching scales yield []. No
+        hardcoded answers; BMV/Phoenix/Text return [] by design (pinned)."""
+        from fetch_specs import live_scale_dtype_diffs
+
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        for key, rid in (("BlueSolar-HEX-protocol", 0xEDF0), ("Orion-XS-HEX-protocol", 0xEDF0)):
+            snap = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+            from spec_parser import BlueSolarHEXParser, OrionXSHEXParser
+
+            cls = BlueSolarHEXParser if key.startswith("BlueSolar") else OrionXSHEXParser
+            old_scale = cls(snap).parse_registers()[rid].scale
+            self.assertIsNotNone(old_scale)
+            new_scale = old_scale + 5.0
+            bumped_txt = f"ID Description Scale Type Unit 0x{rid:04X} Battery maximum current {new_scale} un16 A "
+            matching_txt = f"ID Description Scale Type Unit 0x{rid:04X} Battery maximum current {old_scale} un16 A "
+            bumped_pdf = self._content_pdf_bytes(bumped_txt)
+            matching_pdf = self._content_pdf_bytes(matching_txt)
+            diffs = live_scale_dtype_diffs(snap, bumped_pdf, key)
+            self.assertTrue(any(f"0x{rid:04X}" in d and "scale" in d.lower() for d in diffs), diffs)
+            self.assertEqual(live_scale_dtype_diffs(snap, matching_pdf, key), [])
+        # By-design skips (pinned families / empty input).
+        snap_bs = (specs_dir / "BlueSolar-HEX-protocol.txt").read_text(errors="ignore")
+        self.assertEqual(live_scale_dtype_diffs(snap_bs, b"", "BlueSolar-HEX-protocol"), [])
+        self.assertEqual(
+            live_scale_dtype_diffs(
+                (specs_dir / "BMV-7xx-HEX-Protocol.txt").read_text(errors="ignore"),
+                self._content_pdf_bytes("0xED8E Power - Sn16 W "),
+                "BMV-7xx-HEX-Protocol",
+            ),
+            [],
+        )
+
+    def test_targeted_scale_dtype_live_zero_false_alarms(self):
+        """Live behavior (skipped unless network is present): today's online
+        PDFs yield zero scale/dtype diffs vs snapshots (verified 0 mism
+        2026-09-24, Orion + BlueSolar CMap). A real live scale edit (e.g.
+        BlueSolar 0xEDF0 0.1→5.1) would fail here loudly instead of passing;
+        offline skips. Proves stage 3b is wired without false alarms."""
+        from fetch_specs import live_scale_dtype_diffs
+
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        for key, info in fetch_specs.OFFICIAL_SPECS.items():
+            with self.subTest(spec=key):
+                snap_text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+                try:
+                    pdf_bytes = download_pdf_bytes(info["url"], timeout=30.0)
+                except OSError as e:
+                    self.skipTest(f"live download unreachable, skipping: {e}")
+                diffs = live_scale_dtype_diffs(snap_text, pdf_bytes, key)
+                self.assertEqual(diffs, [], f"{key} live scale/dtype false alarm: {diffs[:3]}")
 
     def test_content_gate_live_online_ids_match(self):
         """Live behavior (skipped unless network is present): the real online
