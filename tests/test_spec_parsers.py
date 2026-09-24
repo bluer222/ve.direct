@@ -207,32 +207,25 @@ def scrape_doc_cs_codes(section: str) -> dict[int, str]:
     set-equality if either side regresses. Over-inclusion is the safe
     direction: extra hits fail via the invented-IDs-style set-equality,
     while under-inclusion sharing the parser's closed class is the bug.
-    Denylists (explicit, justified): the "(1) Load search" footnote
-    (starts with "(", never a real state; carries no code anyway) and bare
-    "N) ..." enumerations are skipped, and the "Bit"/"register" guard
-    excludes the table header; verified exact against the snapshot CS
-    section with a WIDER bound than the parser (scraper scans to "The error
-    code ..." prose, parser stops at the "^ERR$" header — see
-    test_cs_states_full_coverage): the extra ERR header + blank carry no
-    ``name code`` pattern, so the wider scan stays exact while a row past
-    the parser bound is still scraped here (bound-divergence test).
-    Zero-diff: all 15 snapshot CS names start with a letter (verified), so
-    the open name adds no hits. Gap independence is preserved (scraper
+    Denylists (explicit, justified): none on content — the scraper keeps
+    EVERYTHING matching the structural ``name code`` shape and shares NONE
+    of the parser's furniture guards ("Bit"/"register" substring, leading
+    "(", bare "N) ..." enumerations) by construction, so a future colliding
+    state line (e.g. "Orbit Bit mode 99", "Re-register fault 99", "(Boost)
+    99" — see the furniture-divergence test) is still counted here while
+    the parser drops it: scraped-but-unparsed, failing loudly instead of
+    agreed-missing. Verified zero-diff without pins: no snapshot furniture
+    line matches the shape (the "(1) Load search" footnote carries no code,
+    the device header and "ERR" bound carry none, the section intro carries
+    none), so the guard-free scan stays exactly the 15 states while a
+    colliding row diverges. Gap independence is preserved (scraper
     ``\\s+`` vs parser bullet-tail): a bullet-less row still diverges (see
     test_cs_counter_bullet_gap_divergence)."""
     found: dict[int, str] = {}
     for line in section.splitlines():
         m = re.match(r"^\s*(.+?)\s+(\d{1,3})\b", line)
         if m:
-            name = m.group(1).strip()
-            # Header guard (same as parser): "Bit ...", "register ..." lines are not states.
-            if "Bit" in name or "register" in name:
-                continue
-            # Footnote furniture (same as parser): "(1) Load search" starts
-            # with "(", bare "N) ..." enumerations are not states.
-            if name.startswith("(") or re.match(r"^\d+\)", name):
-                continue
-            found[int(m.group(2))] = name
+            found[int(m.group(2))] = m.group(1).strip()
     return found
 
 
@@ -250,35 +243,45 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     rows are still counted here and (now) parsed too, failing loudly via
     set-equality if either side regresses. Over-inclusion is safe (extra
     hits fail loudly); under-inclusion sharing the parser's closed class
-    is the bug. Denylists (explicit, justified): with the any-gap +
-    full-remainder shape, Note1/Note2 prose ("Note1: Error 19 can ...",
-    "MPPT charger. Since version ...", "shutdown of the ...") would match
-    structurally (single-space ``name code`` + remainder), so note/prose/
-    header lines are excluded by anchored content (mirrors the parser's
-    _ERR_FURNITURE_RES furniture list with a separate copy so the scraper
-    stays independently shaped; both pinned exact by full coverage).
-    Verified exact against the snapshot ERR section with a WIDER bound than
-    the parser (scraper scans to "Historical data" prose, parser stops at
-    "^HSDS$" — see test_error_codes_full_coverage): the extra HSDS header
-    + blank + notes carry no unscratched ``name code`` pattern once
-    furniture-denylisted, so the wider scan stays exact while a row past
-    the parser bound is still scraped here (bound-divergence test).
+    is the bug. Furniture (explicit, justified): with the any-gap +
+    full-remainder shape, the four Note1/Note2 prose lines below match
+    structurally (single-space ``name code`` + remainder), so they are
+    excluded by EXACT full-line pins — the stripped furniture lines
+    verbatim from the snapshot, never patterns. The parser keeps its
+    line-start _ERR_FURNITURE_RES patterns (``shutdown\\b`` etc.); the
+    scraper shares NONE of them by construction, so a future colliding
+    fault line (e.g. "shutdown fault 99", see the furniture-divergence
+    test) matches no exact pin here while the parser still drops it —
+    scraped-but-unparsed, failing loudly instead of agreed-missing.
+    Header/prose lines that carry no ``name code`` shape ("The error code
+    ..." header, "the possible values.", "not persistent.", "HSDS") need
+    no pin (verified non-matching on the snapshot). Verified exact
+    against the snapshot ERR section with a WIDER bound than the parser
+    (scraper scans to "Historical data" prose, parser stops at "^HSDS$"
+    — see test_error_codes_full_coverage): the extra HSDS header + blank
+    + notes carry no unscratched ``name code`` pattern once
+    furniture-pinned, so the wider scan stays exact while a row past the
+    parser bound is still scraped here (bound-divergence test).
     Zero-diff: all 20 snapshot ERR names start with a letter and carry no
     trailing prose (verified). Gap independence is preserved (scraper
     ``\\s+`` vs parser ``\\s{2,}``): a single-space row still diverges (see
     test_error_counter_single_space_divergence)."""
-    _note_deny = (
-        re.compile(r"^\s*Note\d+:"),
-        re.compile(r"^\s*MPPT charger"),
-        re.compile(r"^\s*shutdown\b"),
-        re.compile(r"^\s*not persistent"),
-        re.compile(r"^\s*the possible values"),
-        re.compile(r"^\s*The error code"),
-        re.compile(r"^\s*HSDS\b"),
-    )
+    # Exact full-line furniture pins (stripped snapshot lines verbatim):
+    # Note1/Note2 prose ("Note1: Error 19 can ...", "MPPT charger. Since
+    # version ...", "Note2: Error 21 ...", "shutdown of the ...") is the
+    # complete set of snapshot non-row lines matching the structural shape
+    # (verified: every other wide-section line is either a real row or
+    # shape-mismatched). A reworded future note matches no pin and scrapes
+    # loudly (over-inclusion); a colliding future fault line likewise.
+    _furniture_lines = frozenset({
+        "Note1: Error 19 can be ignored, this condition regularly occurs during start-up or shutdown of the",
+        "MPPT charger. Since version 1.15 this error will no longer be reported.",
+        "Note2: Error 21 can be ignored for 5 minutes, this condition regularly occurs during start-up or",
+        "shutdown of the MPPT charger. Since version 1.16 this warning will no longer be reported when it is",
+    })
     found: dict[int, str] = {}
     for line in section.splitlines():
-        if any(rx.match(line) for rx in _note_deny):
+        if line.strip() in _furniture_lines:
             continue
         m = re.match(r"^\s*(.+?)\s+(\d{1,3})\b.*$", line)
         if m:
@@ -929,7 +932,13 @@ class TestSpecParsers(unittest.TestCase):
         denylist that merely trades one blind spot for another. Line-leading
         tailless stays (issue-4 fix); mid-line tailless stays pinned here —
         do not widen without replacing this pin with a strictly better
-        zero-FP mechanism. Documents exactly what shape is uncovered."""
+        zero-FP mechanism. Documents exactly what shape is uncovered.
+        Cycle-15 re-report ("Some prose 60961 Future ..." probe): re-ran
+        the probe synthetically — still missed by ALL scans/parsers — and
+        re-ran the footer false-positive evidence below (still non-zero on
+        BlueSolar/BMV/Phoenix via "1351 JG Almere"), so the pin STANDS by
+        evidence; the re-reported probe is cited here as additional
+        confirmation, not a fix."""
         probe = "Some prose 60961 Future history record mention\n"
         self.assertEqual(scrape_decimal_ids(probe), set())
         self.assertNotIn(60961, scrape_doc_ids(probe))
@@ -937,6 +946,17 @@ class TestSpecParsers(unittest.TestCase):
             60961,
             BlueSolarHEXParser(
                 "Restore factory defaults\n" + probe + "1.2 Asynchronous items\n"
+            ).parse_registers(),
+        )
+        # Cycle-15 re-reported wording (same uncovered shape): still missed
+        # by every scan while counts stay green — additional confirmation.
+        probe15 = "Some prose 60961 Future fault mention\n"
+        self.assertEqual(scrape_decimal_ids(probe15), set())
+        self.assertNotIn(60961, scrape_doc_ids(probe15))
+        self.assertNotIn(
+            60961,
+            BlueSolarHEXParser(
+                "Restore factory defaults\n" + probe15 + "1.2 Asynchronous items\n"
             ).parse_registers(),
         )
         # Evidence: naive mid-line tailless widening false-positives on
@@ -2349,9 +2369,14 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(scraped[99], "2Fast Mode")
         parsed = VEDirectTextParser(section).parse_cs_states()
         self.assertEqual(parsed[99], "2Fast Mode")
-        # Controls: footnote still excluded (leading paren, not alnum).
+        # Controls: a footnote WITH a code ("(1) Load search 98 •",
+        # snapshot footnote carries none) is scraped here (no content
+        # guards by construction) while the parser's leading-"(" blanket
+        # still drops it — divergence, failing loudly instead of
+        # agreed-missing. Zero-diff on the snapshot footnote (no code)
+        # is pinned by test_cs_states_full_coverage.
         foot = section + "                        (1) Load search                     98     •\n"
-        self.assertNotIn(98, scrape_doc_cs_codes(foot))
+        self.assertEqual(scrape_doc_cs_codes(foot)[98], "(1) Load search")
         self.assertNotIn(98, VEDirectTextParser(foot).parse_cs_states())
 
     def test_tolerant_cs_leading_digit_exact(self):
@@ -2458,10 +2483,13 @@ class TestSpecParsers(unittest.TestCase):
             "                       The error code dummy\n"
         )
         self.assertEqual(tolerant_cs_states(probe), {99: "+Boost Mode"})
-        # Controls: footnote still excluded on line-anchored sides (explicit
-        # paren denylist, never a real state); tolerant snapshot stays exact.
+        # Controls: a footnote WITH a code ("(1) Load search 98 •",
+        # snapshot footnote carries none) is scraped here (no content
+        # guards by construction) while the parser's leading-"(" blanket
+        # still drops it — divergence, failing loudly; tolerant snapshot
+        # stays exact.
         foot_cs = cs_sec + "                        (1) Load search                     98     •\n"
-        self.assertNotIn(98, scrape_doc_cs_codes(foot_cs))
+        self.assertEqual(scrape_doc_cs_codes(foot_cs)[98], "(1) Load search")
         self.assertNotIn(98, VEDirectTextParser(foot_cs).parse_cs_states())
         self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
         text = self.raw_texts["text"]
@@ -2504,10 +2532,13 @@ class TestSpecParsers(unittest.TestCase):
             "                       The error code dummy\n"
         )
         self.assertEqual(tolerant_cs_states(probe), {99: "*Boost"})
-        # Controls: footnote still excluded on line-anchored sides (explicit
-        # paren denylist); snapshots carry no leading-symbol rows.
+        # Controls: a footnote WITH a code ("(1) Load search 98 •",
+        # snapshot footnote carries none) is scraped here (no content
+        # guards by construction) while the parser's leading-"(" blanket
+        # still drops it — divergence, failing loudly; snapshots carry no
+        # leading-symbol rows.
         foot_cs = cs_sec + "                        (1) Load search                     98     •\n"
-        self.assertNotIn(98, scrape_doc_cs_codes(foot_cs))
+        self.assertEqual(scrape_doc_cs_codes(foot_cs)[98], "(1) Load search")
         self.assertNotIn(98, VEDirectTextParser(foot_cs).parse_cs_states())
         text = self.raw_texts["text"]
         pos = text.find("The state of operation. See the table below")
@@ -2549,6 +2580,74 @@ class TestSpecParsers(unittest.TestCase):
             "                       ERR\n"
         )
         self.assertIn(99, VEDirectTextParser(inside).parse_cs_states())
+
+    def test_cs_furniture_divergence(self):
+        """Proves the CS header/furniture guards are no longer identical on
+        parser, scraper, AND tolerant extractor: synthetic colliding state
+        lines ("Orbit Bit mode 99" vs the "Bit" substring guard,
+        "Re-register fault 99" vs the "register" substring guard, "(Boost)
+        99" vs the leading-"(" blanket) were missed by all three while
+        EXPECTED_CS stayed green (reproduced synthetically before the
+        fix). The scraper now keeps everything matching the structural row
+        shape (no content guards) and the tolerant extractor carries its
+        own differently-justified guards (no "Bit"/"register" substring —
+        the header carries no code+bullet so the shape never matches it;
+        leading "(" allowed except "(digit" footnote references, so
+        "(Boost)" recovers exact while live "(1)  Fault" still resolves to
+        "Fault"), so both recover the colliding lines exact while the
+        parser keeps its guards and still drops them — divergence, failing
+        loudly instead of agreed-missing. A colliding live-joined line
+        (single-line ``\\x95`` bullets, no layout) is likewise recovered by
+        the tolerant extractor but missed by the parser, so live agreement
+        can no longer hide it silently. Controls: snapshot scans stay
+        exactly the 15 EXPECTED_CS states on all three sides, and the live
+        footnote merge still resolves (see also the live-agreement test)."""
+        from fetch_specs import tolerant_cs_states
+
+        def _section(name: str, code: int = 99) -> str:
+            pad = " " * max(2, 45 - len(name))
+            return (
+                "The state of operation. See the table below\n"
+                "                        Off                                   0      •\n"
+                f"                        {name}{pad}{code}     •\n"
+            )
+
+        for name in ("Orbit Bit mode", "Re-register fault", "(Boost)"):
+            with self.subTest(name=name):
+                sec = _section(name)
+                self.assertEqual(scrape_doc_cs_codes(sec)[99], name)
+                self.assertNotIn(99, VEDirectTextParser(sec).parse_cs_states())
+                live_style = (
+                    "The state of operation dummy "
+                    f"Off 0 \x95 {name} 99 \x95"
+                    "                       The error code dummy\n"
+                )
+                self.assertEqual(tolerant_cs_states(live_style)[99], name)
+        # Snapshot-layout tolerant probes recover exact too.
+        for name in ("Orbit Bit mode", "Re-register fault", "(Boost)"):
+            with self.subTest(layout=name):
+                probe = _section(name) + "                       The error code dummy\n"
+                self.assertEqual(tolerant_cs_states(probe)[99], name)
+        # Controls: snapshot stays exactly 15 on all three sides.
+        self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
+        text = self.raw_texts["text"]
+        pos = text.find("The state of operation. See the table below")
+        tail = text[pos:]
+        m_wide = re.search(r"The error code of the device", tail)
+        self.assertIsNotNone(m_wide)
+        self.assertEqual(scrape_doc_cs_codes(tail[: m_wide.start()]), EXPECTED_CS)
+        self.assertEqual(self.specs["text"].parse_cs_states(), EXPECTED_CS)
+        # Live footnote merge still resolves to the real state (the
+        # "(digit"-gated paren, not a blanket, keeps "(1)" out without
+        # losing "Fault 2").
+        merged = (
+            "The state of operation dummy Off 0 \x95 Low power 1 \x95 "
+            "(1)  Fault 2 \x95 Bulk 3 \x95"
+            "                       The error code dummy\n"
+        )
+        live_states = tolerant_cs_states(merged)
+        self.assertEqual(live_states[2], "Fault")
+        self.assertNotIn("(1)  Fault", live_states.values())
 
     def test_error_codes_full_coverage(self):
         """parse_errors must cover the whole section incl. 66/67/68/116/117/119."""
@@ -2695,10 +2794,11 @@ class TestSpecParsers(unittest.TestCase):
         before the fix). Both sides now capture the full remainder through
         end-of-line (no tail restriction) with the code extracted
         positionally, so the probe passes honestly with name "Future fault"
-        (trailing prose is not part of the name) on both sides. Note prose
-        stays out via the anchored content denylist on both sides (verified
-        below). Zero-diff: no snapshot ERR row carries trailing prose (20
-        exact, pinned by test_error_codes_full_coverage)."""
+        (trailing prose is not part of the name) on both sides. Snapshot
+        furniture stays out of the scraper via exact-line pins (verified
+        below); the parser keeps its anchored patterns. Zero-diff: no
+        snapshot ERR row carries trailing prose (20 exact, pinned by
+        test_error_codes_full_coverage)."""
         section = (
             "The error code of the device (relevant when the device is in the fault state)\n"
             "                        No error                                                            0\n"
@@ -2706,22 +2806,76 @@ class TestSpecParsers(unittest.TestCase):
         )
         self.assertEqual(scrape_doc_error_codes(section)[99], "Future fault")
         self.assertEqual(VEDirectTextParser(section).parse_errors()[99], "Future fault")
-        # Controls: note lines stay excluded on both sides (content
-        # denylist, not tail shape), and snapshots carry no trailing prose.
+        # Controls: snapshot-exact furniture is pinned out of the scraper
+        # (exact lines, not patterns) and out of the parser (patterns); a
+        # REWORDED note matches no pin and scrapes loudly while the parser
+        # still drops it (divergence, not agreed-missing). Snapshots carry
+        # no trailing prose.
         notes = (
             "The error code of the device (relevant when the device is in the fault state)\n"
             "                        No error                                                            0\n"
             "                       Note1: Error 19 can be ignored, this condition regularly occurs\n"
             "                       MPPT charger. Since version 1.15 this error will no longer be reported.\n"
         )
-        self.assertNotIn(19, scrape_doc_error_codes(notes))
+        # Truncated Note1 ("... regularly occurs", not the snapshot-exact
+        # "... during start-up or shutdown of the") matches no pin:
+        # scraped here, still dropped by the parser's Note pattern.
+        self.assertEqual(scrape_doc_error_codes(notes)[19], "Note1: Error")
         self.assertNotIn(19, VEDirectTextParser(notes).parse_errors())
+        # Snapshot-exact MPPT continuation stays pinned on both sides.
         self.assertNotIn(1, scrape_doc_error_codes(notes))
         text = self.raw_texts["text"]
         pos = text.find("The error code of the device (relevant when the device is in the fault state)")
         tail = text[pos:]
         err_section = tail[: tail.find("HSDS") if "HSDS" in tail else len(tail)]
         self.assertFalse(any(re.search(r"\d{1,3}\s+\(", line) for line in err_section.splitlines()))
+
+    def test_error_furniture_divergence(self):
+        """Proves the ERR scraper no longer shares the parser's furniture
+        denylist: a synthetic fault line starting with a denylisted word
+        ("shutdown fault 99", colliding with the parser's ``shutdown\\b``
+        furniture pattern) is missed by the parser yet scraped here with
+        its exact name — scraped-but-unparsed, failing loudly via
+        set-equality instead of agreed-missing while EXPECTED_ERRORS stays
+        green (reproduced synthetically before the fix: both sides missed
+        it). The scraper keeps everything matching the structural row shape
+        and excludes furniture only by exact full-line pins, so the
+        colliding line matches no pin. Parser keeps its guards. Controls:
+        the four exact pins occur verbatim in the snapshot ERR section
+        (pins are load-bearing, not dead) and the snapshot-wide scan stays
+        exactly the 20 EXPECTED_ERRORS."""
+        section = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        shutdown fault                                                      99\n"
+        )
+        self.assertEqual(scrape_doc_error_codes(section)[99], "shutdown fault")
+        self.assertNotIn(99, VEDirectTextParser(section).parse_errors())
+        # Same collision through the denylisted header word.
+        section2 = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        The error code fault                                                99\n"
+        )
+        self.assertEqual(scrape_doc_error_codes(section2)[99], "The error code fault")
+        self.assertNotIn(99, VEDirectTextParser(section2).parse_errors())
+        # Pins are load-bearing: each occurs verbatim in the snapshot ERR
+        # section (a doc rewording fails here for re-triage AND scrapes
+        # loudly as an unpinned line).
+        text = self.raw_texts["text"]
+        pos = text.find("The error code of the device (relevant when the device is in the fault state)")
+        tail = text[pos:]
+        wide = tail[: tail.find("Historical data")]
+        for pin in (
+            "Note1: Error 19 can be ignored, this condition regularly occurs during start-up or shutdown of the",
+            "MPPT charger. Since version 1.15 this error will no longer be reported.",
+            "Note2: Error 21 can be ignored for 5 minutes, this condition regularly occurs during start-up or",
+            "shutdown of the MPPT charger. Since version 1.16 this warning will no longer be reported when it is",
+        ):
+            self.assertIn(pin, wide, f"furniture pin drifted from snapshot: {pin[:40]}...")
+        # Zero-diff: snapshot-wide scan stays exactly the 20 doc errors.
+        self.assertEqual(scrape_doc_error_codes(wide), EXPECTED_ERRORS)
+        self.assertEqual(self.specs["text"].parse_errors(), EXPECTED_ERRORS)
 
     def test_capabilities_against_doc(self):
         """Capability bits asserted against the doc maps (incl. Orion 28-31)."""

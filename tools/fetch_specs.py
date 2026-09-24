@@ -828,28 +828,47 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
     yields exactly the 15 states on both (verified live==snapshot 2026-09-24).
     Over-inclusion is safe (extra hits fail loudly). The name is structural:
     EVERYTHING before the trailing code with no character-class restriction
-    (any characters except the row delimiters ``•``/``\\x95``/newline and the
-    footnote-furniture parens, see below), so a future ``*Boost 99`` /
-    ``V:PV 99`` / ``Charge:Fast 99`` state recovers EXACT (the old closed
-    ``[+A-Za-z0-9][A-Za-z /()\\-]*?`` silently misnamed ``*Boost 99`` as
-    ``Boost``, agreeing green with the true name lost). Bullets/newlines are
-    delimiters (never name characters: a state is one row); ``(``/``)`` are
-    excluded as footnote-furniture markers (live merges the "(1) Load search"
-    footnote into the Fault chunk as ``... 1 \\x95 (1)  Fault 2 ...`` — an
-    open leading paren would swallow "(1)  Fault" as the name and lose real
-    "Fault 2" silently). Denylists (justified): ``(?<!\\()`` plus the paren
-    exclusion keep the ``(1)`` footnote out (without the lookbehind a
-    leading-digit widening starts inside ``(1)`` yielding ``1) Fault`` and
-    loses real ``Fault 2``; the lookbehind forces the match to start at
-    ``Fault``); ``\\d+\\)``/``(\\d+)`` content guards reject bare
-    enumerations and merged footnote references; ``Bit``/``register`` guard
-    excludes headers; and the ``MPPT Inverter Charger`` device-header prefix
-    contaminating the first live chunk is stripped (substring strip: the open
-    interior also spans the section preamble on snapshot text, so the strip
-    is a contains-strip, verified exact on both). A future real state
-    starting with "(" would be missed here but caught by the line-anchored
-    parser/scraper (footnote carries no code there), failing loudly as
-    divergence instead of agreeing silently. Never raises.
+    except the row delimiters ``•``/``\x95``/newline and the closing paren
+    (leading ``(`` is allowed, see below), so a future ``*Boost 99`` /
+    ``V:PV 99`` / ``Charge:Fast 99`` / ``(Boost) 99`` state recovers EXACT
+    (the old closed ``[+A-Za-z0-9][A-Za-z /()\\-]*?`` silently misnamed
+    ``*Boost 99`` as ``Boost``, agreeing green with the true name lost;
+    the old leading-paren exclusion misnamed ``(Boost) 99`` as ``oost)``).
+    Bullets/newlines are delimiters (never name characters: a state is one
+    row); ``)`` stays excluded as a first character so a match can never
+    start mid-footnote at the closing paren, and ``(`` is allowed as a
+    first character ONLY when not followed by a digit (live merges the
+    "(1) Load search" footnote into the Fault chunk as ``... 1 \\x95 (1)
+    Fault 2 ...`` — a plain open paren matches "(1)  Fault" as the name
+    and CONSUMES the trailing bullet, so the ``(\\d+)`` content guard can
+    only reject it after real "Fault 2" is already lost silently; gating
+    "(digit" at the first character instead means the match never starts
+    at "(1)" and the engine recovers "Fault" exact from the same chunk,
+    verified below). Guards (own
+    set, deliberately NOT the parser/scraper guards: the line-anchored
+    parser keeps its "Bit"/"register" substring and leading-"(" blanket,
+    the scraper keeps nothing — each side is shaped differently so a
+    colliding future line diverges loudly instead of agreeing silently):
+    ``(?<!\\()`` plus the ``(\\d+)`` reference guard keep the ``(1)``
+    footnote out (without the lookbehind a leading-digit widening starts
+    inside ``(1)`` yielding ``1) Fault`` and loses real ``Fault 2``; the
+    lookbehind forces the match to start at ``Fault``; a "(1)  Fault"
+    swallow is rejected as a digit-paren reference, then ")  Fault" cannot
+    start at ``)``, so the match starts at ``Fault``); ``^\\d+\\)`` rejects
+    bare enumerations (real snapshot footnote carries no code/bullet, so
+    zero-diff); NO "Bit"/"register" substring guard — the section header
+    carries no code+bullet so the structural shape never matches it
+    (verified zero-diff on snapshot AND live 15==15), and a substring would
+    hide future real states such as "Orbit Bit mode 99" /
+    "Re-register fault 99" on all three sides at once (see the
+    furniture-divergence test: tolerant and scraper recover them while the
+    parser drops them). Likewise NO leading-"(" blanket — only
+    digit-paren references are furniture (real snapshot names carry no
+    "(N)"), so "(Boost)" recovers exact here while the parser still drops
+    it. The ``MPPT Inverter Charger`` device-header prefix contaminating
+    the first live chunk is stripped (substring strip: the open interior
+    also spans the section preamble on snapshot text, so the strip is a
+    contains-strip, verified exact on both). Never raises.
     """
     try:
         if not text:
@@ -861,7 +880,7 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
         m_end = tail.find("The error code")
         sec = tail[:m_end] if m_end > 0 else tail[:5000]
         found: dict[int, str] = {}
-        for m in re.finditer(r"(?<!\()([^\s()\x95•][^\x95•\n]*?)\s+(\d{1,3})\s*[\x95•]", sec):
+        for m in re.finditer(r"(?<!\()((?:\([^\d\s)\x95•\n]|[^\s()\x95•])[^\x95•\n]*?)\s+(\d{1,3})\s*[\x95•]", sec):
             name = m.group(1).strip()
             # Live first chunk merges the section preamble and device header
             # ("... possible values. MPPT Inverter Charger Off"): strip
@@ -871,7 +890,19 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
             # too, yielding the same prefix on both sides).
             if "MPPT" in name and "Charger" in name:
                 name = name.split("Charger", 1)[1].strip()
-            if not name or "Bit" in name or "register" in name:
+            if not name:
+                continue
+            # Backup for a bare "1) ..." enumeration without "(" (the
+            # lookbehind already blocks "(1)" -> "1) ..."; real snapshot
+            # footnote carries no code/bullet, so zero-diff). Footnote
+            # references merged into a name ("(1) Fault") are furniture,
+            # never a real state (real snapshot names carry no "(N)").
+            # Deliberately NOT a leading-"(" blanket like the parser's:
+            # only digit-paren references are furniture, so "(Boost)"
+            # recovers exact here while the parser drops it (divergence).
+            if re.match(r"^\d+\)", name):
+                continue
+            if re.search(r"\(\d+\)", name):
                 continue
             # Backup for a bare "1) ..." enumeration without "(" (the
             # lookbehind already blocks "(1)" -> "1) ..."; real snapshot
