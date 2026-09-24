@@ -943,7 +943,12 @@ def _bmv_dtype_tail_valid(rest: List[str]) -> bool:
     if any(".." in p for p in rest):
         return True  # settings Range cell (Default/Step/Unit follow)
     first = rest[0].strip()
-    if re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", first):
+    # Parenthesized scale cell ("(0.1)", cf. Phoenix p4_try and the BMV
+    # Step cell): strip one outer pair before the strict shape so a
+    # parenthesized factor counts as a valid tail (anchor selection).
+    # Zero-diff: no snapshot tail is parenthesized (verified).
+    first_try = _strip_one_paren(first)
+    if re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", first_try):
         return True  # short-layout scale factor, possibly unit-glued
     if first in ("V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"):
         return True  # short-layout bare unit (same vocabulary as below)
@@ -1117,6 +1122,14 @@ class BMV7xxHEXParser:
                 is_write_only = bool(_WRITE_ONLY_RE.search(desc))
                 for j, p in enumerate(rest):
                     p_clean = p.strip()
+                    # Parenthesized scale cell ("(0.1)", cf. Phoenix p4_try
+                    # and the BMV Step cell): strip one outer pair and parse
+                    # honestly instead of leaking into scale None with empty
+                    # gates (probe "0xED8E Power 1 un16 (0.1) W" gave
+                    # scale None while SCALE_NONE_ALLOW kept the suite
+                    # green). No snapshot short-layout cell is
+                    # parenthesized (verified), so zero-diff.
+                    p_try = _strip_one_paren(p_clean)
                     if not is_write_only:
                         # Unit column holds the factor ("0.01 V" split across
                         # tokens by single-space gaps, or combined "0.001A").
@@ -1125,7 +1138,7 @@ class BMV7xxHEXParser:
                         # only), so zero-diff. Comma-decimal ("0,1 V",
                         # "0,001A") parses via comma->dot; no snapshot row
                         # uses it (verified), so zero-diff.
-                        sm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?[eE][+-]?\d+)([A-Za-z%°]+)?$", p_clean)
+                        sm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?[eE][+-]?\d+)([A-Za-z%°]+)?$", p_try)
                         if sm:
                             scale = float(sm.group(1).replace(",", "."))
                             if sm.group(2):
@@ -1133,11 +1146,35 @@ class BMV7xxHEXParser:
                             elif j + 1 < len(rest) and re.fullmatch(r"[A-Za-z%°]+", rest[j + 1].strip()):
                                 unit = rest[j + 1].strip()
                             continue
+                        # Loud unknown-scale gate (Step/_split_typed_row
+                        # pattern): a parenthesized-but-unparsable
+                        # digit-bearing cell ("(1x)", double-wrapped
+                        # "((0.1))") records loudly even on allowlisted IDs
+                        # instead of dropping silently. Non-parenthesized
+                        # letter-bearing tokens (e.g. "1x") stay with the
+                        # unknown-units gate below; digit-less parens
+                        # ("(foo)") are description furniture, never a
+                        # scale. Zero-diff: no snapshot short-layout rest
+                        # token is parenthesized-digit-bearing (verified).
+                        if (
+                            p_try != p_clean
+                            and re.search(r"\d", p_clean)
+                            and "*" not in p_clean
+                            and not re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?[eE][+-]?\d+)([A-Za-z%°]+)?$", p_try)
+                        ):
+                            if (rid, p_clean) not in self.unknown_scales:
+                                self.unknown_scales.append((rid, p_clean))
+                            continue
                     if p_clean in ["V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"]:
                         unit = p_clean
                 if unit is None:
                     for p in rest:
                         cand = p.strip()
+                        # Scale-gated parenthesized tokens (recorded above)
+                        # belong to the scale gate, never the units gate
+                        # ("(1x)" would otherwise record in both).
+                        if (rid, cand) in self.unknown_scales:
+                            continue
                         # Footnote-glued unknowns ("Hz11"): strip trailing
                         # footnote run for the letter check but record raw.
                         shape = re.sub(r"\d[\d\s,]*$", "", cand).strip() or cand

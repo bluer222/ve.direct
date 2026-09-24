@@ -4207,6 +4207,54 @@ class TestSpecParsers(unittest.TestCase):
         bmv_bad.parse_registers()
         self.assertEqual(bmv_bad.unknown_scales, [(0xEDD0, "(1x)")])
 
+    def test_bmv_short_layout_parenthesized_scale(self):
+        """BMV short-layout parenthesized scales parse honestly (not silent None).
+        Probe ``0xED8E Power 1 un16 (0.1) W`` yielded scale None with empty
+        unknown_units and unknown_scales — the space-separated ``(0.1)``
+        matched neither the short-layout factor regex nor the letter-bearing
+        unknown-unit gate — while SCALE_NONE_ALLOW (0xED8E, bare "W") kept
+        the suite green; every sibling branch (BlueSolar/Orion via
+        ``_strip_one_paren`` in ``_split_typed_row``, Phoenix ``p4_try``,
+        BMV settings-Step) already paren-stripped — reproduced synthetically
+        before the fix. The short-layout branch now paren-strips then parses,
+        with unparsable parenthesized content recording via the
+        unknown_scales loud gate. Zero-diff: no snapshot short-layout cell
+        is parenthesized, snapshots stay 110 with empty gates, and 0xED8E
+        parses as today (scale None, unit "W")."""
+        from spec_parser import BMV7xxHEXParser
+
+        # Zero-diff: snapshot gates empty, count unchanged, 0xED8E as today.
+        self.assertEqual(self.specs["bmv"].unknown_units, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        self.assertEqual(len(self.bmv_regs), EXPECTED_COUNTS["bmv"])
+        snap = self.bmv_regs[0xED8E]
+        self.assertIsNone(snap.scale)
+        self.assertEqual(snap.unit, "W")
+        # Probe: parenthesized factor parses honestly with no record.
+        parser = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 (0.1) W\nftr")
+        probe = parser.parse_registers()[0xED8E]
+        self.assertAlmostEqual(probe.scale, 0.1)
+        self.assertEqual(probe.unit, "W")
+        self.assertEqual(parser.unknown_scales, [])
+        self.assertEqual(parser.unknown_units, [])
+        # Loud gate: parenthesized-but-unparsable records scale-side only.
+        bad = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 (1x) W\nftr")
+        bad.parse_registers()
+        self.assertEqual(bad.unknown_scales, [(0xED8E, "(1x)")])
+        self.assertEqual(bad.unknown_units, [])
+        # Control: plain factor still parses; bare unit row unchanged.
+        ctrl = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 0.1 W\nftr")
+        self.assertAlmostEqual(ctrl.parse_registers()[0xED8E].scale, 0.1)
+        self.assertEqual(ctrl.unknown_scales, [])
+        bare = BMV7xxHEXParser(
+            "hdr\n0xED8E        Power                                            -         Sn16   W\nftr"
+        )
+        bare_regs = bare.parse_registers()
+        self.assertIsNone(bare_regs[0xED8E].scale)
+        self.assertEqual(bare_regs[0xED8E].unit, "W")
+        self.assertEqual(bare.unknown_scales, [])
+        self.assertEqual(bare.unknown_units, [])
+
     def test_orion_single_field_dtype_case_insensitive(self):
         """Orion single-field Bytes dtype matches case-insensitively.
         Probe row ``0 Count 1 UN16`` yielded (None, None) vs lowercase
