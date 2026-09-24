@@ -196,6 +196,74 @@ def count_doc_field_labels(section: str) -> set[str]:
     }
 
 
+def scrape_spaced_label_candidates(section: str) -> set[str]:
+    """Multi-token label candidates: first-two-tokens of label-row-shaped lines.
+
+    The parser takes the label as the first token before a 2+-space column
+    gap (``(\\S+)\\s{2,}``) and count_doc_field_labels takes the first token
+    before any gap, so an interior-space label colliding with an existing
+    label (probe rows ``V`` + ``V PV  mV  Future spaced label``) dedups to
+    ``{'V'}`` on the counter while the parser never matches the spaced line
+    — label sets + count 63 stay green while a field is missed (reproduced
+    synthetically before the fix). This scraper records the first TWO tokens
+    (``V PV``) wherever a 2+-space column gap follows them, so the colliding
+    candidate the parser drops fails the suite loudly via the
+    candidates-resolved assertion (unresolved = candidates − parsed −
+    flagged must stay empty). Shape justification (zero-FP on snapshots):
+    table-region only (the fields section between the units intro and
+    Table I, like the counter), 2+-space column gap required (single-space
+    prose like "Available on ..." misses it — the gap axis already covered
+    by test_text_field_counter_gap_divergence), and the counter's exact
+    furniture pins + content-denied starters are mirrored so footnote and
+    continuation prose cannot trip it. Verified: zero candidates on the
+    current snapshot section (no snapshot line carries two tokens before a
+    column gap). Over-inclusion is the safe direction: a future
+    two-token prose line with a column gap records loudly for triage
+    instead of hiding a colliding label."""
+    _furniture_lines = frozenset({
+        "Label          Units                               Description                                 BMV          BMV          BMV71x           MPPT 1        Phoenix         Phoenix          Smart",
+        "Label                 Units                                Description                       BMV          BMV          BMV71x        MPPT 1   Phoenix    Phoenix     Smart",
+        "Label                 Units                              Description               BMV   BMV    BMV71x      MPPT 1   Phoenix    Phoenix     Smart",
+        "60x          70x         SmartShunt                      Inverter        Charger        BuckBoost",
+        "60x          70x         SmartShunt              Inverter   Charger   BuckBoost",
+        "60x   70x   SmartShunt            Inverter   Charger   BuckBoost",
+        "The units used by the serial interface are as follows:",
+        "The VE.Direct protocol is available in the MPPT 70/15 since firmware version v1.09 and up, and only in newer type MPPT 70/15s: the ones with a product id other than 0x300. The first",
+        "Available on BlueSolar mppt chargers since firmware version v1.16",
+        "Available on BlueSolar mppt chargers since firmware version v1.37",
+        "Available on Phoenix Inverter (some models) since firmware version v1.16",
+        "Available on Phoenix Inverter v1.16",
+        "Available on Phoenix Smart Chargers with triple outputs only",
+        "Available on Smart Phoenix Inverter",
+        "Available on SmartSolar mppt chargers since firmware version v1.17",
+        "Available on SmartSolar mppt chargers since firmware version v1.44 (VE.Direct models) and v1.03 (SmartSolar VE.Can models)",
+        "Available since version v1.12, and only for models with a load output.",
+        "Available since version v1.15, and only for models with a load output.",
+        "Available since version v4.08",
+        "Available when the AUX input is configured as Mid Point",
+        "Available when the AUX input is configured as Starter Battery",
+        "Available when the AUX input is configured as Temperature",
+        "When configured as DC monitor, “---” will be sent instead of a value.",
+        "When no temperature sensor is connected, “---” will be sent instead of a value.",
+        "When the BMV is not synchronised, these statistics have no meaning, so “---” will be sent instead of a value.",
+        "When the battery is not discharging the time- to-go is infinite. This is represented as -1.",
+        "Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands",
+        "General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com",
+    })
+    _deny = {
+        "the", "batches,",  # footnote prose starters
+        "Amount", "Depth", "Number",  # description-continuation starters
+    }
+    found: set[str] = set()
+    for line in section.splitlines():
+        if line.strip() in _furniture_lines:
+            continue
+        m = re.match(r"^\s*(\S+ \S+)\s{2,}", line)
+        if m and m.group(1).split()[0] not in _deny:
+            found.add(m.group(1))
+    return found
+
+
 def scrape_doc_ids(text: str) -> set[int]:
     """Independent crude ID collector: every 0xHHHH occurrence plus ".."
     range expansion. Deliberately dumber than the parser so parser drops
@@ -225,6 +293,18 @@ def scrape_doc_ids(text: str) -> set[int]:
     Verified zero-diff: no ``0x HHHH`` occurrence in any current snapshot."""
     ids = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})\b", text)}
     for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", text):
+        ids.add(int(m.group(1), 16))
+    # Bare-x typo rescue (``xEDE0``, missing leading 0), symmetric with the
+    # Orion/BlueSolar parser rescues and their doc-typo justification (cf.
+    # BlueSolar-HEX 0xEDE0 with identical metadata): the ``(?<!\\w)`` guard
+    # keeps the glued ``0xHHHH`` match from double-firing (the ``x`` inside
+    # ``0x`` is ``\\w``-preceded) while a future bare-x row is still scraped
+    # here and parsed honestly instead of agreed-missed. Verified
+    # zero-diff: the only bare-x token in any current snapshot is the real
+    # Orion ``xEDE0`` typo (now scraped-and-parsed, honest agreement — the
+    # SCRAPER_BLIND_IDS excuse for it is removed below), so prose stays
+    # clean and reverse-coverage stays green.
+    for m in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{4})\b", text):
         ids.add(int(m.group(1), 16))
     for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", text):
         a, b = int(m.group(1), 16), int(m.group(2), 16)
@@ -420,9 +500,10 @@ def scrape_doc_pid_set(text: str) -> set[int]:
 def scrape_decimal_ids(text: str) -> set[int]:
     """Independent non-hex ID scan: bare decimal IDs (any position) + spaced typos.
 
-    Parser and scrape_doc_ids both anchor on the ``0x`` prefix (only the
-    "xEDE0" rescue escapes it), so a decimal-only row ("60961 ... un16")
-    or a spaced typo ("0 xEDF0") is missed by both. This scan uses the
+    Parser and scrape_doc_ids both anchor on the ``0x`` prefix (the "xEDE0"
+    rescue is now scraped symmetrically by the bare-x halves here and in
+    scrape_doc_ids, so it escapes nothing), so a decimal-only row
+    ("60961 ... un16") or a spaced typo ("0 xEDF0") is missed by both. This scan uses the
     disjoint assumption — a 4-5 digit decimal with a table-shaped (dtype)
     tail ANYWHERE on the line (not just line-leading), or ``0 xHHHH`` — and
     therefore fails loudly where the hex strategies agree in silence. Widened
@@ -463,7 +544,25 @@ def scrape_decimal_ids(text: str) -> set[int]:
     rescues the ``0x HHHH`` split typo (``0[xX]\\s+HHHH``, cf. the
     parser's token-level rescue): "0x EDF0" is missed by the glued hex
     scrape, the dtype-tailed halves, and the single-token ID regex alike.
-    Verified zero-diff: no ``0x HHHH`` in snapshots."""
+    Verified zero-diff: no ``0x HHHH`` in snapshots.
+    The dtype-less description charset is OPEN (``[A-Za-z].*?``, any chars
+    after a letter start — the label-charset precedent): the closed class
+    (``[A-Za-z0-9 _\\-/().*]``) hid symbol descriptions on every side at
+    once (probes "60961 Future: history record" / "Future+history" /
+    "Future#1" / "A&B" missed by this scan, the hex scrape, and both
+    history parsers while counts stayed green — reproduced synthetically
+    before the fix). Denylists stay structural (line-leading table shape,
+    region-scoped year guard) so no content word is shared-blind.
+    Verified: zero hits on BlueSolar/BMV/Phoenix snapshots (before/after);
+    Orion yields exactly the real ``xEDE0`` typo via the bare-x half below
+    (parsed honestly — agreement, not divergence).
+    The bare-x typo half (``(?<!\\w)[xX]HHHH``, missing leading 0),
+    symmetric with the Orion/BlueSolar parser rescues and the hex
+    scraper's bare-x rescue above (same doc-typo justification): the
+    ``(?<!\\w)`` guard keeps the ``x`` inside glued ``0xHHHH`` from
+    double-firing while a future bare-x row is still scraped here.
+    Verified zero-diff: the only bare-x token in any current snapshot is
+    the real Orion ``xEDE0`` typo (now scraped-and-parsed)."""
     ids: set[int] = set()
     in_history = False
     for line in text.splitlines():
@@ -490,9 +589,9 @@ def scrape_decimal_ids(text: str) -> set[int]:
         ):
             ids.add(int(m_mid.group(1)))
         # Dtype-less ID-only widening (justified above): line-leading
-        # decimal + case-insensitive description, no dtype required. Year
+        # decimal + open-charset description, no dtype required. Year
         # denylist applies only outside history regions (see above).
-        m_tail = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+        m_tail = re.match(r"^\s*(\d{4,5})\s+([A-Za-z].*?)\s*$", line)
         if m_tail:
             rid = int(m_tail.group(1))
             if 1900 <= rid <= 2100 and not in_history:
@@ -503,6 +602,8 @@ def scrape_decimal_ids(text: str) -> set[int]:
             ids.add(int(m2.group(1), 16))
         for m3 in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", line):
             ids.add(int(m3.group(1), 16))
+        for m4 in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{4})\b", line):
+            ids.add(int(m4.group(1), 16))
     return ids
 
 
@@ -600,9 +701,28 @@ NON_REGISTER_IDS = {
     "phoenix": frozenset({0x0064, 0x0096, 0x0160, 0x4116, 0xAAAA, 0xD101}),
 }
 
-# Parser IDs the crude scraper cannot see (explicitly justified):
-# Orion "xEDE0" (missing leading 0 in the doc; cf. BlueSolar 0xEDE0).
-SCRAPER_BLIND_IDS = {"orion": frozenset({0xEDE0})}
+# Parser IDs the crude scraper cannot see (explicitly justified). The Orion
+# "xEDE0" (missing leading 0 in the doc; cf. BlueSolar 0xEDE0) was blind here
+# until the bare-x rescue went symmetric: both scrapers (hex + decimal) now
+# rescue bare-x like the section-table parsers, so the typo is
+# scraped-and-parsed (honest agreement) and no blind excuse remains. Keys
+# stay (empty) so the invented-ID check shape is unchanged; a future
+# scraper-blind rescue must re-add its ID here with justification instead
+# of staying green-but-missed.
+SCRAPER_BLIND_IDS = {"orion": frozenset()}
+
+# Expected scrape_decimal_ids hits per current HEX snapshot (explicit,
+# justified — the decimal-scan analogue of the empty-pin): BlueSolar/BMV/
+# Phoenix stay empty; Orion yields exactly the real ``xEDE0`` doc typo via
+# the symmetric bare-x rescue (parsed honestly by the Orion section-table
+# parser — agreement, not divergence). Any other decimal/bare-x hit on any
+# snapshot fails loudly here instead of hiding inside a bare ``set()`` pin.
+EXPECTED_DECIMAL_SCAN_HITS = {
+    "bluesolar": frozenset(),
+    "orion": frozenset({0xEDE0}),
+    "bmv": frozenset(),
+    "phoenix": frozenset(),
+}
 
 # Registers whose doc genuinely gives no numeric scale factor ("-" scale,
 # Type-only rows, bitmask/mode/struct/write-only records). Everything else
@@ -979,15 +1099,19 @@ class TestSpecParsers(unittest.TestCase):
 
     def test_decimal_id_scan_divergence(self):
         """Proves the decimal scan is independent of the shared ``0x``
-        assumption: synthetic decimal-only rows (line-leading AND mid-line)
-        are found by scrape_decimal_ids yet missed by both the parser and
-        scrape_doc_ids, i.e. they would fail loudly as scraped-but-unparsed
-        instead of being missed by both. Control: zero decimal hits on all
-        four current HEX snapshots (only the "xEDE0" rescue escapes the
-        ``0x`` assumption, and it is explicitly allowlisted)."""
+        assumption: the synthetic decimal-only row is found by
+        scrape_decimal_ids yet missed by both the parser and scrape_doc_ids,
+        i.e. it would fail loudly as scraped-but-unparsed instead of being
+        missed by both. Control: decimal hits on the four current HEX
+        snapshots are exactly EXPECTED_DECIMAL_SCAN_HITS (empty except
+        Orion's real "xEDE0" typo, now rescued symmetrically by both scrapers
+        and parsed honestly — agreement, not divergence). Note: the spaced
+        typo's ``xEDF0`` tail is now hex-scraped too via the bare-x overlap
+        (same ID, honest agreement) while the parser still misses it, so only
+        the decimal row proves hex-scraper independence here."""
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
             with self.subTest(spec=key):
-                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), set())
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
         synthetic = (
             "0xEDD3     Battery foo               0.1         un16        V\n"
             "60961      Future decimal register   0.1         un16        V\n"
@@ -998,7 +1122,9 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(60961, parsed)
         self.assertNotIn(0xEDF0, parsed)
         self.assertNotIn(60961, scrape_doc_ids(synthetic))
-        self.assertNotIn(0xEDF0, scrape_doc_ids(synthetic))
+        # Bare-x overlap: the spaced typo's "xEDF0" tail is hex-scraped (same
+        # ID the decimal spaced-typo half finds); the parser still misses it.
+        self.assertIn(0xEDF0, scrape_doc_ids(synthetic))
 
     def test_decimal_id_midline_divergence(self):
         """Proves the widened decimal scan catches mid-line IDs missed by
@@ -1081,13 +1207,14 @@ class TestSpecParsers(unittest.TestCase):
         old dtype-tailed scan missed it too while counts stayed green — and
         the history-region parsers now handle it honestly (struct/R, like
         the hex ID-only rows) instead of staying green-but-missed. Controls:
-        zero widened-scan hits on all four current HEX snapshots (pinned
-        empty-or-same), hyphenated/bare dates stay out ("15-11-2021 some
-        change", bare "2016", "2021-09-06" carry "-" or no description, and
-        a wrapped "2016 Production ..." line is year-denylisted)."""
+        widened-scan hits on the four current HEX snapshots are exactly
+        EXPECTED_DECIMAL_SCAN_HITS (pinned), hyphenated/bare dates stay out
+        ("15-11-2021 some change", bare "2016", "2021-09-06" carry "-" or no
+        description, and a wrapped "2016 Production ..." line is
+        year-denylisted)."""
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
             with self.subTest(spec=key):
-                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), set())
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
         synthetic = "60961      Future history record\n"
         self.assertEqual(scrape_decimal_ids(synthetic), {60961})
         self.assertNotIn(60961, scrape_doc_ids(synthetic))
@@ -1124,13 +1251,13 @@ class TestSpecParsers(unittest.TestCase):
         ("-" after digits, not "\\s+[A-Za-z]"); bare years/counts miss it
         (no description); footer "1351 JG Almere" is mid-line (not
         line-leading) and outside the history region (parsers) while the
-        global scraper stays exact (verified zero hits). Zero-diff: no
-        snapshot history-region line matches the widened shape (verified),
-        and the global decimal scan stays empty on all four HEX snapshots.
-        Divergence probes with lowercase names."""
+        global scraper stays exact (verified: only Orion's rescued xEDE0).
+        Zero-diff: no snapshot history-region line matches the widened shape
+        (verified), and the global decimal scan hits are exactly
+        EXPECTED_DECIMAL_SCAN_HITS. Divergence probes with lowercase names."""
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
             with self.subTest(spec=key):
-                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), set())
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
         # Decimal lowercase probe: scraped + parsed honestly.
         self.assertEqual(scrape_decimal_ids("60961      future history record\n"), {60961})
         self.assertNotIn(60961, scrape_doc_ids("60961      future history record\n"))
@@ -1161,6 +1288,56 @@ class TestSpecParsers(unittest.TestCase):
         # Controls: dates/years stay out of the widened scan.
         self.assertEqual(scrape_decimal_ids("2016 production stopped note\n"), set())
         self.assertEqual(scrape_decimal_ids("15-11-2021 some change\n"), set())
+
+    def test_id_only_symbol_description_rescue(self):
+        """Decimal ID-only description charset excluded ``:``/``+``/``#``/``&``
+        on every side: probes ``60961 Future: history record`` /
+        ``Future+history`` / ``Future#1`` / ``A&B`` were missed by the decimal
+        scan, the hex scrape, and both history parsers (parser ID-only
+        regexes + scraper dtype-less regex shared the identical closed
+        charset) while EXPECTED_COUNTS, reverse-coverage, and the empty-pin
+        stayed green — reproduced synthetically before the fix. Scraper +
+        parsers now take the description open-charset (``[A-Za-z].*?``, any
+        chars with justified structural denylists, following the
+        label-charset precedent), so the probes pass honestly with exact
+        descriptions on all sides. Zero-diff: snapshot decimal scans are
+        exactly EXPECTED_DECIMAL_SCAN_HITS and counts stay pinned elsewhere.
+        Divergence probes with symbol descriptions."""
+        from spec_parser import OrionXSHEXParser
+
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+        for desc in ("Future: history record", "Future+history", "Future#1", "A&B"):
+            with self.subTest(desc=desc):
+                line = f"60961      {desc}\n"
+                # Decimal scan catches the ID-only row (hex scrape misses by
+                # design: no ``0x`` prefix — the dtype-less scan is the loud
+                # side for decimal IDs, as with the plain probes above).
+                self.assertEqual(scrape_decimal_ids(line), {60961})
+                self.assertNotIn(60961, scrape_doc_ids(line))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(parser=cls.__name__):
+                        text = (
+                            "Restore factory defaults\n"
+                            + line
+                            + "1.2 Asynchronous items\n"
+                        )
+                        probe = cls(text).parse_registers()[60961]
+                        self.assertEqual(probe.description, desc)
+                        self.assertIsNone(probe.scale)
+                        self.assertEqual(probe.access, "R")
+                # Hex ID-only branch carries the same widening (exact desc).
+                text_hex = (
+                    "Restore factory defaults\n"
+                    f"0x104F      {desc}\n"
+                    "1.2 Asynchronous items\n"
+                )
+                self.assertIn(0x104F, scrape_doc_ids(text_hex))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(hex_parser=cls.__name__):
+                        probe_hex = cls(text_hex).parse_registers()[0x104F]
+                        self.assertEqual(probe_hex.description, desc)
 
     def test_uppercase_0X_id_rescue_divergence(self):
         """Proves uppercase-0X IDs are rescued (not missed by all three):
@@ -1256,6 +1433,61 @@ class TestSpecParsers(unittest.TestCase):
         # Both scrapers rescue the split form (was missed by both).
         self.assertIn(0xEDF0, scrape_doc_ids("0x EDF0    Split typo  0.01  un16  A\n"))
         self.assertIn(0xEDF0, scrape_decimal_ids("0x EDF0    Split typo  0.01  un16  A\n"))
+
+    def test_bluesolar_bare_x_rescue_symmetry(self):
+        """BlueSolar bare-``x`` typo asymmetry: probe ``xEDE0 Battery low temp
+        level 0.01 un16 V`` in BlueSolar §1.1 was missed by the BlueSolar
+        section-table parser + both scrapers (the bare-x rescue existed only
+        for Orion — ``allow_bare_x_prefix`` in its section tables — with the
+        scraper miss excused in SCRAPER_BLIND_IDS) while counts stayed green
+        — reproduced synthetically before the fix. The rescue is now
+        symmetric (same doc-typo justification as the Orion rescue: missing
+        leading 0, cf. BlueSolar-HEX 0xEDE0 with identical metadata): the
+        BlueSolar parser takes ``allow_bare_x_prefix`` with the same
+        typo provenance note, and both scrapers rescue bare-x, so the probe
+        passes honestly on every side. Zero-diff either way (proved): no
+        bare-x line-start in the BlueSolar/BMV/Phoenix snapshots and no
+        bare-x token beyond the real Orion ``xEDE0`` typo anywhere, so prose
+        stays clean; the blind excuse is removed (SCRAPER_BLIND_IDS empty)
+        and reverse-coverage stays green with the typo scraped-and-parsed.
+        Divergence probe with the bare-x row."""
+        from spec_parser import OrionXSHEXParser
+
+        typed = (
+            "1.1 Get and Set items\n"
+            "xEDE0     Battery low temperature level           0.01     sn16       °C\n"
+            "1.2 Asynchronous items\n"
+        )
+        # BlueSolar parser rescues honestly (was missed before the fix).
+        bs = BlueSolarHEXParser(typed).parse_registers()[0xEDE0]
+        self.assertEqual(bs.description, "Battery low temperature level")
+        self.assertEqual(bs.data_type, "sn16")
+        self.assertAlmostEqual(bs.scale, 0.01)
+        self.assertIn("doc-typo", bs.notes)
+        # Orion parity: the same row parses there too (pre-existing rescue).
+        self.assertIn(0xEDE0, OrionXSHEXParser(typed).parse_registers())
+        # Both scrapers rescue the bare-x form (were missed by both).
+        self.assertIn(0xEDE0, scrape_doc_ids(typed))
+        self.assertIn(0xEDE0, scrape_decimal_ids(typed))
+        # Zero-diff controls: no bare-x prose anywhere that would
+        # false-positive (the sole snapshot hit is the real typo itself).
+        for key in ("bluesolar", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(
+                    re.findall(r"(?<!\w)[xX][0-9A-Fa-f]{4}\b", self.raw_texts[key]), [],
+                    f"{key} snapshot gained bare-x prose",
+                )
+        self.assertEqual(
+            re.findall(r"(?<!\w)[xX][0-9A-Fa-f]{4}\b", self.raw_texts["orion"]),
+            ["xEDE0"],
+            "orion snapshot bare-x tokens changed",
+        )
+        # The blind excuse is gone: the typo is scraped (both scrapers) and
+        # parsed, so reverse-coverage/invented checks need no carve-out.
+        self.assertEqual(SCRAPER_BLIND_IDS.get("orion", frozenset()), frozenset())
+        self.assertIn(0xEDE0, scrape_doc_ids(self.raw_texts["orion"]))
+        self.assertIn(0xEDE0, scrape_decimal_ids(self.raw_texts["orion"]))
+        self.assertIn(0xEDE0, self.or_regs)
 
     def test_write_hint_phrase_divergence(self):
         """Proves write-hint detection is phrase-guarded, not bare-substring:
@@ -1543,6 +1775,56 @@ class TestSpecParsers(unittest.TestCase):
         factored = BMV7xxHEXParser("hdr\n0x0303     Foo               -         un32        0.01 Hz\nftr")
         self.assertEqual(factored.parse_registers()[0x0303].unit, "Hz")
         self.assertEqual(factored.unknown_units, [])
+
+    def test_bmv_dtype_anchor_structural_tail(self):
+        """BMV anchor-first-wins truncated descriptions with dtype-like words:
+        probe ``0xEDD0 Battery voltage un16 type - un16 0.01 V`` anchored the
+        interior ``un16``, yielding desc 'Battery' (losing 'voltage un16
+        type') while dtype/scale/unit parsed fine and all schema asserts
+        stayed green (HEX descriptions asserted nowhere) — reproduced
+        synthetically before the fix. The anchor is now structural (the dtype
+        token followed by a valid scale+unit tail wins; fallback preserves
+        current behavior where no tail matches), so the probe keeps its full
+        description with dtype/scale/unit unchanged. Regression test with the
+        probe + control proving normal rows unchanged. Zero-diff on snapshots
+        (verified: no snapshot row carries 2+ dtype tokens, so every current
+        anchor is untouched). No full HEX description maps — the anchor fix +
+        existing gates are the proportionate scope."""
+        from spec_parser import BMV7xxHEXParser
+
+        probe = BMV7xxHEXParser(
+            "hdr\n0xEDD0 Battery voltage un16 type - un16 0.01 V\nftr"
+        ).parse_registers()[0xEDD0]
+        self.assertEqual(probe.description, "Battery voltage un16 type")
+        self.assertEqual(probe.data_type, "un16")
+        self.assertAlmostEqual(probe.scale, 0.01)
+        self.assertEqual(probe.unit, "V")
+        # Control: a normal row without a dtype-like word anchors identically
+        # (description, dtype, scale, unit all unchanged).
+        control = BMV7xxHEXParser(
+            "hdr\n0xEDD0 Battery voltage - un16 0.01 V\nftr"
+        ).parse_registers()[0xEDD0]
+        self.assertEqual(control.description, "Battery voltage")
+        self.assertEqual(control.data_type, "un16")
+        self.assertAlmostEqual(control.scale, 0.01)
+        self.assertEqual(control.unit, "V")
+        # Zero-diff evidence: no BMV snapshot table line carries 2+ dtype
+        # tokens, so the tail preference never fires on current docs (every
+        # snapshot anchor is the single candidate, as before).
+        import re as _re
+
+        from spec_parser import _DTYPE_RE
+
+        multi = []
+        for line in self.raw_texts["bmv"].splitlines():
+            toks = line.split()
+            if len(toks) < 3 or not _re.match(r"^0[xX][0-9A-Fa-f]{4}$", toks[0]):
+                continue
+            if toks[1] == "=":
+                continue
+            if len([t for i, t in enumerate(toks) if i >= 2 and _DTYPE_RE.match(t)]) >= 2:
+                multi.append(line)
+        self.assertEqual(multi, [])
 
     def test_parser_dtype_vocabulary(self):
         """Parser dtypes must use the module convention (known wire widths,
@@ -1919,6 +2201,53 @@ class TestSpecParsers(unittest.TestCase):
         )
         self.assertIn("Note", count_doc_field_labels(section))
         self.assertNotIn("Note", VEDirectTextParser(section).parse_fields())
+
+    def test_text_field_spaced_label_candidate_loud(self):
+        """Interior-space label colliding with an existing label: probe rows
+        ``V`` + ``V PV  mV  Future spaced label`` left the counter at
+        ``{'V'}`` (first token ``V`` dedups against the real V row) while the
+        parser's ``(\\S+)\\s{2,}`` never matched the spaced line — label sets
+        + count 63 stayed green while a field was missed (reproduced
+        synthetically before the fix). The counter now records multi-token
+        label candidates (first-two-tokens before the column gap) and the
+        suite asserts the parser resolves or flags every candidate, so a
+        colliding candidate the parser drops fails loudly. Zero-FP on
+        snapshots by construction (table-region + 2+-space gap + furniture
+        pins, see scrape_spaced_label_candidates): prose lines cannot trip
+        it — verified zero candidates on the current section. Divergence
+        probe with the colliding row."""
+        text = self.raw_texts["text"]
+        start = text.find("The units used by the serial interface are as follows:")
+        end = text.find("Table I Supported Text-mode fields")
+        snap_section = text[start:end]
+        # Zero-FP pin: no spaced-label candidates on the current snapshot.
+        self.assertEqual(scrape_spaced_label_candidates(snap_section), set())
+        # Loud gate on the snapshot (green now, fails on a future collision):
+        # every candidate must be parser-resolved or flagged.
+        snap_fields = self.text_fields
+        snap_flagged = {label for label, _ in self.specs["text"].unknown_units}
+        unresolved = scrape_spaced_label_candidates(snap_section) - set(snap_fields) - snap_flagged
+        self.assertEqual(unresolved, set())
+        # Colliding probe: counter dedups to {'V'} and the parser drops the
+        # spaced line (old gates stay green), but the candidate axis fires.
+        # (Counter slice excludes the Table-I end marker, exactly like the
+        # real text-protocol check; the parser takes the full marked text.)
+        full = (
+            "The units used by the serial interface are as follows:\n"
+            "             V                   mV                       Main voltage\n"
+            "             V PV  mV  Future spaced label\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        section = full[: full.find("Table I Supported Text-mode fields")]
+        self.assertEqual(count_doc_field_labels(section), {"V"})
+        fields = VEDirectTextParser(full).parse_fields()
+        self.assertEqual(set(fields), {"V"})
+        candidates = scrape_spaced_label_candidates(section)
+        self.assertEqual(candidates, {"V PV"})
+        # The loud assertion triggers on the probe: the colliding candidate
+        # is neither parsed nor flagged, so the suite would fail here.
+        flagged = {label for label, _ in VEDirectTextParser(full).unknown_units}
+        self.assertEqual(candidates - set(fields) - flagged, {"V PV"})
 
     def test_text_field_label_charset_hyphen_dot(self):
         """Shared label charset hid hyphen/dotted future labels on both
@@ -3610,11 +3939,11 @@ class TestSpecParsers(unittest.TestCase):
         matches even without the guard (verified zero-diff), so the probe
         scrapes + parses honestly; outside regions year prose ("2016
         Production stopped note", bare "2016", hyphenated dates) stays
-        denied. Zero-diff: decimal scan stays empty on all four HEX
-        snapshots."""
+        denied. Zero-diff: decimal-scan hits are exactly
+        EXPECTED_DECIMAL_SCAN_HITS on the four HEX snapshots."""
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
             with self.subTest(spec=key):
-                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), set())
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
         # Probe inside region: scraped + parsed honestly (both parsers).
         probe = (
             "Restore factory defaults\n"

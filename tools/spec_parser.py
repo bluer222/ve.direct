@@ -372,8 +372,16 @@ class BlueSolarHEXParser:
         for line in section.splitlines():
             # Split-typo IDs ("0x HHHH") pass the same gate: the optional
             # inner whitespace mirrors the _split_typed_row rescue (zero-diff:
-            # no snapshot line matches the split form, verified).
-            if not re.match(r"^\s*0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4})\b", line):
+            # no snapshot line matches the split form, verified). Bare-x
+            # typo IDs ("xEDE0", missing leading 0) pass it too, symmetric
+            # with the Orion section-table rescue (same doc-typo
+            # justification: cf. BlueSolar-HEX 0xEDE0 with identical
+            # metadata): a future bare-x row here parses instead of being
+            # missed by the parser while counts stay green. Zero-diff: no
+            # bare-x line-start in the BlueSolar snapshot (verified), so no
+            # prose false positives; the 0x prose-note guards below are
+            # unaffected (bare-x lines never match them).
+            if not re.match(r"^\s*(?:0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4})|[xX][0-9A-Fa-f]{4})\b", line):
                 continue
             # Skip known prose-note lines that happen to start with a
             # register-looking ID. Each pattern is anchored to its exact note
@@ -393,10 +401,12 @@ class BlueSolarHEXParser:
             # of _normalize_dtype as unknown with the cell kept in notes.
             # The unknown-scale sink records scale-shaped-but-unparsable
             # cells even on allowlisted IDs (loud gate, see _SCALE_LIKE_RE).
-            row = _split_typed_row(line, unknown_sink=self.unknown_scales)
+            # Bare-x rescue (allow_bare_x_prefix), symmetric with the Orion
+            # section-table rescue and its doc-typo justification.
+            row = _split_typed_row(line, allow_bare_x_prefix=True, unknown_sink=self.unknown_scales)
             if row is None:
                 continue
-            rid, desc, scale_str, dtype_raw, unit_str, _typo = row
+            rid, desc, scale_str, dtype_raw, unit_str, typo = row
 
             scale = None if scale_str in (None, "-") else float(scale_str.replace(",", "."))
             dtype, dtype_note = _normalize_dtype(dtype_raw)
@@ -427,7 +437,9 @@ class BlueSolarHEXParser:
                 unit=unit_str,
                 access="W" if write_only else "R/W",
                 source="BlueSolar-HEX",
-                notes=dtype_note,
+                # Typo provenance mirrors the Orion rescue note (generic
+                # over the rescued ID, not hardcoded to xEDE0).
+                notes=f"doc-typo: ID printed as x{rid:04X}, read as 0x{rid:04X}" if typo else dtype_note,
                 sentinels=sentinels,
             )
 
@@ -544,7 +556,19 @@ class BlueSolarHEXParser:
             # line-leading) and outside this history region; device-word
             # guard below excludes product prose. Zero-diff: no snapshot
             # history-region line matches the widened shape (verified).
-            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+            # Open description charset ("[A-Za-z].*?": any chars after a
+            # letter start, label-charset precedent): the closed class
+            # ("[A-Za-z0-9 _\\-/().*]") hid symbol descriptions on every
+            # side at once (probes "60961 Future: history record" /
+            # "Future+history" / "Future#1" / "A&B" missed by decimal
+            # scan, hex scrape, and both parsers while counts stayed
+            # green — reproduced synthetically before the fix). Denylists
+            # stay structural (... / .. / | / = skips above, device-word
+            # guard below, DOC_TYPO, decimal year guard) so no content
+            # word is shared-blind; zero-diff: the only newly matching
+            # snapshot history-region lines are already-parsed typed rows
+            # (comma/percent/degree cells), skipped via rid-in-regs below.
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Za-z].*?)\s*$", line)
             dm = None
             if m:
                 rid = int(m.group(1).replace(" ", ""), 16)
@@ -568,7 +592,11 @@ class BlueSolarHEXParser:
                 # without the guard, so a future year-shaped ID (e.g. 2000)
                 # parses honestly here while outside-region year prose stays
                 # denied by the global decimal scan's region-aware guard.
-                dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+                # Open description charset (same "[A-Za-z].*?" widening and
+                # justification as the hex branch above: probes "60961
+                # Future: history record" / "Future+history" / "Future#1" /
+                # "A&B" now parse honestly; zero-diff via rid-in-regs).
+                dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z].*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
@@ -750,7 +778,12 @@ class OrionXSHEXParser:
             # decimal, hyphenated/bare dates miss shape, footer mid-line
             # and outside region, device-word guard below). Zero-diff: no
             # snapshot history-region line matches.
-            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+            # Open description charset ("[A-Za-z].*?", label-charset
+            # precedent — same widening/justification as the BlueSolar
+            # handler: symbol probes "60961 Future: history record" /
+            # "Future+history" / "Future#1" / "A&B" now parse honestly;
+            # zero-diff via rid-in-regs below).
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Za-z].*?)\s*$", line)
             dm = None
             if m:
                 rid = int(m.group(1).replace(" ", ""), 16)
@@ -762,7 +795,9 @@ class OrionXSHEXParser:
                 # the BlueSolar handler: this loop scans ONLY the history
                 # region, year prose lives outside it; verified zero-diff).
                 # Zero-diff: no snapshot history-region line matches.
-                dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
+                # Open description charset (same "[A-Za-z].*?" widening as
+                # the hex branch above and the BlueSolar handler).
+                dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z].*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
@@ -891,6 +926,32 @@ class OrionXSHEXParser:
         return caps
 
 
+def _bmv_dtype_tail_valid(rest: List[str]) -> bool:
+    """True when the tokens after a BMV dtype candidate look like a real
+    Type-column tail (structural, not first-dtype-wins).
+
+    A genuine Type cell is followed by the settings Range cell (carries
+    ``..``), a short-layout scale factor (plain/decimal/exponent, possibly
+    unit-glued like ``0.001A``), a bare unit-vocabulary token, or a lone
+    ``-`` unit with nothing after it. A dtype-like word *inside* the
+    description (probe ``0xEDD0 Battery voltage un16 type - un16 0.01 V``:
+    interior ``un16`` followed by ``type``, not a tail) fails all four, so
+    the anchor falls through to the later candidate that carries the tail.
+    """
+    if not rest:
+        return False
+    if any(".." in p for p in rest):
+        return True  # settings Range cell (Default/Step/Unit follow)
+    first = rest[0].strip()
+    if re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", first):
+        return True  # short-layout scale factor, possibly unit-glued
+    if first in ("V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"):
+        return True  # short-layout bare unit (same vocabulary as below)
+    if rest == ["-"]:
+        return True  # unit-less short row ("-" Unit column, nothing after)
+    return False
+
+
 class BMV7xxHEXParser:
     """Parser for BMV-7xx and SmartShunt HEX protocol documentation."""
 
@@ -945,10 +1006,20 @@ class BMV7xxHEXParser:
                 continue
 
             rid = int(tokens[0], 16)
-            anchor = next(
-                (i for i, t in enumerate(tokens) if i >= 2 and _DTYPE_RE.match(t)),
-                None,
-            )
+            # Structural Type anchor (not first-dtype-wins): a dtype-like
+            # word may live inside the description itself (probe "0xEDD0
+            # Battery voltage un16 type - un16 0.01 V" anchored the interior
+            # "un16", yielding desc 'Battery' while dtype/scale/unit parsed
+            # fine and every schema assert stayed green — HEX descriptions
+            # asserted nowhere). Prefer the first candidate followed by a
+            # valid scale+unit tail (see _bmv_dtype_tail_valid); fallback to
+            # the first candidate (current behavior) where no tail matches.
+            # Zero-diff: no snapshot row carries 2+ dtype tokens (verified),
+            # so single-candidate rows anchor identically and the fallback
+            # never fires on current docs. (No full HEX description maps:
+            # the anchor fix + existing gates are the proportionate scope.)
+            cands = [i for i, t in enumerate(tokens) if i >= 2 and _DTYPE_RE.match(t)]
+            anchor = next((i for i in cands if _bmv_dtype_tail_valid(tokens[i + 1:])), cands[0] if cands else None)
             dtype = "unknown"
             if anchor is None:
                 # Write-only command rows ("... (write only) ... - - - -"):
