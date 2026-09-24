@@ -900,6 +900,59 @@ class TestSpecParsers(unittest.TestCase):
         self.assertFalse(_is_write_desc("Start synchronized (2,3)"))
         self.assertFalse(_is_write_desc("User yield (resettable)"))
 
+    def test_section_table_write_hint_parsing(self):
+        """Section-table rows with command descriptions must parse as
+        write_only/W (same _is_write_desc/_WRITE_HINTS logic as ID-only
+        rows): probe ``0xEDF0 Restore defaults ...`` in a section table
+        parsed as R/W before the fix while the schema skipped R/W defaults,
+        staying green while a write-only marker was missed. Zero-diff: no
+        current BlueSolar/Orion section-table row carries a write hint, so
+        no snapshot row changes meaning (counts 206/109 unchanged)."""
+        from spec_parser import OrionXSHEXParser, _split_typed_row
+
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                synthetic = (
+                    "1.1 Get and Set items\n"
+                    "0xEDF0     Restore defaults test     0.01        un16        A\n"
+                    "1.2 Asynchronous items\n"
+                )
+                probe = cls(synthetic).parse_registers()[0xEDF0]
+                self.assertEqual(probe.access, "W")
+                self.assertEqual(probe.data_type, "write_only")
+                self.assertIsNone(probe.scale)
+                # Control: ordinary readable stays R/W with scale/dtype.
+                control = cls(
+                    "1.1 Get and Set items\n"
+                    "0xEDF0     Battery maximum current     0.01        un16        A\n"
+                    "1.2 Asynchronous items\n"
+                ).parse_registers()[0xEDF0]
+                self.assertEqual(control.access, "R/W")
+                self.assertEqual(control.scale, 0.01)
+                self.assertEqual(control.data_type, "un16")
+        # Zero-diff: no snapshot section-table typed row is a write hint,
+        # so the fix changes no current meaning (counts pinned elsewhere).
+        for key, fname, cls, bare_x in (
+            ("bluesolar", "BlueSolar-HEX-protocol.txt", BlueSolarHEXParser, False),
+            ("orion", "Orion-XS-HEX-protocol.txt", OrionXSHEXParser, True),
+        ):
+            with self.subTest(snapshot=key):
+                text = (self.specs_dir / fname).read_text(errors="ignore")
+                start = text.find("1.1 Get and Set items")
+                end = text.find("1.2 Asynchronous items")
+                section = text[start:end] if end > start else text[start:]
+                hits = []
+                for line in section.splitlines():
+                    if not re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\b", line):
+                        continue
+                    row = _split_typed_row(line, allow_bare_x_prefix=bare_x)
+                    if row is None:
+                        continue
+                    _rid, desc, _sc, _dt, _un, _ty = row
+                    if _is_write_desc(desc):
+                        hits.append((_rid, desc))
+                self.assertEqual(hits, [], f"{key} section-table write hints changed meaning: {hits}")
+
     def test_multiline_scan_gap_divergence(self):
         """Proves the test-side multi-line scan is truly independent of the
         parser's tight 3-line window: a synthetic ``0xAAAA ...`` range
@@ -1635,6 +1688,24 @@ class TestSpecParsers(unittest.TestCase):
             self.assertIn(pid, self.pids, f"0x{pid:04X} missing from parsed PIDs")
             self.assertTrue(self.pids[pid].phased_out, f"0x{pid:04X} must be flagged phased-out")
 
+        # Exact PID name comparison for all 153 doc PIDs (incl. phased-out
+        # flagged rows): ID presence/count/set-equality stay green under a
+        # doc rename (probe 0x0203 BMV-700->BMV-700R keeps the 153-set and
+        # counts), so every doc model_name is compared against the code
+        # display name. No silent normalization: doc and code names match
+        # exactly today (verified zero-diff, no mapping needed), so a future
+        # purely presentational difference (case/punctuation/spacing only)
+        # must add a comment-justified entry to a mapping table here — never
+        # a bare lower/strip. A real DB-vs-doc mismatch stays asserting DOC
+        # truth here; report it as src/ve_direct/tables.py:195 (PID_MAP,
+        # src/ is read-only).
+        name_mismatches = [
+            f"0x{pid:04X}: doc {p.model_name!r} vs code {T.PID_MAP.get(pid)!r}"
+            for pid, p in self.pids.items()
+            if T.PID_MAP.get(pid) != p.model_name
+        ]
+        self.assertEqual(name_mismatches, [], f"PID name mismatches (DOC truth, see src/ve_direct/tables.py:195): {name_mismatches}")
+
     def test_text_field_devices(self):
         """Device columns must be parsed (never empty) and spot-check against the doc."""
         empty = [label for label, f in self.text_fields.items() if not f.devices]
@@ -1657,9 +1728,12 @@ class TestSpecParsers(unittest.TestCase):
             self.assertEqual(self.text_fields[label].devices, ["BuckBoost"], label)
 
     def test_text_field_units_and_descriptions(self):
-        """Units/descriptions for footnote-split, continuation-line and
-        empty-Units rows (doc truth from the Text 3.34 fields tables, not
-        parser output: "Consumed" keeps the doc's own typo)."""
+        """Units/descriptions for ALL 63 text fields (doc truth from the
+        Text 3.34 fields tables, not parser output: "Consumed" keeps the
+        doc's own typo). Full-map equality: every parsed field is asserted
+        here, so a doc change on any field (probe ``V2 mV->mA`` keeps count
+        63, unknown gate empty, label sets equal) fails as a units/description
+        mismatch instead of staying green on the old ~30-field spot-check."""
         expected = {
             # Footnote glued into the Units cell ("mAh 10,11", "‰10,11",
             # "Minutes10, 11,12").
@@ -1696,7 +1770,51 @@ class TestSpecParsers(unittest.TestCase):
             "T": ("°C", "Battery temperature"),
             "DM": ("‰", "Mid-point deviation of the battery bank"),
             "V": ("mV", "Main or channel 1 (battery) voltage"),
+            # Remaining 36 fields (full-map extension): doc truth verified
+            # against the snapshot label rows (units + description columns,
+            # footnotes/bullets stripped). Any doc edit here (e.g. V2 unit
+            # or description wording) fails below as a full-map mismatch.
+            "V2": ("mV", "Channel 2 (battery) voltage"),
+            "V3": ("mV", "Channel 3 (battery) voltage"),
+            "VS": ("mV", "Auxiliary (starter) voltage"),
+            "VM": ("mV", "Mid-point voltage of the battery bank"),
+            "VPV": ("mV", "Panel voltage"),
+            "I": ("mA", "Main or channel 1 battery current"),
+            "I2": ("mA", "Channel 2 battery current"),
+            "I3": ("mA", "Channel 3 battery current"),
+            "IL": ("mA", "Load current"),
+            "P": ("W", "Instantaneous power"),
+            "PPV": ("W", "Panel power"),
+            "H7": ("mV", "Minimum main (battery) voltage"),
+            "H8": ("mV", "Maximum main (battery) voltage"),
+            "H12": ("", "Number of high main voltage alarms"),
+            "H13": ("", "Number of low auxiliary voltage alarms"),
+            "H14": ("", "Number of high auxiliary voltage alarms"),
+            "H19": ("0.01 kWh", "Yield total (user resettable counter)"),
+            "H20": ("0.01 kWh", "Yield today"),
+            "H21": ("W", "Maximum power today"),
+            "H22": ("0.01 kWh", "Yield yesterday"),
+            "H23": ("W", "Maximum power yesterday"),
+            "AC_OUT_V": ("0.01 V", "AC output voltage"),
+            "AC_OUT_I": ("0.1 A", "AC output current"),
+            "AC_OUT_S": ("VA", "AC output apparent power"),
+            "DC_IN_V": ("0.01 V", "DC input voltage"),
+            "DC_IN_I": ("0.1 A", "DC input current"),
+            "DC_IN_P": ("1W", "DC input power"),
+            "BMV": ("", "Model description (deprecated)"),
+            "FW": ("", "Firmware version (16 bit)"),
+            "FWE": ("", "Firmware version (24 bit)"),
+            "PID": ("", "Product ID"),
+            "SER#": ("", "Serial number"),
+            "MODE": ("", "Device mode"),
+            "MON": ("", "DC monitor mode"),
+            "MPPT": ("", "Tracker operation mode"),
+            "WARN": ("", "Warning reason"),
         }
+        # Full-map equality: expected covers every parsed field (63) so no
+        # field change can hide outside the asserted subset.
+        self.assertEqual(set(expected), set(self.text_fields))
+        self.assertEqual(len(expected), EXPECTED_COUNTS["fields"])
         for label, (units, desc) in expected.items():
             with self.subTest(label=label):
                 self.assertIn(label, self.text_fields)
@@ -2084,23 +2202,36 @@ class TestSpecParsers(unittest.TestCase):
 
         # BMV/BS/Orion access (normalize-then-compare, Phoenix pattern):
         # BMV explicit markers "(write only)"/"(read-only)" are DOC truth;
-        # READ_WRITE defaults carry no doc access column (parser default, not
-        # DOC truth) so they are skipped — otherwise monitor/history precision
-        # (DB READ_ONLY vs parser READ_WRITE default) would false-fail.
-        # BS/Orion W (Restore/Clear commands) and R for history records are
+        # READ_WRITE is the parser default where the doc prints no access
+        # column — the doc still implies readable (never write-only), while
+        # the DB refines measurements/history to READ_ONLY (e.g. 0x0300
+        # depth, 0x0FFE TTG, 0xED8E power) and keeps settings READ_WRITE.
+        # Hence parser READ_WRITE asserts DB in {READ_WRITE, READ_ONLY}
+        # (CONSTANT allowed like Phoenix): no skipping by value, and a doc
+        # access change (probe: removing "(write only)" from 0x1029 Zero
+        # Current flips WRITE_ONLY->READ_WRITE while DB stays WRITE_ONLY)
+        # fails as READ_WRITE-vs-WRITE_ONLY instead of staying green.
+        # Zero-diff: all 110 snapshot values pass (70 READ_WRITE, 29
+        # READ_ONLY-refined, 4 WRITE_ONLY, 7 READ_ONLY). BS/Orion W
+        # (Restore/Clear commands) and R for history records are
         # DOC truth (commands writable, history read-only); R/W defaults and
         # detail-mention Rs with no access column (Orion 0x0090/0x0206/0x2013:
         # settings vs measurement ambiguous in prose, parser default R vs DB
         # READ_WRITE) are skipped with justification — timer events fixed to
         # R/W (Get/Set writable, DB READ_WRITE) so they no longer assert as R.
-        bmv_map = {"WRITE_ONLY": "WRITE_ONLY", "READ_ONLY": "READ_ONLY"}
         for rid, spec_reg in self.bmv_regs.items():
-            if spec_reg.access not in bmv_map:
-                continue  # READ_WRITE default, no doc column
-            expected = bmv_map[spec_reg.access]
             actual = R.lookup(rid, flavor="BMV").access
-            if actual != expected and actual != "CONSTANT":
-                mismatches.append(f"BMV 0x{rid:04X}: expected {expected}, got {actual}")
+            if spec_reg.access == "WRITE_ONLY":
+                allowed = {"WRITE_ONLY"}
+            elif spec_reg.access == "READ_ONLY":
+                allowed = {"READ_ONLY"}
+            else:  # READ_WRITE default: doc-readable, DB READ_WRITE or READ_ONLY-refined
+                allowed = {"READ_WRITE", "READ_ONLY"}
+            if actual not in allowed and actual != "CONSTANT":
+                mismatches.append(
+                    f"BMV 0x{rid:04X} ({spec_reg.name}): parser {spec_reg.access} "
+                    f"allows {sorted(allowed)}, got DB {actual}"
+                )
         self.assertEqual(mismatches, [])
         mismatches = []
         for rid, spec_reg in self.bs_regs.items():
@@ -2179,6 +2310,68 @@ class TestSpecParsers(unittest.TestCase):
         norm_parser = PhoenixInverterHEXParser("0x0150 VE_REG_CAPABILITIES_BLE R/(W) un32 - -\n")
         self.assertEqual(norm_parser.parse_registers()[0x0150].access, "R")
         self.assertEqual(norm_parser.unknown_accesses, [])
+
+    def test_bmv_access_read_write_included(self):
+        """BMV access skips READ_WRITE: probe removing ``(write only)`` from
+        ``0x1029 Zero Current`` flips WRITE_ONLY->READ_WRITE while the old
+        check ``continue``d on READ_WRITE (suite green while a doc access
+        change is missed). All parsed access values are now asserted (no
+        skipping by value): parser READ_WRITE allows DB {READ_WRITE,
+        READ_ONLY} (CONSTANT like Phoenix), so the probe fails as
+        READ_WRITE-vs-WRITE_ONLY. Zero-diff: all 110 snapshot values pass."""
+        from spec_parser import BMV7xxHEXParser
+
+        # Snapshot zero-diff: every parsed access maps under the new rule.
+        allowed_by_parser = {
+            "WRITE_ONLY": {"WRITE_ONLY"},
+            "READ_ONLY": {"READ_ONLY"},
+            "READ_WRITE": {"READ_WRITE", "READ_ONLY"},
+        }
+        bad = []
+        for rid, spec_reg in self.bmv_regs.items():
+            actual = R.lookup(rid, flavor="BMV").access
+            allowed = allowed_by_parser[spec_reg.access]
+            if actual not in allowed and actual != "CONSTANT":
+                bad.append(f"0x{rid:04X}")
+        self.assertEqual(bad, [])
+        # Probe: marker removed flips to READ_WRITE, DB stays WRITE_ONLY.
+        probe = BMV7xxHEXParser(
+            "hdr\n0x1029     Zero Current              -         -         -         -         - \nftr"
+        ).parse_registers()[0x1029]
+        self.assertEqual(probe.access, "READ_WRITE")
+        db_access = R.lookup(0x1029, flavor="BMV").access
+        self.assertEqual(db_access, "WRITE_ONLY")
+        self.assertNotIn(db_access, allowed_by_parser[probe.access])
+        # Control: marked row stays WRITE_ONLY and maps.
+        ctrl = BMV7xxHEXParser(
+            "hdr\n0x1029     Zero Current (write only)                    09      -                      -                  -             -              - \nftr"
+        ).parse_registers()[0x1029]
+        # Synthetic control row is ID-only shaped; parser still marks write-only.
+        self.assertEqual(ctrl.access, "WRITE_ONLY")
+        self.assertIn(db_access, allowed_by_parser[ctrl.access])
+
+    def test_pid_name_rename_divergence(self):
+        """Proves PID name comparison is exact: a synthetic rename
+        ``0x0203 BMV-700->BMV-700R`` keeps ID-set/count green but fails the
+        name comparison. Control: snapshot names match exactly (zero-diff)."""
+        self.assertEqual(T.PID_MAP.get(0x0203), self.pids[0x0203].model_name)
+        renamed = dict(self.pids)
+        from spec_parser import ParsedPID
+
+        renamed[0x0203] = ParsedPID(pid=0x0203, model_name="BMV-700R", phased_out=False)
+        mism = [
+            f"0x{pid:04X}: doc {p.model_name!r} vs code {T.PID_MAP.get(pid)!r}"
+            for pid, p in renamed.items()
+            if T.PID_MAP.get(pid) != p.model_name
+        ]
+        self.assertEqual(len(mism), 1)
+        self.assertIn("0x0203", mism[0])
+        # Zero-diff control: snapshot names all match (pinned by
+        # test_text_protocol_spec).
+        self.assertEqual(
+            [pid for pid, p in self.pids.items() if T.PID_MAP.get(pid) != p.model_name],
+            [],
+        )
 
 
 class TestFetchSpecs(unittest.TestCase):

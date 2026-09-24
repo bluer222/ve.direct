@@ -271,6 +271,19 @@ class BlueSolarHEXParser:
             # Sentinel may print uppercase 0XFFFF; case-insensitive like IDs.
             if unit_str and "0XFFFF" in unit_str.upper():
                 sentinels.add(0xFFFF)
+            # Write-hint detection for section-table rows (same _is_write_desc
+            # / _WRITE_HINTS logic as ID-only/detail rows): a command
+            # description (e.g. "Restore defaults ...") in a typed table
+            # parses as write_only/W instead of the R/W default, so the
+            # schema W assertion catches it. Zero-diff: no current
+            # BlueSolar section-table row carries a write hint (verified),
+            # so no snapshot row changes meaning.
+            write_only = _is_write_desc(desc)
+            if write_only:
+                scale = None
+                dtype = "write_only"
+                unit_str = None
+                sentinels = set()
 
             regs[rid] = ParsedRegister(
                 id=rid,
@@ -279,6 +292,7 @@ class BlueSolarHEXParser:
                 scale=scale,
                 data_type=dtype,
                 unit=unit_str,
+                access="W" if write_only else "R/W",
                 source="BlueSolar-HEX",
                 notes=dtype_note,
                 sentinels=sentinels,
@@ -486,6 +500,18 @@ class OrionXSHEXParser:
             # Sentinel may print uppercase 0XFFFF; case-insensitive like IDs.
             if unit_str and "0XFFFF" in unit_str.upper():
                 sentinels.add(0xFFFF)
+            # Write-hint detection for section-table rows (same _is_write_desc
+            # / _WRITE_HINTS logic as ID-only/detail rows): a command
+            # description in a typed table parses as write_only/W instead of
+            # the R/W default, so the schema W assertion catches it.
+            # Zero-diff: no current Orion section-table row carries a write
+            # hint (verified), so no snapshot row changes meaning.
+            write_only = _is_write_desc(desc)
+            if write_only:
+                scale = None
+                dtype = "write_only"
+                unit_str = None
+                sentinels = set()
 
             regs[rid] = ParsedRegister(
                 id=rid,
@@ -494,6 +520,7 @@ class OrionXSHEXParser:
                 scale=scale,
                 data_type=dtype,
                 unit=unit_str,
+                access="W" if write_only else "R/W",
                 source="Orion-XS-HEX",
                 sentinels=sentinels,
                 notes="doc-typo: ID printed as xEDE0, read as 0xEDE0" if typo else dtype_note,
