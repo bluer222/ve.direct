@@ -749,12 +749,14 @@ def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]
                 # (verified), so this is zero-diff on current files while
                 # a future scientific-notation factor parses instead of
                 # matching the trailing digits (e.g. "1e-2" -> 2.0).
-                r"(-|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s+(un8|un16|un24|un32|sn8|sn16|sn32)\b",
+                # Comma-decimal ("0,1") parses via comma->dot; no snapshot
+                # or live scale uses it (verified), so zero-diff.
+                r"(-|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)\s+(un8|un16|un24|un32|sn8|sn16|sn32)\b",
                 window,
                 flags=re.IGNORECASE,
             )
             if m:
-                scale = None if m.group(1) == "-" else float(m.group(1))
+                scale = None if m.group(1) == "-" else float(m.group(1).replace(",", "."))
                 out[rid] = (scale, m.group(2).lower())
         out.pop(0xEFF0, None)  # doc-typo for 0xEDF0, cf. DOC_TYPO_REGISTER_IDS
         return out
@@ -874,7 +876,15 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
     it. The ``MPPT Inverter Charger`` device-header prefix contaminating
     the first live chunk is stripped (substring strip: the open interior
     also spans the section preamble on snapshot text, so the strip is a
-    contains-strip, verified exact on both). Never raises.
+    contains-strip, verified exact on both). Codes accept open digit runs
+    (``\\d+``): a future 5-digit state ("MegaBoost 12345 •") recovers here
+    while the snapshot parser keeps its pinned 1-4 bound — tolerant +
+    scraper catch it, parser misses it, diverging loudly instead of
+    agreed-missing (see the 5-digit divergence/pin test). Guard: bare
+    4-digit calendar years 1900-2100 never match as codes here (bullet tail
+    required; years carry none) and are explicitly skipped below (max real
+    code 252), so the open run stays exactly the 15 on snapshots and live.
+    Never raises.
     """
     try:
         if not text:
@@ -886,7 +896,7 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
         m_end = tail.find("The error code")
         sec = tail[:m_end] if m_end > 0 else tail[:5000]
         found: dict[int, str] = {}
-        for m in re.finditer(r"(?<!\()((?:\([^\d\s)\x95•\n]|[^\s()\x95•])[^\x95•\n]*?)\s+(\d{1,4})\s*[\x95•]", sec):
+        for m in re.finditer(r"(?<!\()((?:\([^\d\s)\x95•\n]|[^\s()\x95•])[^\x95•\n]*?)\s+(\d+)\s*[\x95•]", sec):
             name = m.group(1).strip()
             # Live first chunk merges the section preamble and device header
             # ("... possible values. MPPT Inverter Charger Off"): strip
@@ -911,9 +921,12 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
             if re.search(r"\(\d+\)", name):
                 continue
             try:
-                found[int(m.group(2))] = name
+                code = int(m.group(2))
             except Exception:
                 continue
+            if 1900 <= code <= 2100:
+                continue  # calendar-year prose, never a CS code (max 252)
+            found[code] = name
         return found
     except Exception:
         return {}
@@ -1040,12 +1053,24 @@ def compare_snapshot_structures(snap_text: str, live_text: str, key: str) -> lis
                 # keys already mismatch (112 vs 206) — parser-ID mismatch
                 # proves noise (tolerant IDs match), so skip caps too, never
                 # stale. Only layout-preserving (regs IDs match) compares.
+                # Asymmetric emptiness inside the ID-match guard is STALE
+                # (section present but unparsable) with missing-section skip:
+                # real live regs mismatch skips before reaching here, so no
+                # false alarm; mocked layout-preserving with emptied caps
+                # reports stale instead of equal-empty fresh.
                 if sr and lr and set(lr) == set(sr):
                     sc, lc = sp.parse_capabilities(), lp.parse_capabilities()
-                    if sc and lc and sc != lc:
-                        for b in sorted(set(sc) | set(lc)):
-                            if sc.get(b) != lc.get(b):
-                                diffs.append(f"BlueSolar cap bit {b} {sc.get(b)!r} vs {lc.get(b)!r}")
+                    if sc and lc:
+                        if sc != lc:
+                            for b in sorted(set(sc) | set(lc)):
+                                if sc.get(b) != lc.get(b):
+                                    diffs.append(f"BlueSolar cap bit {b} {sc.get(b)!r} vs {lc.get(b)!r}")
+                    elif sc or lc:
+                        snap_has = "Capabilities" in snap_text and "0x0140" in snap_text
+                        live_has = "Capabilities" in live_text and "0x0140" in live_text
+                        if snap_has and live_has:
+                            diffs.append("BlueSolar cap bits differ (asymmetric emptiness: section present but unparsable)")
+                        # else: missing section in extraction -> skip, never stale
             except Exception:
                 pass
         elif key == "Orion-XS-HEX-protocol":
@@ -1053,12 +1078,19 @@ def compare_snapshot_structures(snap_text: str, live_text: str, key: str) -> lis
                 sp, lp = OrionXSHEXParser(snap_text), OrionXSHEXParser(live_text)
                 sr, lr = sp.parse_registers(), lp.parse_registers()
                 _reg_diffs(sr, lr, "Orion")
+                # Same asymmetric-emptiness guard as BlueSolar above.
                 if sr and lr and set(lr) == set(sr):
                     sc, lc = sp.parse_capabilities(), lp.parse_capabilities()
-                    if sc and lc and sc != lc:
-                        for b in sorted(set(sc) | set(lc)):
-                            if sc.get(b) != lc.get(b):
-                                diffs.append(f"Orion cap bit {b} {sc.get(b)!r} vs {lc.get(b)!r}")
+                    if sc and lc:
+                        if sc != lc:
+                            for b in sorted(set(sc) | set(lc)):
+                                if sc.get(b) != lc.get(b):
+                                    diffs.append(f"Orion cap bit {b} {sc.get(b)!r} vs {lc.get(b)!r}")
+                    elif sc or lc:
+                        snap_has = "Capabilities" in snap_text and "0x0140" in snap_text
+                        live_has = "Capabilities" in live_text and "0x0140" in live_text
+                        if snap_has and live_has:
+                            diffs.append("Orion cap bits differ (asymmetric emptiness: section present but unparsable)")
             except Exception:
                 pass
         elif key == "BMV-7xx-HEX-Protocol":
@@ -1120,6 +1152,12 @@ def compare_snapshot_structures(snap_text: str, live_text: str, key: str) -> lis
                                 diffs.append(f"Text field {lb} devices {s.devices} vs {lv.devices}")
                 # CS tolerant (exact live 15==15, stronger than regs): live
                 # non-empty differing reports STALE live (not invisible).
+                # Asymmetric emptiness never reads as agreement: snapshot
+                # non-empty vs live empty (bullet-encoding drift "•"->"-"
+                # drives tolerant + parser to {}) with the section marker
+                # present on both sides is STALE (section present but
+                # unparsable); marker absent on either side (genuinely
+                # missing section / failed extraction) skips, never stale.
                 # Snapshot-parser CS (layout-sensitive, {} live) stays as
                 # fallback for mocked layout-preserving texts? Tolerant
                 # covers both (exact on snapshots too, verified), so use it.
@@ -1127,9 +1165,19 @@ def compare_snapshot_structures(snap_text: str, live_text: str, key: str) -> lis
                     scs_t, lcs_t = tolerant_cs_states(snap_text), tolerant_cs_states(live_text)
                 except Exception:
                     scs_t, lcs_t = {}, {}
-                if scs_t and lcs_t and scs_t != lcs_t:
-                    diffs.append(f"Text CS states differ (tolerant)")
-                else:
+                _cs_tolerant_stale = False
+                if scs_t and lcs_t:
+                    if scs_t != lcs_t:
+                        diffs.append(f"Text CS states differ (tolerant)")
+                        _cs_tolerant_stale = True
+                elif scs_t or lcs_t:
+                    snap_has = "The state of operation" in snap_text
+                    live_has = "The state of operation" in live_text
+                    if snap_has and live_has:
+                        diffs.append("Text CS states differ (tolerant, asymmetric emptiness: section present but unparsable)")
+                        _cs_tolerant_stale = True
+                    # else: missing section -> skip (extraction failed, never stale)
+                if not _cs_tolerant_stale:
                     # Fallback for mocked layout-preserving where tolerant
                     # matches but snapshot-parser differs? Tolerant already
                     # exact on snapshots, so fallback only when tolerant
@@ -1142,32 +1190,73 @@ def compare_snapshot_structures(snap_text: str, live_text: str, key: str) -> lis
                     # proves layout loss (tolerant IDs already proven
                     # matching), so it skips, never stale. Only
                     # layout-preserving (mocked) live with matching IDs
-                    # compares names.
+                    # compares names. Asymmetric emptiness with markers
+                    # present is STALE here too (real live 15 vs 1
+                    # non-empty-mismatch skips, never triggers).
                     try:
                         scs, lcs = sp.parse_cs_states(), lp.parse_cs_states()
-                        if scs and lcs and set(lcs) == set(scs) and scs != lcs:
-                            diffs.append(f"Text CS states {scs} vs {lcs}")
+                        if scs and lcs:
+                            if set(lcs) == set(scs) and scs != lcs:
+                                diffs.append(f"Text CS states {scs} vs {lcs}")
+                        elif scs or lcs:
+                            snap_has = "The state of operation" in snap_text
+                            live_has = "The state of operation" in live_text
+                            if snap_has and live_has:
+                                diffs.append("Text CS states differ (parser, asymmetric emptiness: section present but unparsable)")
                     except Exception:
                         pass
                 se, le = sp.parse_errors(), lp.parse_errors()
                 # Same ID-match guard as regs/CS above (documented
                 # invisibility): live glyph-soup can yield non-empty garbage
                 # with foreign IDs; only matching ID sets compare names.
-                if se and le and set(le) == set(se) and se != le:
-                    diffs.append(f"Text ERR codes differ")
+                # Asymmetric emptiness with markers present is STALE — but
+                # ONLY when the live text is layout-preserving (fields IDs
+                # match): collapsed/layout-lost live yields empty ERR (20 vs
+                # 0) with markers present, which must stay invisible (skip),
+                # while a mocked emptied-ERR with intact fields reports
+                # stale. Real live (20 vs 1 non-empty-mismatch, fields 63
+                # vs 0) skips on both guards, never triggers.
+                if se and le:
+                    if set(le) == set(se) and se != le:
+                        diffs.append(f"Text ERR codes differ")
+                elif se or le:
+                    snap_has = "The error code" in snap_text
+                    live_has = "The error code" in live_text
+                    fields_ok = False
+                    try:
+                        fields_ok = bool(sf and lf and set(lf) == set(sf))
+                    except Exception:
+                        fields_ok = False
+                    if snap_has and live_has and fields_ok:
+                        diffs.append("Text ERR codes differ (asymmetric emptiness: section present but unparsable)")
                 # PID IDs tolerant (exact live 153==153, incl. 3-digit missed
                 # by 4-digit ID stage): live added/removed reports STALE live.
+                # Asymmetric emptiness with markers present is STALE; marker
+                # absent (missing section) skips. Real live 153==153 fresh.
                 try:
                     s_pid_ids, l_pid_ids = tolerant_pid_ids(snap_text), tolerant_pid_ids(live_text)
                 except Exception:
                     s_pid_ids, l_pid_ids = set(), set()
-                if s_pid_ids and l_pid_ids and s_pid_ids != l_pid_ids:
-                    added_p = sorted(l_pid_ids - s_pid_ids)
-                    removed_p = sorted(s_pid_ids - l_pid_ids)
-                    if added_p:
-                        diffs.append(f"Text PID added {', '.join(f'0x{i:04X}' for i in added_p)}")
-                    if removed_p:
-                        diffs.append(f"Text PID removed {', '.join(f'0x{i:04X}' for i in removed_p)}")
+                if s_pid_ids and l_pid_ids:
+                    if s_pid_ids != l_pid_ids:
+                        added_p = sorted(l_pid_ids - s_pid_ids)
+                        removed_p = sorted(s_pid_ids - l_pid_ids)
+                        if added_p:
+                            diffs.append(f"Text PID added {', '.join(f'0x{i:04X}' for i in added_p)}")
+                        if removed_p:
+                            diffs.append(f"Text PID removed {', '.join(f'0x{i:04X}' for i in removed_p)}")
+                elif s_pid_ids or l_pid_ids:
+                    snap_has = "The product id:" in snap_text and "These models are phased out." in snap_text
+                    live_has = "The product id:" in live_text and "These models are phased out." in live_text
+                    if snap_has and live_has:
+                        added_p = sorted(l_pid_ids - s_pid_ids)
+                        removed_p = sorted(s_pid_ids - l_pid_ids)
+                        bits = []
+                        if added_p:
+                            bits.append(f"added {', '.join(f'0x{i:04X}' for i in added_p)}")
+                        if removed_p:
+                            bits.append(f"removed {', '.join(f'0x{i:04X}' for i in removed_p)}")
+                        diffs.append(f"Text PID differ (asymmetric emptiness: section present but unparsable){'; ' + '; '.join(bits) if bits else ''}")
                 s_pid, l_pid = sp.parse_pids(), lp.parse_pids()
                 # PID names/phasing (footer merges 0xA072/0xA24A live, so
                 # tolerant names would false-positive; snapshot-parser live

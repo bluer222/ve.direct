@@ -88,14 +88,21 @@ _WRITE_HINTS = ("restore default", "restore factory", "clear history", "zero cur
 #: Word-anchored regexes for _is_write_desc (plural-aware where the doc
 #: uses both forms). Substring matching ("restore" in desc) is the bug:
 #: it misclassifies any readable containing the substring. Anchored phrases
-#: fail loudly via the write-only divergence test instead.
+#: fail loudly via the write-only divergence test instead. Hyphen-spelled
+#: command hints ("Restore-defaults", "Clear-history", "Zero-current",
+#: "Reset-counters", "Restore-factory") match too via [\s\-]+ (snapshots
+#: use bare spaces only — BMV "(write only)", BlueSolar/Orion "Restore
+#: default"/"Clear history" — verified zero hyphen rows, so zero-diff):
+#: a future hyphen-spelled typed row parses write_only/W instead of R/W.
+#: Bare "synchronize" needs no hyphen form (single word); "(write only)"
+#: hyphen/bare spellings already via _WRITE_ONLY_RE below.
 _WRITE_HINT_RES = (
-    re.compile(r"\brestore\s+defaults?\b", re.IGNORECASE),
-    re.compile(r"\brestore\s+factory\b", re.IGNORECASE),
-    re.compile(r"\bclear\s+history\b", re.IGNORECASE),
-    re.compile(r"\bzero\s+current\b", re.IGNORECASE),
+    re.compile(r"\brestore[\s\-]+defaults?\b", re.IGNORECASE),
+    re.compile(r"\brestore[\s\-]+factory\b", re.IGNORECASE),
+    re.compile(r"\bclear[\s\-]+history\b", re.IGNORECASE),
+    re.compile(r"\bzero[\s\-]+current\b", re.IGNORECASE),
     re.compile(r"\bsynchronize\b", re.IGNORECASE),
-    re.compile(r"\breset\s+counters?\b", re.IGNORECASE),
+    re.compile(r"\breset[\s\-]+counters?\b", re.IGNORECASE),
     _WRITE_ONLY_RE,
 )
 
@@ -118,11 +125,15 @@ _FOOTNOTE_DTYPE_RE = re.compile(r"^\(\*\d+\)$")
 #: scientific-notation factor parses instead of leaking into the
 #: description with scale None (cf. the 0xEDB3 "1e-2" probe, hidden behind
 #: SCALE_NONE_ALLOW while ID-based reverse-coverage stays green).
-#: ``float()`` parses every accepted shape.
-_SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|-)$")
+#: European comma-decimal ("0,1" for 0.1) is accepted too: no snapshot
+#: scale cell uses it (verified: no comma scale token in any HEX snapshot,
+#: only prose commas like "12,24" and "(2,3)" footnotes), so zero-diff
+#: while a future comma factor parses via comma->dot before float().
+#: ``float(comma->dot)`` parses every accepted shape (callers replace).
+_SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?|-)$")
 
 #: A scale-CELL-shaped token that the strict _SCALE_TOKEN_RE rejects:
-#: digit-bearing, built only from scale punctuation (digits, ".", "eE",
+#: digit-bearing, built only from scale punctuation (digits, ".", ",", "eE",
 #: "+", "-", "/", "x"). Used ONLY as the loud gate below (unknown-scale
 #: tokens are recorded even on allowlisted IDs — allowlists excuse absent
 #: doc data, never dropped unknown tokens; unknown-units/unknown-access
@@ -130,8 +141,9 @@ _SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|-)$")
 #: and miss it, while a future "1x"-style cell records loudly instead of
 #: leaking into the description with scale None. Verified zero-diff: no
 #: snapshot dtype-anchored row ends its description with such a token
-#: (checked on both section-table snapshots).
-_SCALE_LIKE_RE = re.compile(r"^(?=.*\d)[0-9eE.+\-/xX]+$")
+#: (checked on both section-table snapshots). Comma included so a
+#: comma-bearing but unparsable cell (e.g. "1,x") still records loudly.
+_SCALE_LIKE_RE = re.compile(r"^(?=.*\d)[0-9eE.,+\-/xX]+$")
 
 #: A bare register-ID token (Orion-XS allows the doc-typo form "xHHHH").
 #: The 0X prefix is uppercase-X rescue (e.g. "0XEDF0" for 0xEDF0, "XEDE0"
@@ -347,7 +359,7 @@ class BlueSolarHEXParser:
                 continue
             rid, desc, scale_str, dtype_raw, unit_str, _typo = row
 
-            scale = None if scale_str in (None, "-") else float(scale_str)
+            scale = None if scale_str in (None, "-") else float(scale_str.replace(",", "."))
             dtype, dtype_note = _normalize_dtype(dtype_raw)
             sentinels = set()
             # Sentinel may print uppercase 0XFFFF; case-insensitive like IDs.
@@ -506,18 +518,21 @@ class BlueSolarHEXParser:
                 # table shape as the hex ID-only rows (mirrors that regex,
                 # now [A-Za-z] start for lowercase "60961 future history
                 # record" probes).
-                # Year guard: bare 4-digit calendar years (Phoenix "2016"
-                # line-wrap, revision-log years) are prose, not registers;
-                # the description requirement already excludes bare years
-                # and hyphenated dates (which carry "-" not " " after the
-                # digits). Zero-diff: no snapshot history-region line
-                # matches (verified; counts pinned by EXPECTED_COUNTS).
+                # No year guard here by design (region-scoped): this loop
+                # scans ONLY the history region ("Restore factory defaults"
+                # .. "1.2 Asynchronous items"), while calendar-year prose
+                # (Phoenix bare "2016" line-wrap, revision-log "15-11-2021"
+                # / "2021-09-06", footer "1351 JG Almere" mid-line) lives
+                # OUTSIDE it — and hyphenated/bare dates already miss the
+                # shape ("-" after digits, no description). Verified
+                # zero-diff: no snapshot history-region line matches even
+                # without the guard, so a future year-shaped ID (e.g. 2000)
+                # parses honestly here while outside-region year prose stays
+                # denied by the global decimal scan's region-aware guard.
                 dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
-                if 1900 <= rid <= 2100:
-                    continue
                 desc = dm.group(2).strip()
             if any(w in desc for w in ("MPPT", "BlueSolar", "SmartSolar", "VE.Can", "Inverter", "Charger")):
                 continue
@@ -702,10 +717,11 @@ class OrionXSHEXParser:
                 rid = int(m.group(1).replace(" ", ""), 16)
                 desc = m.group(2).strip()
             else:
-                # Decimal ID-only rows without dtype tail (same shape/guard
-                # rationale as the BlueSolar handler above: now [A-Za-z]
-                # start for lowercase probes, year guard for calendar-year
-                # prose).
+                # Decimal ID-only rows without dtype tail (same shape as the
+                # BlueSolar handler above: now [A-Za-z] start for lowercase
+                # probes). No year guard here by design (region-scoped, see
+                # the BlueSolar handler: this loop scans ONLY the history
+                # region, year prose lives outside it; verified zero-diff).
                 # Zero-diff: no snapshot history-region line matches.
                 dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
                 if not dm:
@@ -713,8 +729,6 @@ class OrionXSHEXParser:
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
                     continue
                 rid = int(dm.group(1))
-                if 1900 <= rid <= 2100:
-                    continue
                 desc = dm.group(2).strip()
             if any(w in desc for w in ("MPPT", "BlueSolar", "SmartSolar", "Orion", "VE.Can")):
                 continue
@@ -801,11 +815,13 @@ class OrionXSHEXParser:
                 # Scale accepts the same exponent form as _SCALE_TOKEN_RE
                 # (no snapshot single-field scale uses it — plain decimals
                 # only — so zero-diff; a future "1e-2" parses via float()).
+                # Comma-decimal ("0,1") parses via comma->dot; no snapshot
+                # single-field scale uses it (verified), so zero-diff.
                 m = re.match(
-                    r"^\s*\d+\s+.+?\s+(-|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s+(un\d+|sn\d+|string\d*)\s*(\S.*)?$", line
+                    r"^\s*\d+\s+.+?\s+(-|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)\s+(un\d+|sn\d+|string\d*)\s*(\S.*)?$", line
                 )
                 if m:
-                    scale = float(m.group(1)) if m.group(1) != "-" else None
+                    scale = float(m.group(1).replace(",", ".")) if m.group(1) != "-" else None
                     rows.append((m.group(2).lower(), scale))
                 elif line.strip() == "":
                     continue
@@ -937,8 +953,10 @@ class BMV7xxHEXParser:
                 step = rest[col + 1].strip() if len(rest) > col + 1 else ""
                 # Exponent Step form ("1e-2") parses via float(); no snapshot
                 # Step uses it (plain decimals/ints only), so zero-diff.
-                if re.fullmatch(r"\d+(\.\d+)?([eE][+-]?\d+)?", step):
-                    scale = float(step)
+                # Comma-decimal ("0,1") parses via comma->dot; no snapshot
+                # Step uses it (verified), so zero-diff.
+                if re.fullmatch(r"\d+([.,]\d+)?([eE][+-]?\d+)?", step):
+                    scale = float(step.replace(",", "."))
                 elif step and re.search(r"\d", step) and _SCALE_LIKE_RE.match(step):
                     # Loud unknown-scale gate (unknown-units pattern): a
                     # scale-like Step cell the strict shape rejects records
@@ -976,10 +994,12 @@ class BMV7xxHEXParser:
                         # tokens by single-space gaps, or combined "0.001A").
                         # Exponent factors ("1e-2", "1E+1 V") parse via
                         # float(); no snapshot row uses them (plain decimals
-                        # only), so zero-diff.
-                        sm = re.match(r"^(0?\.\d+|\d+(?:\.\d+)?[eE][+-]?\d+)([A-Za-z%°]+)?$", p_clean)
+                        # only), so zero-diff. Comma-decimal ("0,1 V",
+                        # "0,001A") parses via comma->dot; no snapshot row
+                        # uses it (verified), so zero-diff.
+                        sm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?[eE][+-]?\d+)([A-Za-z%°]+)?$", p_clean)
                         if sm:
-                            scale = float(sm.group(1))
+                            scale = float(sm.group(1).replace(",", "."))
                             if sm.group(2):
                                 unit = sm.group(2)
                             elif j + 1 < len(rest) and re.fullmatch(r"[A-Za-z%°]+", rest[j + 1].strip()):
@@ -1094,7 +1114,19 @@ class PhoenixInverterHEXParser:
             unit = None
             if len(tokens) >= 5:
                 p4 = tokens[4].strip()
-                if not p4.endswith(")") and p4 != "-":
+                # Parenthesized scale cell ("(0.1)"): strip one outer pair
+                # and parse honestly; a parenthesized-but-unparsable cell
+                # ("(1x)") records via the loud gate below instead of
+                # dropping silently (probe 0xEB99 "(0.1)" gave scale None
+                # with empty unknown_scales while SCALE_NONE_ALLOW kept the
+                # suite green). Footnote-only tails ("1)") keep the old
+                # skip (no leading "(", never a scale). Comma-decimal
+                # ("0,1") parses via comma->dot; no snapshot Scale cell
+                # uses parens or commas (verified), so zero-diff.
+                p4_try = p4
+                if p4_try.startswith("(") and p4_try.endswith(")"):
+                    p4_try = p4_try[1:-1].strip()
+                if p4_try != "-" and not p4_try.endswith(")"):
                     # Trailing-slash scale cell (0xEB10 "0.02/ s", with the
                     # 60 Hz sibling "0.016" on the next layout line; Note 4
                     # expresses the period count for 50 or 60 Hz AC-out): the
@@ -1103,7 +1135,7 @@ class PhoenixInverterHEXParser:
                     # Exponent form ("1e-2") parses via float() with no
                     # change needed here.
                     try:
-                        scale = float(p4.rstrip("/"))
+                        scale = float(p4_try.rstrip("/").replace(",", "."))
                     except ValueError:
                         # Loud unknown-scale gate (unknown-units pattern): a
                         # digit-bearing but unparsable Scale cell records
@@ -1111,6 +1143,17 @@ class PhoenixInverterHEXParser:
                         if re.search(r"\d", p4):
                             self.unknown_scales.append((rid, p4))
                         scale = None
+                elif re.search(r"\d", p4):
+                    # Bare footnotes ("1)", "3)") in Scale position are
+                    # furniture (Unit-column footnote run, no scale) — skip,
+                    # never record (zero-diff: snapshots carry these on
+                    # scale-less rows like 0xEC41/0x034E). Anything else
+                    # digit-bearing ending with ")" (e.g. double-wrapped
+                    # "((0.1))") records loudly instead of dropping silently.
+                    if re.fullmatch(r"\d+\)", p4):
+                        pass
+                    else:
+                        self.unknown_scales.append((rid, p4))
             if len(tokens) >= 6:
                 p5 = tokens[5].strip()
                 if not re.fullmatch(r"\d+\)", p5) and p5 != "-":

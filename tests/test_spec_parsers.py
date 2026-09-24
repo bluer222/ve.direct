@@ -270,17 +270,28 @@ def scrape_doc_cs_codes(section: str) -> dict[int, str]:
     none), so the guard-free scan stays exactly the 15 states while a
     colliding row diverges. Gap independence is preserved (scraper
     ``\\s+`` vs parser bullet-tail): a bullet-less row still diverges (see
-    test_cs_counter_bullet_gap_divergence). Codes accept up to 4 digits:
-    a future 4-digit state missed by a shared 3-digit bound on both sides
-    while hardcoded EXPECTED_CS stays green is the bug (see the 4-digit
-    divergence test); 5-digit would collide with decimal register IDs and
-    years in the same text. Zero-diff: no snapshot code exceeds 3 digits
-    (15 exact, pinned by full coverage)."""
+    test_cs_counter_bullet_gap_divergence). Codes accept open digit runs
+    (``\\d+``): a future 5-digit state (e.g. "MegaBoost 12345") is scraped
+    here while the parser keeps its pinned 1-4 bound (5-digit collides with
+    decimal register IDs like 60961 on the parser's precise side) —
+    scraped-but-unparsed, failing loudly instead of agreed-missing (see the
+    5-digit divergence/pin test). Guards (explicit, justified): bare
+    4-digit calendar years 1900-2100 are skipped (revision-log/prose years,
+    never real CS codes — maxima 252) and lines containing "0x" (register-ID
+    rows, never real CS rows) are skipped, so the open run stays exact on
+    snapshots. Zero-diff: no snapshot code exceeds 3 digits and no snapshot
+    CS-section line matches the open shape beyond the 15 (pinned by full
+    coverage)."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*(.+?)\s+(\d{1,4})\b", line)
+        m = re.match(r"^\s*(.+?)\s+(\d+)\b", line)
         if m:
-            found[int(m.group(2))] = m.group(1).strip()
+            code = int(m.group(2))
+            if 1900 <= code <= 2100:
+                continue  # calendar-year prose, never a CS code (max 252)
+            if "0x" in line or "0X" in line:
+                continue  # register-ID row, never a CS row
+            found[code] = m.group(1).strip()
     return found
 
 
@@ -320,12 +331,13 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     Zero-diff: all 20 snapshot ERR names start with a letter and carry no
     trailing prose (verified). Gap independence is preserved (scraper
     ``\\s+`` vs parser ``\\s{2,}``): a single-space row still diverges (see
-    test_error_counter_single_space_divergence). Codes accept up to 4
-    digits (same justification as the CS scraper above): a future 4-digit
-    fault missed by a shared 3-digit bound on both sides while hardcoded
-    EXPECTED_ERRORS stays green is the bug (see the 4-digit divergence
-    test). Zero-diff: no snapshot code exceeds 3 digits (20 exact, pinned
-    by full coverage)."""
+    test_error_counter_single_space_divergence). Codes accept open digit
+    runs (``\\d+``, same guards as the CS scraper above: years 1900-2100
+    and "0x" ID rows skipped, never real ERR codes — maxima 119): a future
+    5-digit fault is scraped here while the parser keeps its pinned 1-4
+    bound — scraped-but-unparsed, failing loudly (see the 5-digit
+    divergence/pin test). Zero-diff: no snapshot code exceeds 3 digits (20
+    exact, pinned by full coverage)."""
     # Exact full-line furniture pins (stripped snapshot lines verbatim):
     # Note1/Note2 prose ("Note1: Error 19 can ...", "MPPT charger. Since
     # version ...", "Note2: Error 21 ...", "shutdown of the ...") is the
@@ -343,9 +355,14 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     for line in section.splitlines():
         if line.strip() in _furniture_lines:
             continue
-        m = re.match(r"^\s*(.+?)\s+(\d{1,4})\b.*$", line)
+        m = re.match(r"^\s*(.+?)\s+(\d+)\b.*$", line)
         if m:
-            found[int(m.group(2))] = m.group(1).strip()
+            code = int(m.group(2))
+            if 1900 <= code <= 2100:
+                continue  # calendar-year prose, never an ERR code (max 119)
+            if "0x" in line or "0X" in line:
+                continue  # register-ID row, never an ERR row
+            found[code] = m.group(1).strip()
     return found
 
 
@@ -428,20 +445,34 @@ def scrape_decimal_ids(text: str) -> set[int]:
     tailless scan does NOT repeat the mid-line widening) with a
     case-insensitive description start (mirrors the parsers' hex ID-only
     ``[A-Za-z]`` row shape, now lowercase-capable). Date-like denylist
-    (explicit, justified): bare 4-digit calendar years 1900-2100 are
-    skipped — the Phoenix snapshot wraps "production stopped in November /
-    2016" (a bare line-leading year), and revision logs carry years
-    ("15-11-2021", "2021-09-06", "14 April 2025"); hyphenated dates already
-    miss the shape (``-`` after the digits, not ``\\s+[A-Z]``) and bare
-    years miss it (no description), but a wrapped "2016 Production ..."
-    line would false-positive without the year guard. Verified: zero hits
-    on all four current HEX snapshots (before/after). The typo half also
+    (explicit, justified, REGION-SCOPED): bare 4-digit calendar years
+    1900-2100 are skipped ONLY outside history regions — the Phoenix
+    snapshot wraps "production stopped in November / 2016" (bare
+    line-leading year, outside any history region), and revision logs carry
+    years ("15-11-2021", "2021-09-06", "14 April 2025"); hyphenated dates
+    already miss the shape (``-`` after the digits, not ``\\s+[A-Z]``) and
+    bare years miss it (no description), but a wrapped "2016 Production ..."
+    line would false-positive without the guard outside regions. Inside
+    history regions ("Restore factory defaults"/"History data" ..
+    "1.2 Asynchronous items", mirroring the BlueSolar/Orion parsers) the
+    guard is lifted: no snapshot history-region line matches even without
+    it (verified), so a future year-shaped ID (e.g. "2000 Future history
+    record") scrapes honestly inside while outside-region year prose stays
+    denied. Verified: zero hits on all four current HEX snapshots
+    (before/after). The typo half also
     rescues the ``0x HHHH`` split typo (``0[xX]\\s+HHHH``, cf. the
     parser's token-level rescue): "0x EDF0" is missed by the glued hex
     scrape, the dtype-tailed halves, and the single-token ID regex alike.
     Verified zero-diff: no ``0x HHHH`` in snapshots."""
     ids: set[int] = set()
+    in_history = False
     for line in text.splitlines():
+        # Region tracking mirrors the BlueSolar/Orion history parsers:
+        # year guard lifts only inside history regions.
+        if "Restore factory defaults" in line or "History data" in line:
+            in_history = True
+        if "1.2 Asynchronous items" in line:
+            in_history = False
         # Line-leading table-shaped decimal (original coverage).
         m = re.match(
             r"^\s*(\d{4,5})\s+[A-Z].*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
@@ -460,11 +491,13 @@ def scrape_decimal_ids(text: str) -> set[int]:
             ids.add(int(m_mid.group(1)))
         # Dtype-less ID-only widening (justified above): line-leading
         # decimal + case-insensitive description, no dtype required. Year
-        # denylist keeps calendar-year prose out.
+        # denylist applies only outside history regions (see above).
         m_tail = re.match(r"^\s*(\d{4,5})\s+([A-Za-z][A-Za-z0-9 _\-/().*]*?)\s*$", line)
         if m_tail:
             rid = int(m_tail.group(1))
-            if not 1900 <= rid <= 2100:
+            if 1900 <= rid <= 2100 and not in_history:
+                pass
+            else:
                 ids.add(rid)
         for m2 in re.finditer(r"(?<!\w)0\s+[xX]([0-9A-Fa-f]{4})\b", line):
             ids.add(int(m2.group(1), 16))
@@ -3565,6 +3598,220 @@ class TestSpecParsers(unittest.TestCase):
             [],
         )
 
+    def test_decimal_year_shaped_id_region_scoped(self):
+        """Year-shaped decimal IDs parse honestly inside history regions.
+        Probe ``2000 Future history record`` (line-leading, history region)
+        was missed by parsers + decimal scan (1900-2100 year denylist for
+        footer/revision-log years) while EXPECTED_COUNTS stayed green —
+        reproduced synthetically before the fix. Strictly better mechanism:
+        the year denylist applies ONLY outside history regions
+        ("Restore factory defaults"/"History data" .. "1.2 Asynchronous
+        items", mirroring the parsers). Inside regions no snapshot line
+        matches even without the guard (verified zero-diff), so the probe
+        scrapes + parses honestly; outside regions year prose ("2016
+        Production stopped note", bare "2016", hyphenated dates) stays
+        denied. Zero-diff: decimal scan stays empty on all four HEX
+        snapshots."""
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), set())
+        # Probe inside region: scraped + parsed honestly (both parsers).
+        probe = (
+            "Restore factory defaults\n"
+            "2000 Future history record\n"
+            "1.2 Asynchronous items\n"
+        )
+        self.assertEqual(scrape_decimal_ids(probe), {2000})
+        self.assertNotIn(2000, scrape_doc_ids(probe))
+        from spec_parser import OrionXSHEXParser
+
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                regs = cls(probe).parse_registers()
+                self.assertIn(2000, regs)
+                self.assertEqual(regs[2000].description, "Future history record")
+                self.assertEqual(regs[2000].data_type, "struct")
+                self.assertEqual(regs[2000].access, "R")
+                self.assertIsNone(regs[2000].scale)
+        # Controls: outside-region year prose stays denied.
+        self.assertEqual(scrape_decimal_ids("2016 Production stopped note\n"), set())
+        self.assertEqual(scrape_decimal_ids("2016\n"), set())
+        self.assertEqual(scrape_decimal_ids("15-11-2021 some change\n"), set())
+        self.assertEqual(scrape_decimal_ids("2000 Future history record\n"), set())
+
+    def test_write_hint_hyphen_spellings(self):
+        """Hyphen-spelled command hints parse write_only (not R/W).
+        Probes ``Restore-defaults``/``Clear-history``/``Zero-current``/
+        ``Reset-counters``/``Restore-factory`` were all False (only bare
+        ``Synchronize`` True) while a hyphen-spelled typed row parsed R/W —
+        reproduced synthetically before the fix. Write-hint patterns now
+        accept hyphen variants ([\\s\\-]+, snapshots use bare spaces only:
+        BMV "(write only)", BlueSolar/Orion "Restore default"/"Clear
+        history" — verified zero hyphen rows). Per-spelling tests + typed-row
+        access + zero-diff (snapshot WRITE_ONLY set unchanged)."""
+        # Per-spelling _is_write_desc probes (hyphen + bare + paren forms).
+        for desc in (
+            "Restore-defaults cmd", "Restore defaults cmd",
+            "Clear-history cmd", "Clear history cmd",
+            "Zero-current cmd", "Zero current cmd",
+            "Reset-counters cmd", "Reset counters cmd",
+            "Restore-factory cmd", "Restore factory cmd",
+            "Synchronize",
+        ):
+            with self.subTest(desc=desc):
+                self.assertTrue(_is_write_desc(desc), desc)
+        # Controls: readables stay readable.
+        self.assertFalse(_is_write_desc("Device restores defaults on boot readable value"))
+        self.assertFalse(_is_write_desc("Start synchronized (2,3)"))
+        # Typed-row access: hyphen-spelled command row parses write_only/W.
+        from spec_parser import OrionXSHEXParser
+
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                synthetic = (
+                    "1.1 Get and Set items\n"
+                    "0xEDF0     Restore-defaults test     0.01        un16        A\n"
+                    "1.2 Asynchronous items\n"
+                )
+                probe = cls(synthetic).parse_registers()[0xEDF0]
+                self.assertEqual(probe.access, "W")
+                self.assertEqual(probe.data_type, "write_only")
+                self.assertIsNone(probe.scale)
+        # Zero-diff: snapshot section-table rows carry no write hint
+        # (hyphen or bare), and BMV WRITE_ONLY set unchanged.
+        self.assertEqual(
+            {rid for rid, r in self.bmv_regs.items() if r.access == "WRITE_ONLY"},
+            {0x0004, 0x1029, 0x102C, 0x1030},
+        )
+
+    def test_phoenix_parenthesized_scale_parsed(self):
+        """Parenthesized Scale cells parse honestly (not silent None).
+        Probe ``0xEB99 VE_REG_X R un16 (0.1) A`` yielded scale None with
+        empty unknown_scales while 0xEB99's SCALE_NONE_ALLOW kept the suite
+        green — reproduced synthetically before the fix. Parenthesized cells
+        strip one outer pair and parse via float (comma->dot); unparsable
+        parenthesized cells ("(1x)") record via the unknown_scales loud gate
+        (allowlisted IDs included). Zero-diff: no snapshot Scale cell is
+        parenthesized (verified) and snapshot unknown_scales stay empty."""
+        from spec_parser import PhoenixInverterHEXParser
+
+        self.assertEqual(self.specs["phoenix"].unknown_scales, [])
+        parser = PhoenixInverterHEXParser("0xEB99 VE_REG_X R un16 (0.1) A\n")
+        probe = parser.parse_registers()[0xEB99]
+        self.assertAlmostEqual(probe.scale, 0.1)
+        self.assertEqual(probe.data_type, "un16")
+        self.assertEqual(probe.unit, "A")
+        self.assertEqual(parser.unknown_scales, [])
+        # Loud gate: parenthesized-but-unparsable records, even allowlisted.
+        bad = PhoenixInverterHEXParser("0xEB99 VE_REG_X R un16 (1x) V\n")
+        bad.parse_registers()
+        self.assertEqual(bad.unknown_scales, [(0xEB99, "(1x)")])
+        # Control: plain scale still parses with no record.
+        ctrl = PhoenixInverterHEXParser("0xEB99 VE_REG_X R un16 1 V\n")
+        self.assertEqual(ctrl.parse_registers()[0xEB99].scale, 1.0)
+        self.assertEqual(ctrl.unknown_scales, [])
+
+    def test_comma_decimal_scales_parsed(self):
+        """European comma-decimal scales parse honestly on all sites.
+        Probes BMV Step ``0,1`` (allowlisted 0x0304) and short-layout
+        ``0xED8E Power 1 un16 0,1 V`` both yielded scale None with empty
+        unknown_scales (dot-only patterns) — reproduced synthetically before
+        the fix. Scale token patterns (Step fullmatch, _SCALE_TOKEN_RE,
+        _SCALE_LIKE_RE gate, short-layout, Orion single-field, live map)
+        accept commas via comma->dot; the unknown-scale gate covers
+        comma-bearing but unparsable cells. Zero-diff: no comma scale cell
+        exists today (verified: only prose commas "12,24", "(2,3)")."""
+        from spec_parser import BMV7xxHEXParser, _SCALE_LIKE_RE, _SCALE_TOKEN_RE
+
+        # Zero-diff: no snapshot scale token carries a comma.
+        self.assertFalse(
+            any("," in tok for tok in ("0.01", "0.1", "1")),
+        )
+        # Step site (allowlisted 0x0304, SETTINGS layout with Range).
+        step_parser = BMV7xxHEXParser(
+            "hdr\n0x0304     Foo Bar               -         un16        0..1        0           0,1         V\nftr"
+        )
+        step_regs = step_parser.parse_registers()
+        self.assertAlmostEqual(step_regs[0x0304].scale, 0.1)
+        self.assertEqual(step_parser.unknown_scales, [])
+        self.assertIn(0x0304, SCALE_NONE_ALLOW["bmv"])
+        # Short-layout site (Unit-embedded factor).
+        short_parser = BMV7xxHEXParser(
+            "hdr\n0xED8E     Power               -         un16        0,1 V\nftr"
+        )
+        short_regs = short_parser.parse_registers()
+        self.assertAlmostEqual(short_regs[0xED8E].scale, 0.1)
+        self.assertEqual(short_regs[0xED8E].unit, "V")
+        self.assertEqual(short_parser.unknown_scales, [])
+        # Token patterns accept commas; gate covers comma-bearing unknowns.
+        self.assertTrue(_SCALE_TOKEN_RE.match("0,1"))
+        self.assertTrue(_SCALE_LIKE_RE.match("0,1"))
+        self.assertTrue(_SCALE_LIKE_RE.match("1,x"))
+        self.assertFalse(_SCALE_TOKEN_RE.match("1,x"))
+        # Unknown-scale gate coverage for comma-bearing junk.
+        junk = BMV7xxHEXParser(
+            "hdr\n0xEDD0     Foo Bar               -         un16        0..1        0           1,x         V\nftr"
+        )
+        junk.parse_registers()
+        self.assertEqual(junk.unknown_scales, [(0xEDD0, "1,x")])
+        # Controls: dot forms still parse identically.
+        ctrl = BMV7xxHEXParser(
+            "hdr\n0x0304     Foo Bar               -         un16        0..1        0           0.1         V\nftr"
+        )
+        self.assertAlmostEqual(ctrl.parse_registers()[0x0304].scale, 0.1)
+
+    def test_cs_five_digit_codes_diverge_loudly(self):
+        """5-digit CS/ERR codes diverge loudly (scraper+tolerant catch,
+        parser pinned 1-4 misses) instead of agreed-missing.
+        Probe ``MegaBoost 12345`` was missed by parser + scraper + tolerant
+        while EXPECTED maps stayed green — reproduced synthetically before
+        the fix. Strictly better mechanism (scraper over-inclusive): the
+        test-side scrapers and the live tolerant extractor accept open digit
+        runs (``\\d+``) with year (1900-2100, maxima 252/119) and "0x" ID-row
+        guards, staying exactly 15/20 on snapshots (verified zero-diff), so
+        the probe scrapes + recovers live-exact while the snapshot parsers
+        keep their pinned 1-4 bound (5-digit collides with 60961-style
+        decimal IDs on the precise parser side; parser 1-4 explicitly pinned
+        here as knowingly uncovered with that justification). Set-equality
+        fails loudly via the full-coverage tests on a real 5-digit row."""
+        from fetch_specs import tolerant_cs_states
+
+        # Zero-diff: open run stays 15/20 on snapshots (guards hold).
+        text = self.raw_texts["text"]
+        pos = text.find("The state of operation. See the table below")
+        tail = text[pos:]
+        m_wide = re.search(r"The error code of the device", tail)
+        self.assertIsNotNone(m_wide)
+        self.assertEqual(scrape_doc_cs_codes(tail[: m_wide.start()]), EXPECTED_CS)
+        self.assertEqual(tolerant_cs_states(text), EXPECTED_CS)
+        pos_e = text.find("The error code of the device (relevant when the device is in the fault state)")
+        tail_e = text[pos_e:]
+        m_wide_e = re.search(r"Historical data", tail_e)
+        self.assertIsNotNone(m_wide_e)
+        self.assertEqual(scrape_doc_error_codes(tail_e[: m_wide_e.start()]), EXPECTED_ERRORS)
+        # Probe: scraper + tolerant catch 12345, parsers miss (divergence).
+        cs_sec = (
+            "The state of operation. See the table below\n"
+            "                        Off                                   0      •\n"
+            "                        MegaBoost                             12345     •\n"
+        )
+        self.assertEqual(scrape_doc_cs_codes(cs_sec)[12345], "MegaBoost")
+        self.assertNotIn(12345, VEDirectTextParser(cs_sec).parse_cs_states())
+        self.assertEqual(
+            tolerant_cs_states(cs_sec + "                       The error code dummy\n")[12345],
+            "MegaBoost",
+        )
+        err_sec = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        MegaBoost fault                                                     12345\n"
+        )
+        self.assertEqual(scrape_doc_error_codes(err_sec)[12345], "MegaBoost fault")
+        self.assertNotIn(12345, VEDirectTextParser(err_sec).parse_errors())
+        # Guards hold: years and ID rows never scrape as codes.
+        self.assertNotIn(2021, scrape_doc_cs_codes("                        Revision year                         2021     •\n"))
+        self.assertNotIn(0xEDF0, scrape_doc_cs_codes("                        Register 0xEDF0                     123      •\n"))
+
 
 class TestFetchSpecs(unittest.TestCase):
     """Cover the fetch_specs branches the parser suite never touches (all
@@ -4469,6 +4716,61 @@ class TestFetchSpecs(unittest.TestCase):
         self.assertEqual(
             compare_snapshot_structures(snap_bs, collapsed_bumped, "BlueSolar-HEX-protocol"), []
         )
+
+    def test_structure_bullet_drift_is_stale_not_fresh(self):
+        """Bullet-encoding drift reports STALE (not equal-empty FRESH).
+        Replacing ``•`` with ``-`` in the CS section drove tolerant + parser
+        to {} on both sides, comparing equal-empty = FRESH — and a rename
+        under changed bullets was likewise invisible — reproduced before the
+        fix. Asymmetric emptiness with the section marker present on both
+        sides is now STALE (section present but unparsable); marker absent
+        (genuinely missing section / failed extraction) skips. Applies to
+        CS/ERR/capability/PID, not just CS. Zero false alarms on today's
+        live files (proved by the live-agreement tests: tolerant 15==15,
+        153==153, structures [] live)."""
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        snap = (specs_dir / "VE.Direct-Protocol-3.34.txt").read_text(errors="ignore")
+        p0 = snap.find("The state of operation")
+        p1 = snap.find("The error code")
+        self.assertGreater(p0, 0)
+        self.assertGreater(p1, p0)
+        # CS-section-only drift (fields/entry markers intact): tolerant 15
+        # vs 0 with markers present -> STALE (not []).
+        live = snap[:p0] + snap[p0:p1].replace("•", "-") + snap[p1:]
+        diffs = compare_snapshot_structures(snap, live, "VE.Direct-Protocol-3.34")
+        self.assertTrue(
+            any("CS" in d for d in diffs),
+            f"bullet drift must report STALE, got {diffs}",
+        )
+        # Rename under changed bullets is likewise visible (still STALE via
+        # asymmetry, not FRESH).
+        live_rename = live.replace("Bulk", "BulkX", 1)
+        self.assertNotEqual(live_rename, snap)
+        diffs2 = compare_snapshot_structures(snap, live_rename, "VE.Direct-Protocol-3.34")
+        self.assertTrue(any("CS" in d for d in diffs2), f"rename under drift: {diffs2}")
+        # Genuinely missing section (marker absent) skips, never stale.
+        missing = snap.replace("The state of operation", "NO SUCH SECTION")
+        self.assertEqual(
+            compare_snapshot_structures(snap, missing, "VE.Direct-Protocol-3.34"), []
+        )
+        # ERR asymmetric: emptied ERR with marker present is STALE.
+        err_pos = snap.find("The error code of the device (relevant when the device is in the fault state)")
+        self.assertGreater(err_pos, 0)
+        # Empty the ERR section honestly: header + HSDS bound with no rows
+        # between (fields/CS intact, so layout-preserving). A naive
+        # header-to-Historical-data splice still parses 26 garbage rows
+        # from later sections (verified), so the HSDS bound is load-bearing.
+        hsds_pos = snap.find("HSDS", err_pos)
+        self.assertGreater(hsds_pos, err_pos)
+        live_err_empty = (
+            snap[:err_pos]
+            + "The error code of the device (relevant when the device is in the fault state)\n"
+            + snap[hsds_pos:]
+        )
+        diffs_err = compare_snapshot_structures(snap, live_err_empty, "VE.Direct-Protocol-3.34")
+        self.assertTrue(any("ERR" in d for d in diffs_err), f"emptied ERR: {diffs_err}")
+        # Self-comparison stays clean.
+        self.assertEqual(compare_snapshot_structures(snap, snap, "VE.Direct-Protocol-3.34"), [])
 
     def test_targeted_scale_dtype_map_synthetic(self):
         """Unit proof for the targeted live map: global ID-anchored
