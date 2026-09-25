@@ -723,13 +723,24 @@ def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]
     on stdlib live joins (single-line, single-space); this anchors only
     ``0xHHHH ... scale dtype`` globally (no ``\\\\b`` needed, like the ID
     stage), trying every ID occurrence until one carries a scale+dtype
-    within ``maxdist`` chars and before the next ID (prose mentions like
-    ``register 0x0102. See also...`` carry no close dtype and are skipped,
-    the later table row is used). Scale-before-dtype only (BlueSolar/Orion
-    ``ID Desc Scale Type Unit`` layout); Phoenix ``Type Scale`` order and
-    BMV ``Display Type Unit``/Step layout need different anchoring (pinned,
-    not attempted here). Missing IDs skip (not alarms); mismatches report
-    via :func:`live_scale_dtype_diffs`. Never raises.
+    before the next ID (prose mentions like ``register 0x0102. See
+    also...`` carry no dtype before the next ID and are skipped, the later
+    table row is used). The window is structural — up to the next
+    register-ID start (or end of text for the last ID) — not a fixed
+    120-char cutoff: a long-description row (probe with 200 filler chars
+    between ID and "0.01 un16 V" yielded {} while the short control parsed,
+    so a scale/dtype edit there skipped as missing-ID and stayed FRESH live
+    — reproduced before fix) now parses honestly. The next-ID bound already
+    prevents cross-ID contamination (a prose ID's window ends at the next
+    ID, so the next row's scale/dtype — located after that ID — never leaks
+    backwards); ``maxdist`` is kept only as an unused signature compat (no
+    truncation). Scale-before-dtype only (BlueSolar/Orion ``ID Desc Scale
+    Type Unit`` layout); Phoenix ``Type Scale`` order and BMV
+    ``Display Type Unit``/Step layout need different anchoring (pinned, not
+    attempted here). Missing IDs skip (not alarms); mismatches report via
+    :func:`live_scale_dtype_diffs`. Verified zero false alarms on today's
+    live files (BlueSolar/Orion 0 mism, maps diff-free except one extra
+    struct-skipped ID). Never raises.
     """
     try:
         if not text:
@@ -740,8 +751,8 @@ def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]
         for idx, (p, rid) in enumerate(pos):
             if rid in out:
                 continue
-            nxt = pos[idx + 1][0] if idx + 1 < len(pos) else p + maxdist
-            window = t[p : min(nxt, p + maxdist)]
+            nxt = pos[idx + 1][0] if idx + 1 < len(pos) else len(t)
+            window = t[p:nxt]
             m = re.search(
                 # General float-with-exponent (same shape as the
                 # snapshot-side _SCALE_TOKEN_RE): plain decimals plus
@@ -880,11 +891,19 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
     (``\\d+``): a future 5-digit state ("MegaBoost 12345 •") recovers here
     while the snapshot parser keeps its pinned 1-4 bound — tolerant +
     scraper catch it, parser misses it, diverging loudly instead of
-    agreed-missing (see the 5-digit divergence/pin test). Guard: bare
-    4-digit calendar years 1900-2100 never match as codes here (bullet tail
-    required; years carry none) and are explicitly skipped below (max real
-    code 252), so the open run stays exactly the 15 on snapshots and live.
-    Never raises.
+    agreed-missing (see the 5-digit divergence/pin test). Year-shaped codes
+    1900-2100 are NOT skipped here by design (no year guard in CS sections):
+    verified 2026-09-25 that no snapshot or live CS-section text contains a
+    1900-2100 non-code 4-digit number (snapshot Text CS section zero 4-digit;
+    live Text CS section zero 4-digit via stdlib extraction; other four specs
+    carry no CS marker at all), so the bullet-tail shape alone stays exactly
+    the 15 on snapshots and live while a live-added year-shaped state
+    ("Future mode 2000 •") compares loudly instead of staying FRESH via
+    guarded snap==live {0} plus parser-fallback ID-mismatch skip (reproduced
+    before fix). If a real year ever collides in CS context, narrow the guard
+    to revision-log regions only (not CS sections) and document — never
+    re-add a blanket CS year guard. Max real code 252, so open runs stay
+    exact today. Never raises.
     """
     try:
         if not text:
@@ -924,8 +943,6 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
                 code = int(m.group(2))
             except Exception:
                 continue
-            if 1900 <= code <= 2100:
-                continue  # calendar-year prose, never a CS code (max 252)
             found[code] = name
         return found
     except Exception:

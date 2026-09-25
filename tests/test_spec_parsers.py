@@ -599,6 +599,27 @@ def scrape_decimal_ids(text: str) -> set[int]:
     the parsers scan 3). Verified zero-diff: no decimal range line exists
     in any snapshot (the BMV signed cell excluded as above), so snapshot
     scans stay exactly EXPECTED_DECIMAL_SCAN_HITS.
+    Widened to 3-/6-digit IDs (probes "999 Future history record" /
+    "123456 Future record" missed by decimal scan, hex scrape, and both
+    parsers while "60961" hit everywhere — reproduced before fix):
+    calendar years are exactly 4-digit so 3-/6-digit carry NO year
+    collision, but prose counts (3-digit) and offsets/serials (6-digit) are
+    the false-positive risks, so 3-/6-digit require table-row shape
+    (line-leading + description + dtype/unit/table-region context,
+    mirroring the existing widened-scan justifications) with structural
+    denylists:     typed 3-/6-digit (line-leading and mid-line, same dtype-tail
+    requirement as 4-5 digit — dates/versions lack dtype so stay out;
+    verified zero typed 3-/6-digit hits on snapshots); dtype-less 3-/6-digit
+    line-leading globally with 3-digit <=255 skipped as CS/ERR/value domain
+    (verified: all snapshot 3-digit line-leading hits — 116/117/119/245-255
+    etc — fall in 0-255, so zero-diff; 256-999 and all 6-digit parse honestly;
+    no snapshot 6-digit line exists); ranges 3-/6-
+    digit ONLY with history/register context (unlike guard-free 4-5 digit —
+    the BMV 3-digit "174..372" temperature Range cells lack the context so
+    stay excluded, verified) plus the 1024 cap; multi-line 3-/6-digit with
+    the same 8-line overscan (no snapshot "..." start, verified). Denylists
+    stay structural so no content word is shared-blind; snapshots stay
+    exactly EXPECTED_DECIMAL_SCAN_HITS.
     The bare-x typo half (``(?<!\\w)[xX]HHHH``, missing leading 0),
     symmetric with the Orion/BlueSolar parser rescues and the hex
     scraper's bare-x rescue above (same doc-typo justification): the
@@ -645,6 +666,35 @@ def scrape_decimal_ids(text: str) -> set[int]:
                 pass
             else:
                 ids.add(rid)
+        # 3-/6-digit dtype-less (table-row shape: line-leading + description
+        # globally, mirroring the 4-5 digit global above; 3-digit <=255
+        # skipped as CS/ERR/value domain everywhere — see docstring — so
+        # snapshot "245 WAKE-UP" rows (inside and outside history regions)
+        # stay excluded while "999 ..."/"123456 ..." parse honestly;
+        # 6-digit no extra guard, no snapshot hits).
+        for _pat in (r"^\s*(\d{3})(?!\d)\s+(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)\s+(\S.*?)\s*$"):
+            m36 = re.match(_pat, line)
+            if m36:
+                _rid36 = int(m36.group(1))
+                if len(m36.group(1)) == 3 and _rid36 <= 255:
+                    continue  # CS/ERR/value domain, never a decimal register ID
+                ids.add(_rid36)
+        # 3-/6-digit typed (global, same dtype-tail as 4-5 digit above;
+        # zero-diff: no snapshot hits). Exact lengths with (?!\d) so
+        # "60961" never partially matches as "609".
+        for _tpat, _flags in (
+            (r"^\s*(\d{3})(?!\d)\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{6})(?!\d)\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+        ):
+            _tm = re.match(_tpat, line, _flags)
+            if _tm:
+                ids.add(int(_tm.group(1)))
+        for _mpat in (
+            r"(?<!\w)(\d{3})(?!\d)\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{6})(?!\d)\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+        ):
+            for m_mid36 in re.finditer(_mpat, line, re.IGNORECASE):
+                ids.add(int(m_mid36.group(1)))
         for m2 in re.finditer(r"(?<!\w)0\s+[xX]([0-9A-Fa-f]{4})\b", line):
             ids.add(int(m2.group(1), 16))
         for m3 in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", line):
@@ -662,9 +712,24 @@ def scrape_decimal_ids(text: str) -> set[int]:
             a, b = int(m5.group(1)), int(m5.group(2))
             if 0 < b - a <= 1024:
                 ids.update(range(a, b + 1))
+        # 3-/6-digit ranges ONLY with history/register context (unlike
+        # guard-free 4-5 digit above — the BMV "174..372" Range cells lack
+        # it so stay excluded; see docstring). Zero-diff verified.
+        for m536 in re.finditer(r"(?<![\w\-])(\d{3,6})(?!\d)\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,6})(?!\d)(?!\w)", line):
+            a, b = int(m536.group(1)), int(m536.group(2))
+            # Skip pure 4-5 digit pairs already covered guard-free above
+            # (avoid double work; guarded path would also match them but the
+            # guard-free path is the loud side for those).
+            if 1000 <= a <= 99999 and 1000 <= b <= 99999:
+                continue
+            if not re.search(r"[Rr]egister|history|History|Cycle", line):
+                continue
+            if 0 < b - a <= 1024:
+                ids.update(range(a, b + 1))
     # Multi-line decimal "..." mirror of the hex scraper's 8-line overscan
     # (parsers scan 3 — the gap divergence axis). Zero-diff: no snapshot
-    # decimal "..." start line.
+    # decimal "..." start line. Widened to 3-/6-digit (no snapshot hits,
+    # verified; same overscan/gap axis as 4-5 digit).
     _lines = text.splitlines()
     for i, line in enumerate(_lines):
         if re.match(r"^\s*\d{4,5}\s*\.\.\.\s*$", line):
@@ -673,6 +738,21 @@ def scrape_decimal_ids(text: str) -> set[int]:
                 m6 = re.match(r"^\s*(\d{4,5})\s*$", nxt)
                 if m6:
                     b = int(m6.group(1))
+                    if 0 < b - a <= 1024:
+                        ids.update(range(a, b + 1))
+                    break
+        elif re.match(r"^\s*\d{3}(?!\d)\s*\.\.\.\s*$", line) or re.match(r"^\s*\d{6}(?!\d)\s*\.\.\.\s*$", line):
+            try:
+                a = int(re.match(r"^\s*(\d{3,6})", line).group(1))  # type: ignore[union-attr]
+            except Exception:
+                continue
+            for nxt in _lines[i + 1 : i + 9]:
+                m636 = re.match(r"^\s*(\d{3,6})(?!\d)\s*$", nxt)
+                if m636:
+                    try:
+                        b = int(m636.group(1))
+                    except Exception:
+                        break
                     if 0 < b - a <= 1024:
                         ids.update(range(a, b + 1))
                     break
@@ -3902,41 +3982,83 @@ class TestSpecParsers(unittest.TestCase):
                 )
         self.assertEqual(mismatches, [])
         mismatches = []
+        # BlueSolar access: no skipping by access value (anti-oscillation).
+        # Every parsed access asserts (R/W defaults included); allowlist ONLY
+        # where the doc gives no single access signal, each justified:
+        # - 0x2004 Remote command: Get/Set table default R/W but detail
+        #   "Remote commands (register 0x2004)" lists write-only command values
+        #   (1=start equalise...), DB refines to WRITE_ONLY
+        #   (src/ve_direct/registers/__init__.py:335). Genuine table-vs-detail
+        #   ambiguity, allowlisted — not a skipping-by-value.
+        # Zero-diff: all other 205 values pass (2 W, 63 history R, 140 R/W).
+        # Regression: flipping W 0x0004 to R/struct must fail here (R expects
+        # READ_ONLY vs DB WRITE_ONLY) while scale/dtype gates stay allowlisted
+        # (both None/struct in SCALE/DTYPE allows — access is the loud axis).
+        _BS_ACCESS_ALLOW = {
+            0x2004,  # Remote command: table R/W vs command-detail WRITE_ONLY (see above)
+        }
         for rid, spec_reg in self.bs_regs.items():
+            if rid in _BS_ACCESS_ALLOW:
+                continue  # justified above, not skipping-by-value
             if spec_reg.access == "W":
-                expected = "WRITE_ONLY"
-            elif spec_reg.access == "R" and (
-                "history" in spec_reg.description.lower()
-                or "range-expanded" in spec_reg.notes.lower()
-                or "total history" in spec_reg.description.lower()
-            ):
-                expected = "READ_ONLY"
-            else:
-                continue  # R/W default or timer R/W (Get/Set writable), no assert
-            actual = R.lookup(rid, flavor="MPPT").access
-            # Timer R/W skipped above; history R must be READ_ONLY (CONSTANT allowed like Phoenix).
-            if actual != expected and actual != "CONSTANT":
+                allowed = {"WRITE_ONLY"}
+            elif spec_reg.access == "R":
+                # History/range R and any future non-history R both expect
+                # READ_ONLY (BS has zero non-history R today, verified, so
+                # this asserts future flips like 0x0004->R loudly).
+                allowed = {"READ_ONLY"}
+            else:  # R/W default (Get/Set table context implies readable+writable)
+                # Doc-readable, DB READ_WRITE or READ_ONLY-refined (BMV
+                # pattern, e.g. 0xEDD5 charger voltage R/W vs DB READ_ONLY).
+                allowed = {"READ_WRITE", "READ_ONLY"}
+            try:
+                actual = R.lookup(rid, flavor="MPPT").access
+            except Exception:
+                try:
+                    actual = R.lookup(rid, flavor="MPPT_RS").access
+                except Exception:
+                    # No MPPT/MPPT_RS entry: covered by schema compliance
+                    # accessibility (flavor-aliased), not access-value skipping.
+                    continue
+            if actual not in allowed and actual != "CONSTANT":
                 # src/ is read-only: DOC truth asserts here; on mismatch report DB file:line.
-                mismatches.append(f"BS 0x{rid:04X} ({spec_reg.name}): expected {expected}, got {actual}")
+                mismatches.append(f"BS 0x{rid:04X} ({spec_reg.name}): parser {spec_reg.access} allows {sorted(allowed)}, got DB {actual}")
         self.assertEqual(mismatches, [])
         mismatches = []
+        # Orion access: same no-skipping rule. Detail-mention Rs with no
+        # access column in doc (prose/detail only, parser default R) are the
+        # ONLY allowlist — each genuinely gives no access signal (mixed DB):
+        # - 0x0090 BLE mode: single-field Bytes detail, no column, DB READ_WRITE
+        # - 0x0150 BLE capabilities: single-field Bytes detail, no column, DB READ_ONLY
+        # - 0x0206 Device function: Value-table prose, no widths/column, DB READ_WRITE
+        # - 0x2013 Total charge current: prose-only, no column, DB READ_WRITE
+        # - 0xEDDA Charger error/warning: Value-table prose, no column, DB READ_ONLY
+        # Zero-diff: all other 104 values pass (2 W, 41 cycle-history R, rest R/W).
+        _ORION_NO_SIGNAL_ALLOW = {
+            0x0090,  # BLE mode detail, no access column
+            0x0150,  # BLE capabilities detail, no access column
+            0x0206,  # Device function prose, no access column
+            0x2013,  # Total charge current prose, no access column
+            0xEDDA,  # Charger error/warning prose, no access column
+        }
         for rid, spec_reg in self.or_regs.items():
+            if rid in _ORION_NO_SIGNAL_ALLOW:
+                continue  # justified above, not skipping-by-value
             if spec_reg.access == "W":
-                expected = "WRITE_ONLY"
-            elif spec_reg.access == "R" and (
-                "history" in spec_reg.description.lower()
-                or "cycle" in spec_reg.description.lower()
-                or "range-expanded" in spec_reg.notes.lower()
-            ):
-                expected = "READ_ONLY"
-            else:
-                continue  # R/W defaults + detail Rs (0x0090/0x0206/0x2013/0x0150/0xEDDA: no access column)
+                allowed = {"WRITE_ONLY"}
+            elif spec_reg.access == "R":
+                # History/cycle/range R expects READ_ONLY; any future
+                # non-history R not in the allowlist above also expects
+                # READ_ONLY (fails loudly, e.g. flipped 0x0004).
+                allowed = {"READ_ONLY"}
+            else:  # R/W default (Get/Set table context)
+                allowed = {"READ_WRITE", "READ_ONLY"}
             try:
                 actual = R.lookup(rid, flavor="ORION").access
             except Exception:
                 continue  # flavor-aliased, covered by schema compliance
-            if actual != expected and actual != "CONSTANT":
-                mismatches.append(f"Orion 0x{rid:04X} ({spec_reg.name}): expected {expected}, got {actual}")
+            if actual not in allowed and actual != "CONSTANT":
+                mismatches.append(f"Orion 0x{rid:04X} ({spec_reg.name}): parser {spec_reg.access} allows {sorted(allowed)}, got DB {actual}")
         self.assertEqual(mismatches, [])
 
         self.assertEqual(R.lookup("REBULK_VOLTAGE_OFFSET").id, 0xED2E)
@@ -4692,6 +4814,217 @@ class TestSpecParsers(unittest.TestCase):
         lower = OrionXSHEXParser(base % "un16")
         pos2 = (base % "un16").find("registers 0x0150") + len("registers 0x0150 dummy")
         self.assertEqual(lower._single_field_bytes_width(pos2), ("un16", 1.0))
+
+
+    def test_bmv_short_layout_bare_int_scale(self):
+        """Issue-1: BMV short-layout bare/decimal-int scales required the
+        exponent (``\\d+(?:[.,]\\d+)?[eE]...`` missing ``?``) while the
+        tail-validator and Step made it optional: probes ``0x0303 Foo -
+        un32 1`` / ``1.5 V`` / ``10 V`` gave scale None with empty gates
+        (control ``0.01 V`` → 0.01), excused by SCALE_NONE_ALLOW. The exponent
+        is now optional like its siblings. Regression (bare int, decimal int,
+        exponent control). Zero-diff: snapshot 110 regs, gates empty."""
+        from spec_parser import BMV7xxHEXParser
+
+        self.assertEqual(self.specs["bmv"].unknown_units, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        self.assertEqual(len(self.bmv_regs), EXPECTED_COUNTS["bmv"])
+        for probe_text, expected_scale, expected_unit in (
+            ("hdr\n0x0303 Foo - un32 1\nftr", 1.0, None),
+            ("hdr\n0x0303 Foo - un32 1.5 V\nftr", 1.5, "V"),
+            ("hdr\n0x0303 Foo - un32 10 V\nftr", 10.0, "V"),
+        ):
+            with self.subTest(probe=probe_text):
+                p = BMV7xxHEXParser(probe_text)
+                r = p.parse_registers()[0x0303]
+                self.assertAlmostEqual(r.scale, expected_scale)
+                self.assertEqual(r.unit, expected_unit)
+                self.assertIn(0x0303, SCALE_NONE_ALLOW["bmv"])
+        # Controls: plain decimal and exponent parse as before.
+        ctrl = BMV7xxHEXParser("hdr\n0x0303 Foo - un32 0.01 V\nftr")
+        self.assertAlmostEqual(ctrl.parse_registers()[0x0303].scale, 0.01)
+        self.assertEqual(ctrl.unknown_scales, [])
+        exp = BMV7xxHEXParser("hdr\n0x0303 Foo - un32 1e-2 V\nftr")
+        self.assertAlmostEqual(exp.parse_registers()[0x0303].scale, 0.01)
+        self.assertEqual(exp.unknown_scales, [])
+
+    def test_decimal_3digit_6digit_divergence(self):
+        """Issue-2: shared ``\\d{4,5}`` floor missed ``999 Future history
+        record`` and ``123456 Future record`` on decimal scan, hex scrape, and
+        both parsers (control ``60961`` hits). Decimal coverage now widens to
+        3-/6-digit with table-row shape (line-leading + description +
+        dtype/unit/history-region context) and structural denylists (3-digit
+        <=255 state domain; 3-digit ``174..372`` Range cells lack history
+        context). Divergence for both widths. Zero-diff: snapshots stay
+        exactly EXPECTED_DECIMAL_SCAN_HITS, counts pinned."""
+        from spec_parser import OrionXSHEXParser
+
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+        for probe_id, probe_desc in ((999, "Future history record"), (123456, "Future record")):
+            with self.subTest(probe=probe_id):
+                line = f"{probe_id}      {probe_desc}\n"
+                hist = f"Restore factory defaults\n{line}1.2 Asynchronous items\n"
+                # Decimal scan catches (hex misses by design: no 0x).
+                self.assertIn(probe_id, scrape_decimal_ids(hist))
+                self.assertNotIn(probe_id, scrape_doc_ids(line))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(parser=cls.__name__):
+                        regs = cls(hist).parse_registers()
+                        self.assertIn(probe_id, regs)
+                        self.assertIsNone(regs[probe_id].scale)
+                        self.assertEqual(regs[probe_id].access, "R")
+                # Control hits everywhere (same shape).
+                ctrl_line = "60961      Future history record\n"
+                ctrl_hist = f"Restore factory defaults\n{ctrl_line}1.2 Asynchronous items\n"
+                self.assertIn(60961, scrape_decimal_ids(ctrl_hist))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    self.assertIn(60961, cls(ctrl_hist).parse_registers())
+        # False-positive guards stay out.
+        self.assertEqual(scrape_decimal_ids("245 WAKE-UP device about to start\n"), set())
+        self.assertEqual(
+            scrape_decimal_ids("0x032A Foo 45 Un16 0=disabled; 174..372 0 0.01 K\n"), set()
+        )
+        # Typed 3-/6-digit with dtype tail also diverge honestly.
+        self.assertIn(999, scrape_decimal_ids("999 Future typed 0.1 un16 V\n"))
+        self.assertIn(123456, scrape_decimal_ids("123456 Future typed 0.1 un16 V\n"))
+
+    def test_access_no_skipping_regression(self):
+        """Issue-3: access loops ``continue``d on R/W defaults and non-history
+        R, so flipping W 0x0004 to R/struct skipped every assert (0x0004 is
+        triple-allowlisted SCALE/DTYPE/access). All parsed accesses now assert
+        (R/W included); allowlist ONLY where the doc gives no signal (BlueSolar
+        0x2004 command ambiguity; Orion 5 detail Rs), each justified in
+        test_access_and_product_specific_semantics. Zero-diff there proves all
+        current values pass. Here: synthetic 0x0004→R must fail loudly."""
+        # Zero-diff already proved by test_access_and_product_specific_semantics
+        # (all 206/109 values pass under the new rule); pin triple-allowlist.
+        self.assertIn(0x0004, SCALE_NONE_ALLOW["bluesolar"])
+        self.assertIn(0x0004, DTYPE_UNKNOWN_ALLOW["bluesolar"])
+        self.assertIn(0x0004, UNIT_NONE_ALLOW["bluesolar"])
+        # Probe: write-hint removed flips W→R/struct (scale/dtype stay
+        # allowlisted None/struct — access is the loud axis as applicable).
+        text = "Restore factory defaults\n0x0004 Future readable record\n1.2 Asynchronous items\n"
+        probe = BlueSolarHEXParser(text).parse_registers()[0x0004]
+        self.assertEqual(probe.access, "R")
+        self.assertEqual(probe.data_type, "struct")
+        self.assertIsNone(probe.scale)
+        db_access = R.lookup(0x0004, flavor="MPPT").access
+        self.assertEqual(db_access, "WRITE_ONLY")
+        # Under the new rule R expects {READ_ONLY}: mismatch fails loudly.
+        self.assertNotIn(db_access, {"READ_ONLY"})
+        # Control: real command still W/write_only and maps.
+        self.assertEqual(self.bs_regs[0x0004].access, "W")
+        self.assertEqual(self.bs_regs[0x0004].data_type, "write_only")
+
+    def test_tolerant_cs_year_guard_live_divergence(self):
+        """Issue-4: year-guard asymmetry hid live-added year-shaped CS states
+        (snapshot parsers have NO guard → probe ``Future mode 2000`` parses
+        {0,2000} offline diverging vs guarded scraper/tolerant, good; but LIVE
+        used guarded tolerant both sides snap==live {0} plus parser-fallback
+        ID-mismatch skip → FRESH). The tolerant/live guard is dropped after
+        verifying no snapshot or live CS-section text contains a 1900-2100
+        non-code number (snapshot Text CS zero 4-digit; live Text CS zero
+        4-digit; other specs no CS marker — verified 2026-09-25). Year-shaped
+        candidates now compare loudly. Divergence: snapshot+row as live must
+        NOT be fresh. Zero false alarms on today's live (15==15)."""
+        import re as _re
+
+        text = self.raw_texts["text"]
+        pos = text.find("The state of operation")
+        tail = text[pos:]
+        m_end = tail.find("The error code")
+        sec = tail[:m_end] if m_end > 0 else tail[:5000]
+        self.assertEqual(_re.findall(r"(?<!\d)(\d{4})(?!\d)", sec), [])
+        from fetch_specs import tolerant_cs_states
+
+        snap_cs = tolerant_cs_states(text)
+        self.assertEqual(len(snap_cs), 15)
+        # Live probe: snapshot CS section plus year-shaped row as live text.
+        live_text = text[:pos] + sec + "\nFuture mode 2000  •\n" + text[pos + len(sec):]
+        live_cs = tolerant_cs_states(live_text)
+        self.assertIn(2000, live_cs)
+        self.assertNotEqual(snap_cs, live_cs)
+        # Snapshot parser (no guard) already diverges offline vs scraper.
+        self.assertIn(2000, VEDirectTextParser(
+            "The state of operation. See the table below\nFuture mode  2000  •\nERR\n"
+        ).parse_cs_states())
+        # Zero false alarms on today's live (network; skip offline).
+        try:
+            from fetch_specs import download_pdf_bytes, live_text_for_structures
+
+            pdf = download_pdf_bytes(
+                fetch_specs.OFFICIAL_SPECS["VE.Direct-Protocol-3.34"]["url"], timeout=30.0
+            )
+            live = live_text_for_structures(pdf)
+            self.assertEqual(tolerant_cs_states(live), snap_cs)
+        except OSError as e:
+            self.skipTest(f"live download unreachable, skipping: {e}")
+
+    def test_section_table_unit_qualifier_loud(self):
+        """Issue-5: BlueSolar/Orion section tables kept raw Unit remainder with
+        no unknown-unit gate: probe ``0xEDF0 ... V (peak)`` yielded ``V
+        (peak)`` (normalizer strips to ``V``, matching DB) with empty gates —
+        qualifier silently lost (BMV/Text have loud gates). Qualifiers now
+        record via unknown_units (BMV/Text pattern) while unit stays as today.
+        Regression + zero-diff (snapshots empty, counts pinned; denylisted
+        ``% (of 0xEDF0)`` register reference only)."""
+        from spec_parser import OrionXSHEXParser
+
+        for cls, regs, key in (
+            (BlueSolarHEXParser, self.bs_regs, "bluesolar"),
+            (OrionXSHEXParser, self.or_regs, "orion"),
+        ):
+            with self.subTest(parser=cls.__name__):
+                parser = cls.from_file(self.specs_dir / (
+                    "BlueSolar-HEX-protocol.txt" if key == "bluesolar" else "Orion-XS-HEX-protocol.txt"
+                ))
+                parser.parse_registers()
+                self.assertEqual(parser.unknown_units, [])
+                self.assertEqual(parser.unknown_scales, [])
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(probe=cls.__name__):
+                p = cls("1.1 Get and Set items\n0xEDF0 Battery maximum current 0.01 un16 V (peak)\n1.2 Asynchronous items\n")
+                r = p.parse_registers()[0xEDF0]
+                self.assertEqual(r.unit, "V (peak)")
+                self.assertEqual(p.unknown_units, [(0xEDF0, "V (peak)")])
+                self.assertEqual(p.unknown_scales, [])
+                # Normalizer still strips to V (schema side unchanged; gate loud).
+                self.assertEqual(_normalize_unit_for_comparison(r.unit), "V")
+                # Control plain V silent; denylisted reference silent.
+                c = cls("1.1 Get and Set items\n0xEDF0 Battery maximum current 0.01 un16 V\n1.2 Asynchronous items\n")
+                c.parse_registers()
+                self.assertEqual(c.unknown_units, [])
+                d = cls("1.1 Get and Set items\n0xEDE4 Battery setting 1 un16 % (of 0xEDF0)\n1.2 Asynchronous items\n")
+                d.parse_registers()
+                self.assertEqual(d.unknown_units, [])
+
+    def test_scale_dtype_structural_window(self):
+        """Issue-6: live scale/dtype map cut each ID window at maxdist=120, so
+        200 filler chars between ID and ``0.01 un16 V`` yielded {} (control
+        short exact) — a long-row edit skipped as missing-ID staying FRESH.
+        The window is now structural (up to next ID / end of text). Regression
+        with the long-row probe. Zero false alarms on today's live (all maps
+        diff-free)."""
+        filler = "x" * 200
+        long_row = f"0xEDF0 {filler} 0.01 un16 V"
+        short_row = "0xEDF0 Battery maximum current 0.01 un16 V"
+        self.assertEqual(scale_dtype_map_from_text(short_row), {0xEDF0: (0.01, "un16")})
+        self.assertEqual(scale_dtype_map_from_text(long_row), {0xEDF0: (0.01, "un16")})
+        # Next-ID bound still prevents backwards leakage.
+        two = f"0xEDF0 {filler} 0.01 un16 V 0xEDF1 Battery foo 0.1 un16 V"
+        self.assertEqual(
+            scale_dtype_map_from_text(two), {0xEDF0: (0.01, "un16"), 0xEDF1: (0.1, "un16")}
+        )
+        # Zero false alarms on today's live (network; skip offline).
+        try:
+            for key in ("BlueSolar-HEX-protocol", "Orion-XS-HEX-protocol"):
+                snap = (self.specs_dir / f"{key}.txt").read_text(errors="ignore")
+                pdf = download_pdf_bytes(fetch_specs.OFFICIAL_SPECS[key]["url"], timeout=30.0)
+                self.assertEqual(live_scale_dtype_diffs(snap, pdf, key), [])
+        except OSError as e:
+            self.skipTest(f"live download unreachable, skipping: {e}")
 
 
 class TestFetchSpecs(unittest.TestCase):
@@ -5709,8 +6042,12 @@ class TestFetchSpecs(unittest.TestCase):
             (0.01, "un16"),
         )
         # Zero-diff on today's files: old pattern
-        # ``(-|\\d+\\.\\d+|\\d+)`` vs the fixed general float on all five
-        # snapshots (ground truth tests/specs/*.txt) — identical maps.
+        # ``(-|\\d+\\.\\d+|\\d+)`` with maxdist=120 vs the fixed general float
+        # with structural window (up to next ID, issue-6 fix) on all five
+        # snapshots (ground truth tests/specs/*.txt) — new is a superset with
+        # identical values on overlap; extras (e.g. BlueSolar 0x10BE struct
+        # history record picked up beyond 120 chars) are struct/unknown and
+        # skipped in diffs, so zero false alarms (verified live 0 mism).
         from fetch_specs import _strip_language_tags
 
         specs_dir = Path(__file__).resolve().parent / "specs"
@@ -5742,7 +6079,31 @@ class TestFetchSpecs(unittest.TestCase):
                         scale = None if m.group(1) == "-" else float(m.group(1))
                         old[rid] = (scale, m.group(2).lower())
                 old.pop(0xEFF0, None)
-                self.assertEqual(scale_dtype_map_from_text(text), old)
+                new = scale_dtype_map_from_text(text)
+                # Overlap identical (no value changes — the exponent fix is
+                # zero-diff on snapshots since no scale uses exponents).
+                for rid, val in old.items():
+                    self.assertIn(rid, new)
+                    self.assertEqual(new[rid], val)
+                # Extras beyond 120 chars are either struct/unknown/write_only
+                # (skipped in diffs) or value-matching (diff-free) — never
+                # mismatches. Verified live 0 mism.
+                from spec_parser import BlueSolarHEXParser, OrionXSHEXParser
+
+                if name.startswith("BlueSolar"):
+                    regs = BlueSolarHEXParser(text).parse_registers()
+                elif name.startswith("Orion"):
+                    regs = OrionXSHEXParser(text).parse_registers()
+                else:
+                    regs = {}
+                for rid in set(new) - set(old):
+                    reg = regs.get(rid)
+                    if reg is None or reg.data_type in ("struct", "unknown", "write_only"):
+                        continue  # skipped in diffs
+                    self.assertEqual(
+                        new[rid], (reg.scale, reg.data_type),
+                        f"{name} extra {rid:#x} must match snapshot (diff-free)",
+                    )
 
     def test_targeted_scale_dtype_diffs_synthetic_pdf(self):
         """Mocked (offline, stdlib-only) proof that a same-revision live scale
@@ -6007,7 +6368,6 @@ class TestFetchSpecs(unittest.TestCase):
             ):
                 results = verify_remote_content(Path(tmp))
                 self.assertIsNone(results["BlueSolar-HEX-protocol"])
-
 
 if __name__ == "__main__":
     unittest.main()

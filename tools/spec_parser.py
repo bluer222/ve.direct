@@ -346,6 +346,16 @@ class BlueSolarHEXParser:
         #: Allowlists excuse missing doc data, never dropped unknown
         #: tokens — even allowlisted IDs (e.g. 0xEDB3) record here.
         self.unknown_scales: List[Tuple[int, str]] = []
+        #: ``(rid, unit)`` section-table rows whose Unit remainder carries
+        #: a parenthesized qualifier (e.g. future "V (peak)"): the raw
+        #: remainder is kept as unit (normalizer strips to "V", matching
+        #: DB) while the qualifier is recorded loudly here even on
+        #: allowlisted IDs (BMV/Text unknown-units pattern — allowlists
+        #: excuse missing data, never dropped qualifiers). Empty for the
+        #: current snapshots except the denylisted "% (of 0xEDF0)"
+        #: register reference below; the suite asserts the remainder stays
+        #: empty so a new qualifier breaks loudly until triaged.
+        self.unknown_units: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> BlueSolarHEXParser:
@@ -354,6 +364,7 @@ class BlueSolarHEXParser:
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
         self.unknown_scales = []
+        self.unknown_units = []
         self._parse_section_tables(regs)
         self._parse_id_ranges(regs)
         self._parse_tracker_mirrors(regs)
@@ -427,6 +438,19 @@ class BlueSolarHEXParser:
                 dtype = "write_only"
                 unit_str = None
                 sentinels = set()
+            # Loud unknown-unit gate for parenthesized qualifiers (BMV/Text
+            # pattern): probe "0xEDF0 ... V (peak)" kept unit "V (peak)"
+            # (normalizer strips to "V", matching DB) with empty gates while
+            # the qualifier was silently lost (reproduced before fix). Any
+            # "(" remainder now records loudly even on allowlisted IDs
+            # (allowlists excuse missing data, never dropped qualifiers)
+            # while unit stays as today (schema side unchanged, gate is loud).
+            # Denylist (explicit, justified): "% (of 0xEDF0)" is the doc's
+            # register-reference notation on 0xEDE4 (not a physical-unit
+            # qualifier) — verified the ONLY parenthesized Unit remainder in
+            # either snapshot, so zero-diff while future "V (peak)" records.
+            if unit_str and "(" in unit_str and unit_str.strip() != "% (of 0xEDF0)":
+                self.unknown_units.append((rid, unit_str))
 
             regs[rid] = ParsedRegister(
                 id=rid,
@@ -484,20 +508,24 @@ class BlueSolarHEXParser:
             # "60961..60999", "60961...60999") was missed by every parser and
             # scan while counts stayed green (all sides shared the 0x-only
             # range assumption — reproduced synthetically before the fix).
-            # Shape guards (explicit, justified): 4-5 digit groups (dates use
-            # 2-digit groups; bare years carry no second group), separators
-            # ".." / "..." / single "-" (mirroring the hex ".." plus the
-            # natural decimal "-" of the probe; "--" never a range),
-            # ``(?<![\w\-])`` so signed Range cells (BMV 0x1034
-            # "-32768..32767") and hex tails ("0x1000" — "1000" is
-            # ``\w``-preceded) never match, ``(?!\w)`` so trailing letters
-            # never match. Context guard doubles as the Range-column
-            # exclusion (that BMV line carries no history/register word);
+            # Shape guards (explicit, justified): 3-6 digit groups (widened
+            # from 4-5: calendar years are exactly 4-digit so 3-/6-digit
+            # carry no year collision; probes "999 ..." / "123456 ..." now
+            # expand honestly), separators ".." / "..." / single "-"
+            # (mirroring the hex ".." plus the natural decimal "-" of the
+            # probe; "--" never a range), ``(?<![\w\-])`` so signed Range
+            # cells (BMV 0x1034 "-32768..32767") and hex tails ("0x1000" —
+            # "1000" is ``\w``-preceded) never match, ``(?!\w)`` so trailing
+            # letters never match. Context guard doubles as the Range-column
+            # exclusion (that BMV line carries no history/register word —
+            # likewise the 3-digit "174..372" temperature Range cells on BMV
+            # alarm/relay rows, verified no history word so still excluded);
             # the span cap is the third guard. Zero-diff: no decimal range
-            # line exists in any snapshot (verified), so nothing expands
-            # today. Decimal ranges are always history records here (timer
-            # events are hex-documented Get/Set words, never decimal).
-            for m in re.finditer(r"(?<![\w\-])(\d{4,5})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{4,5})(?!\w)", line):
+            # line with history context exists in any snapshot (verified),
+            # so nothing expands today. Decimal ranges are always history
+            # records here (timer events are hex-documented Get/Set words,
+            # never decimal).
+            for m in re.finditer(r"(?<![\w\-])(\d{3,6})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,6})(?!\w)", line):
                 a, b = int(m.group(1)), int(m.group(2))
                 if not re.search(r"[Rr]egister|vreg|history|History|Timer|Cycle|0[xX]104F|0[xX]1050", line):
                     continue
@@ -545,13 +573,16 @@ class BlueSolarHEXParser:
             # No timer kind (decimal timers are not a doc shape); no context
             # guard (mirroring the hex multi-line branch, which has none —
             # the "..." start shape itself is the guard; the ``^`` anchor
-            # already excludes signed cells like "-32768..."). Zero-diff: no
-            # decimal "..." start line exists in any snapshot (verified).
-            dm = re.match(r"^\s*(\d{4,5})\s*\.\.\.\s*$", line)
+            # already excludes signed cells like "-32768..."). Widened to
+            # 3-/6-digit (same year-collision-free justification as inline
+            # above; probes "999 ..." / "123456 ..." expand honestly).
+            # Zero-diff: no decimal "..." start line exists in any snapshot
+            # (verified, including 3-/6-digit).
+            dm = re.match(r"^\s*(\d{3,6})\s*\.\.\.\s*$", line)
             if dm:
                 a = int(dm.group(1))
                 for j in range(i + 1, min(i + 4, len(lines))):
-                    m2 = re.match(r"^\s*(\d{4,5})\s*$", lines[j])
+                    m2 = re.match(r"^\s*(\d{3,6})\s*$", lines[j])
                     if m2:
                         b = int(m2.group(1))
                         for rid in _expand_id_range(a, b):
@@ -677,11 +708,23 @@ class BlueSolarHEXParser:
                 # "A&B" now parse honestly; zero-diff via rid-in-regs).
                 # Symbol-first ("60961 *Boost record") takes the same
                 # ``\S.*?`` widening as the hex branch above (same
-                # justification and zero-diff there).
-                dm = re.match(r"^\s*(\d{4,5})\s+(\S.*?)\s*$", line)
+                # justification and zero-diff there). Widened to 3-/6-digit
+                # (probes "999 Future history record" / "123456 Future
+                # record" missed everywhere while "60961" hit — reproduced
+                # before fix): calendar years are exactly 4-digit so 3-/6-
+                # digit carry no year collision; 0-255 (.e.g snapshot
+                # history-region "245 WAKE-UP" state rows) are CS/ERR/value
+                # domain, never decimal register IDs (verified: all snapshot
+                # 3-digit line-leading hits fall in 0-255), so 3-digit IDs
+                # <=255 skip here while 256-999 and all 6-digit parse
+                # honestly. Zero-diff: history-region 3-digit hits are all
+                # <=255 (skipped) and no 6-digit line exists (verified).
+                dm = re.match(r"^\s*(\d{3,6})\s+(\S.*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
+                if rid <= 255:
+                    continue  # state/error/value domain, never a decimal register ID
                 desc = dm.group(2).strip()
             if any(w in desc for w in ("MPPT", "BlueSolar", "SmartSolar", "VE.Can", "Inverter", "Charger")):
                 continue
@@ -755,6 +798,12 @@ class OrionXSHEXParser:
         #: gate pattern — allowlists never hide dropped unknown tokens,
         #: even on allowlisted IDs).
         self.unknown_scales: List[Tuple[int, str]] = []
+        #: ``(rid, unit)`` section-table rows whose Unit remainder carries
+        #: a parenthesized qualifier (e.g. future "V (peak)"): raw kept
+        #: (normalizer strips to base, matching DB) while the qualifier
+        #: records loudly here even on allowlisted IDs (BMV/Text pattern).
+        #: Empty for snapshots except denylisted "% (of 0xEDF0)".
+        self.unknown_units: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> OrionXSHEXParser:
@@ -763,6 +812,7 @@ class OrionXSHEXParser:
     def parse_registers(self) -> Dict[int, ParsedRegister]:
         regs: Dict[int, ParsedRegister] = {}
         self.unknown_scales = []
+        self.unknown_units = []
         self._parse_section_tables(regs)
         self._parse_id_ranges(regs)
         self._parse_history_restore_id_rows(regs)
@@ -802,6 +852,11 @@ class OrionXSHEXParser:
                 dtype = "write_only"
                 unit_str = None
                 sentinels = set()
+            # Loud unknown-unit gate (same pattern/justification as the
+            # BlueSolar branch above: probe "V (peak)" lost silently;
+            # denylisted "% (of 0xEDF0)" register reference only).
+            if unit_str and "(" in unit_str and unit_str.strip() != "% (of 0xEDF0)":
+                self.unknown_units.append((rid, unit_str))
 
             regs[rid] = ParsedRegister(
                 id=rid,
@@ -838,10 +893,12 @@ class OrionXSHEXParser:
                         )
             # Decimal range mirror (same context guard, same 64-register
             # cap; see the BlueSolar branch for the full shape-guard
-            # justification). Probe "History registers 60961-60999 table"
-            # was missed on all sides before the fix. Zero-diff: no decimal
-            # range line exists in any snapshot (verified).
-            for m in re.finditer(r"(?<![\w\-])(\d{4,5})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{4,5})(?!\w)", line):
+            # justification, widened to 3-/6-digit there). Probe "History
+            # registers 60961-60999 table" was missed on all sides before
+            # the fix. Zero-diff: no decimal range line with history context
+            # exists in any snapshot (verified, incl. 3-digit "174..372"
+            # Range cells which lack the context guard).
+            for m in re.finditer(r"(?<![\w\-])(\d{3,6})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,6})(?!\w)", line):
                 a, b = int(m.group(1)), int(m.group(2))
                 if not re.search(r"[Rr]egister|history|History|Cycle", line):
                     continue
@@ -907,12 +964,17 @@ class OrionXSHEXParser:
                 # the hex branch above and the BlueSolar handler).
                 # Symbol-first takes the same ``\S.*?`` widening (same
                 # justification and zero-diff as the hex branch above).
-                dm = re.match(r"^\s*(\d{4,5})\s+(\S.*?)\s*$", line)
+                # Widened to 3-/6-digit like the BlueSolar handler (same
+                # 0-255 state-domain skip; probes "999 ..."/"123456 ..."
+                # parse honestly, snapshot "245 WAKE-UP" rows skip).
+                dm = re.match(r"^\s*(\d{3,6})\s+(\S.*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
                     continue
                 rid = int(dm.group(1))
+                if rid <= 255:
+                    continue  # state/error/value domain, never a decimal register ID
                 desc = dm.group(2).strip()
             if any(w in desc for w in ("MPPT", "BlueSolar", "SmartSolar", "Orion", "VE.Can")):
                 continue
@@ -1269,9 +1331,23 @@ class BMV7xxHEXParser:
                         # float(); no snapshot row uses them (plain decimals
                         # only), so zero-diff. Comma-decimal ("0,1 V",
                         # "0,001A") parses via comma->dot; no snapshot row
-                        # uses it (verified), so zero-diff.
-                        sm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?[eE][+-]?\d+)([A-Za-z%°]+)?$", p_try)
-                        if sm:
+                        # uses it (verified), so zero-diff. Bare integers
+                        # ("1", "10") and decimal ints ("1.5") parse too
+                        # (exponent optional like the tail-validator and
+                        # Step siblings): probes "1"/"1.5 V"/"10 V" gave
+                        # scale None with empty gates while "0.01 V"
+                        # parsed (reproduced before fix); SCALE_NONE_ALLOW
+                        # excused the allowlisted ID. Zero-diff: no snapshot
+                        # short-layout rest token newly matches (verified).
+                        sm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", p_try)
+                        # Bare-int glued units ("1x") never parse as scale:
+                        # "1" alone parses (issue-1 fix) and decimal/exponent
+                        # glued ("0.001A", "1e-2V") parse, but bare-int plus
+                        # letters ("1x") is not a factor — it records via the
+                        # loud gates below instead (probe "(1x)" must stay
+                        # unknown_scales, not scale 1.0 unit "x"). Zero-diff:
+                        # no snapshot token is bare-int glued (verified).
+                        if sm and not (sm.group(2) and re.fullmatch(r"\d+", sm.group(1))):
                             scale = float(sm.group(1).replace(",", "."))
                             if sm.group(2):
                                 unit = sm.group(2)
@@ -1286,13 +1362,18 @@ class BMV7xxHEXParser:
                         # letter-bearing tokens (e.g. "1x") stay with the
                         # unknown-units gate below; digit-less parens
                         # ("(foo)") are description furniture, never a
-                        # scale. Zero-diff: no snapshot short-layout rest
-                        # token is parenthesized-digit-bearing (verified).
+                        # scale. Bare-int glued ("1x") counts as unparsable
+                        # here too (same exclusion as the scale gate above),
+                        # so "(1x)" records instead of parsing as 1.0/x.
+                        # Zero-diff: no snapshot short-layout rest token is
+                        # parenthesized-digit-bearing (verified).
+                        _gm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", p_try)
+                        _gvalid = bool(_gm) and not (_gm.group(2) and re.fullmatch(r"\d+", _gm.group(1)))
                         if (
                             p_try != p_clean
                             and re.search(r"\d", p_clean)
                             and "*" not in p_clean
-                            and not re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?[eE][+-]?\d+)([A-Za-z%°]+)?$", p_try)
+                            and not _gvalid
                         ):
                             if (rid, p_clean) not in self.unknown_scales:
                                 self.unknown_scales.append((rid, p_clean))
