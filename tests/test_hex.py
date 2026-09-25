@@ -26,6 +26,8 @@ class TestHex(unittest.TestCase):
         self.assertEqual(f.value_bytes, struct.pack("<H", 100))
 
     def test_get_shape(self):
+        # The removed positive case from test_register_id_restricted is
+        # covered here: a Get frame exposes register id 0xEDBB.
         line = H.build_get(0xEDBB)
         f = H.decode_line(line)
         self.assertTrue(f.valid)
@@ -45,15 +47,20 @@ class TestHex(unittest.TestCase):
 
     def test_request_response_names(self):
         # Nibble 0x3/0x4 double as request/response (BlueSolar §1, Orion §1).
-        self.assertEqual(H.REQUEST_NAMES[0x3], "AppVersion")
-        self.assertEqual(H.RESPONSE_NAMES[0x3], "Unknown")
-        self.assertEqual(H.REQUEST_NAMES[0x4], "ProductId")
-        self.assertEqual(H.RESPONSE_NAMES[0x4], "Error")
-        self.assertEqual(H.command_name(0x3, is_request=True), "AppVersion")
-        self.assertEqual(H.command_name(0x3, is_request=False), "Unknown")
-        f = H.decode_line(H.encode_frame(0x3, b""))
-        self.assertEqual(f.request_name, "AppVersion")
-        self.assertEqual(f.name, "Unknown")
+        for cmd, request, response in (
+            (0x3, "AppVersion", "Unknown"),
+            (0x4, "ProductId", "Error"),
+        ):
+            with self.subTest(cmd=cmd):
+                # Keep the direct name-map and command_name checks that were
+                # previously in this test, alongside the decoded frame names.
+                self.assertEqual(H.REQUEST_NAMES[cmd], request)
+                self.assertEqual(H.RESPONSE_NAMES[cmd], response)
+                self.assertEqual(H.command_name(cmd, is_request=True), request)
+                self.assertEqual(H.command_name(cmd, is_request=False), response)
+                f = H.decode_line(H.encode_frame(cmd, b""))
+                self.assertEqual(f.request_name, request)
+                self.assertEqual(f.name, response)
 
     def test_non_ascii_maps_to_frame_error(self):
         from ve_direct.exceptions import FrameError
@@ -67,13 +74,6 @@ class TestHex(unittest.TestCase):
         d = H.decode_app_version(bytes.fromhex("FFFF"))
         self.assertEqual(d["type"], "release_candidate")
         self.assertEqual(d["version"], "15.FF-RCF")
-        # Orion ping lives only in decode_ping_version.
-        p = H.decode_ping_version(bytes.fromhex("FF7F"))
-        self.assertIsNone(p["version"])
-        self.assertEqual(p["type"], "application")
-        p2 = H.decode_ping_version(bytes.fromhex("FFFF"))
-        self.assertIsNone(p2["version"])
-        self.assertEqual(p2["type"], "release_candidate")
         # Release-candidate 0xD101 -> 1.01-RCD (BlueSolar §1 response 5).
         rc = H.decode_ping_version(bytes.fromhex("01D1"))
         self.assertEqual(rc["version"], "1.01-RCD")
@@ -87,6 +87,9 @@ class TestHex(unittest.TestCase):
         self.assertIsNotNone(d["version"])
         self.assertEqual(d, H.decode_app_version(bytes.fromhex("FF1F")))
         self.assertEqual(d["type"], "bootloader")
+        # The removed FF7F/FFFF cases from test_app_version_ffff_is_bluesolar
+        # are covered here: documented Orion pings have no version and retain
+        # their application/release-candidate types.
         # Documented Orion pings still decode as no-version.
         for hx, want in (("FF3F", "bootloader"), ("FF7F", "application"),
                          ("FFBF", "tester"), ("FFFF", "release_candidate")):
@@ -95,12 +98,16 @@ class TestHex(unittest.TestCase):
             self.assertEqual(p["type"], want, hx)
 
     def test_app_version_24_undocumented_ll(self):
+        # Former test_app_version_decode also checked that a non-FF LL byte
+        # has no version and receives no invented beta label.
         d = H.decode_app_version_24(bytes.fromhex("00030201"))
         self.assertIsNone(d["version"])
         self.assertTrue(d["type"].startswith("unknown"))
         self.assertNotEqual(d["type"], "beta")
 
     def test_app_version_3byte_unknown(self):
+        # Former test_app_version_decode also checked that undocumented
+        # three-byte AppVersion input has unknown type and no version.
         d = H.decode_app_version(bytes.fromhex("010203"))
         self.assertIsNone(d["version"])
         self.assertEqual(d["type"], "unknown")
@@ -115,10 +122,10 @@ class TestHex(unittest.TestCase):
         self.assertIsNone(unk.register_id)
         err = H.decode_line(H.encode_frame(H.CMD_ERROR, bytes.fromhex("AAAA")))
         self.assertIsNone(err.register_id)
-        get = H.decode_line(H.build_get(0xEDBB))
-        self.assertEqual(get.register_id, 0xEDBB)
 
     def test_app_version_24_requires_4byte_shape(self):
+        # Former test_app_version_decode checked the documented 00FF0201
+        # release value; this test checks it with the invalid shapes too.
         # Orion-XS §1.1 reg 0x0102 is un32 (byte0 id 0x00 + 0xHHMMLL).
         # 3-byte input is undocumented: unknown, never a decoded version.
         d3 = H.decode_app_version_24(bytes.fromhex("FF0201"))

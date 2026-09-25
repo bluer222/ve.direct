@@ -6,32 +6,9 @@ sys.path.insert(0, "src")
 
 from ve_direct import hex as H
 from ve_direct import registers as R
-from ve_direct.text import TextParser
-from ve_direct.transport import make_text_block
 
 
 class TestFullHex(unittest.TestCase):
-    def test_count_full(self):
-        self.assertGreaterEqual(len(R.REGISTERS), 300)
-
-    def test_new_bluesolar_registers_present(self):
-        for name in ["GROUP_ID", "REMOTE_CONTROL_USED", "BATTERYSAFE_MODE",
-                     "CHARGER_MAXIMUM_CURRENT", "ADDITIONAL_CHARGER_STATE",
-                     "VOLTAGE_SETTINGS_RANGE", "HISTORY_VERSION",
-                     "LOAD_OUTPUT_CONTROL", "LOAD_OUTPUT_OFF_REASON",
-                     "RELAY_OPERATION_MODE", "RELAY_BAT_LOW_SET",
-                     "TX_PORT_MODE", "RX_PORT_MODE", "TOTAL_HISTORY",
-                     "CHARGE_VOLTAGE_SETPOINT", "NETWORK_MODE",
-                     "RESTORE_DEFAULTS", "CLEAR_HISTORY",
-                     "DISPLAY_BACKLIGHT_MODE", "PANEL_STARTING_VOLTAGE"]:
-            self.assertIn(name, R.REGISTERS, name)
-
-    def test_orion_registers_present(self):
-        for name in ["SHUTDOWN_VOLTAGE", "START_VOLTAGE", "ORION_BATTERY_VOLTAGE",
-                     "CYCLE_COUNT", "CUMULATIVE_USER_HISTORY", "CYCLE_HISTORY_0",
-                     "INPUT_VOLTAGE_LOCKOUT", "INPUT_VOLTAGE", "OUTPUT_VOLTAGE"]:
-            self.assertIn(name, R.REGISTERS, name)
-
     def test_sentinels_decode_none(self):
         self.assertIsNone(R.decode_value(R.lookup("BAT_TEMPERATURE"), bytes.fromhex("FFFF")))
         self.assertIsNone(R.decode_value(R.lookup("TIME_OF_DAY"), bytes.fromhex("FFFF")))
@@ -97,22 +74,13 @@ class TestFullHex(unittest.TestCase):
         self.assertIsNone(d["energy_2_kwh"])
         self.assertEqual(d["peak_1_W"], 50)
 
-    def test_app_version_decode(self):
+    # Former test_app_version_decode also checked undocumented lengths and
+    # Orion release values; those cases now live in test_hex.py's AppVersion tests.
+    # This test retains its normal application and bootloader decoding checks.
+    def test_app_version_normal_decode(self):
         self.assertEqual(H.decode_app_version(bytes.fromhex("1641"))["version"], "1.16")
         self.assertEqual(H.decode_app_version(bytes.fromhex("1641"))["type"], "application")
         self.assertEqual(H.decode_app_version(bytes.fromhex("0111"))["type"], "bootloader")
-        # 3-byte input is undocumented: no invented "application24" type.
-        undoc3 = H.decode_app_version(bytes.fromhex("010203"))
-        self.assertIsNone(undoc3["version"])
-        self.assertEqual(undoc3["type"], "unknown")
-        rel = H.decode_app_version_24(bytes.fromhex("00FF0201"))
-        self.assertEqual(rel["version"], "1.02")
-        self.assertEqual(rel["type"], "release")
-        # Non-0xFF LL is undocumented (Orion-XS §1.1 Notes 1-2 define only
-        # LL==0xFF = release): never an invented "beta" label.
-        undoc = H.decode_app_version_24(bytes.fromhex("00030201"))
-        self.assertIsNone(undoc["version"])
-        self.assertTrue(undoc["type"].startswith("unknown"))
 
     def test_boot_name(self):
         # Nibbles 0x0/0x6 are requests only (neither doc defines
@@ -155,16 +123,6 @@ class TestFullHex(unittest.TestCase):
         self.assertAlmostEqual(
             R.decode_value(reg, struct.pack("<I", 100000)), 1000.0)
 
-    def test_phoenix_access_modes(self):
-        self.assertEqual(
-            R.lookup("AC_OUT_VOLTAGE_SETPOINT", flavor="INV").access,
-            "WRITE_ONLY",
-        )
-        self.assertEqual(
-            R.lookup("BAT_VOLTAGE", flavor="INV").access, "READ_ONLY")
-        self.assertEqual(
-            R.lookup("INV_RELAY_MODE", flavor="INV").access, "WRITE_ONLY")
-
     def test_capabilities_full_bits(self):
         m = R.ENUM_MAPS["CAPABILITIES"]
         for bit, name in [(9, "solar_timer"), (14, "bms"), (19, "virtual_load_output"),
@@ -176,6 +134,29 @@ class TestFullHex(unittest.TestCase):
         self.assertEqual(ble[8], "settings_lock")
 
     def test_flavor_hierarchy(self):
+        # Former test_count_full also pinned the minimum registry size.
+        self.assertGreaterEqual(len(R.REGISTERS), 300)
+        # Former test_new_bluesolar_registers_present checked these name aliases.
+        for name in (
+            "GROUP_ID", "REMOTE_CONTROL_USED", "BATTERYSAFE_MODE",
+            "CHARGER_MAXIMUM_CURRENT", "ADDITIONAL_CHARGER_STATE",
+            "VOLTAGE_SETTINGS_RANGE", "HISTORY_VERSION",
+            "LOAD_OUTPUT_CONTROL", "LOAD_OUTPUT_OFF_REASON",
+            "RELAY_OPERATION_MODE", "RELAY_BAT_LOW_SET", "TX_PORT_MODE",
+            "RX_PORT_MODE", "TOTAL_HISTORY", "CHARGE_VOLTAGE_SETPOINT",
+            "NETWORK_MODE", "RESTORE_DEFAULTS", "CLEAR_HISTORY",
+            "DISPLAY_BACKLIGHT_MODE", "PANEL_STARTING_VOLTAGE",
+        ):
+            with self.subTest(bluesolar_register=name):
+                self.assertIn(name, R.REGISTERS)
+        # Former test_orion_registers_present checked these name aliases.
+        for name in (
+            "SHUTDOWN_VOLTAGE", "START_VOLTAGE", "ORION_BATTERY_VOLTAGE",
+            "CYCLE_COUNT", "CUMULATIVE_USER_HISTORY", "CYCLE_HISTORY_0",
+            "INPUT_VOLTAGE_LOCKOUT", "INPUT_VOLTAGE", "OUTPUT_VOLTAGE",
+        ):
+            with self.subTest(orion_register=name):
+                self.assertIn(name, R.REGISTERS)
         self.assertIn("BAT_MAX_CURRENT", R.for_flavor("MPPT"))  # CHG via MPPT
         self.assertIn("BAT_MAX_CURRENT", R.for_flavor("ORION"))  # CHG via ORION
         self.assertNotIn("SHUTDOWN_VOLTAGE", R.for_flavor("MPPT"))
@@ -189,6 +170,11 @@ class TestFullHex(unittest.TestCase):
         from ve_direct.exceptions import RegisterError
         from ve_direct.transport import SimulatedTransport
 
+        # Former test_phoenix_access_modes checked these INV access flags.
+        self.assertEqual(R.lookup("AC_OUT_VOLTAGE_SETPOINT", flavor="INV").access, "WRITE_ONLY")
+        self.assertEqual(R.lookup("BAT_VOLTAGE", flavor="INV").access, "READ_ONLY")
+        self.assertEqual(R.lookup("INV_RELAY_MODE", flavor="INV").access, "WRITE_ONLY")
+
         async def go():
             sim = SimulatedTransport(text_chunks=[], hex_replies={})
             dev = AsyncVEDirect(sim.read_chunk, sim.write)
@@ -197,16 +183,6 @@ class TestFullHex(unittest.TestCase):
             with self.assertRaises(RegisterError):
                 await dev.hex_get("RESTORE_DEFAULTS")
         asyncio.run(go())
-
-    def test_corrupt_history_does_not_drop_next_pid(self):
-        good_pid = make_text_block({"PID": "0x204", "V": "1"})
-        hist = make_text_block({"H1": "-5000", "H2": "-100"})
-        bad_hist = bytearray(hist)
-        bad_hist[6] ^= 0xFF  # corrupt data byte, keep Checksum marker intact
-        frames = TextParser().feed(bytes(bad_hist) + good_pid)
-        self.assertEqual(len(frames), 1)
-        self.assertEqual(frames[0]["V"].value, 1)
-
 
 if __name__ == "__main__":
     unittest.main()

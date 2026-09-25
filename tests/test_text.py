@@ -8,10 +8,6 @@ from ve_direct.transport import make_text_block
 
 
 class TestText(unittest.TestCase):
-    def test_checksum_roundtrip(self):
-        blk = make_text_block({"PID": "0xA04A", "V": "13830", "CS": "3"})
-        self.assertTrue(verify_block_checksum(blk))
-
     def test_parse_mppt_block(self):
         blk = make_text_block({
             "PID": "0xA04A", "FW": "116", "SER#": "HQ1750YFN5R",
@@ -19,6 +15,9 @@ class TestText(unittest.TestCase):
             "CS": "3", "MPPT": "2", "OR": "0", "ERR": "0",
             "LOAD": "ON", "H19": "6741", "HSDS": "84",
         })
+        # Former test_checksum_roundtrip checked the block checksum helper
+        # directly on a generated Text block.
+        self.assertTrue(verify_block_checksum(blk))
         frames = TextParser().feed(blk)
         self.assertEqual(len(frames), 1)
         f = frames[0]
@@ -35,6 +34,7 @@ class TestText(unittest.TestCase):
             "Alarm": "OFF", "Relay": "OFF", "AR": "5",
         })
         f = TextParser().feed(blk)[0]
+        # Former test_percent_covers_dm also checked SOC percentage scaling.
         self.assertAlmostEqual(f["SOC"].percent, 99.7)
         self.assertEqual(f["I"].value, -897)
         # AR=5 => Low voltage + Low SOC
@@ -50,23 +50,22 @@ class TestText(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["H1"].value, -167452)
 
-    def test_missing_sensor(self):
-        blk = make_text_block({"PID": "0xA04A", "T": "---"})
-        f = TextParser().feed(blk)[0]
-        self.assertIsNone(f["T"].value)
-
-    def test_corrupt_dropped(self):
-        blk = bytearray(make_text_block({"PID": "0x204", "V": "1"}))
-        blk[10] ^= 0xFF
-        self.assertEqual(TextParser().feed(bytes(blk)), [])
-
     def test_corrupt_then_valid_same_feed(self):
+        # Former test_corrupt_dropped checked that a bad checksum emits no
+        # frame. This stronger case also checks that the next frame survives.
         good = make_text_block({"PID": "0x204", "V": "1"})
         bad = bytearray(make_text_block({"PID": "0x204", "V": "2"}))
         bad[10] ^= 0xFF
         frames = TextParser().feed(bytes(bad) + good)
         self.assertEqual(len(frames), 1)
         self.assertEqual(frames[0]["V"].value, 1)
+        # Former test_corrupt_history_does_not_drop_next_pid used a history
+        # block with its data byte corrupted and the Checksum tag intact.
+        history = bytearray(make_text_block({"H1": "-5000", "H2": "-100"}))
+        history[6] ^= 0xFF
+        recovered = TextParser().feed(bytes(history) + good)
+        self.assertEqual(len(recovered), 1)
+        self.assertEqual(recovered[0]["V"].value, 1)
 
     def test_hex_interleaved(self):
         blk = make_text_block({"PID": "0xA04A", "V": "100", "I": "5"})
@@ -113,8 +112,15 @@ class TestText(unittest.TestCase):
         self.assertAlmostEqual(frame.to_si()["CE"], -1.719)
         self.assertAlmostEqual(frame.to_si()["H1"], -167.452)
         self.assertEqual(frame.to_si()["DM"], 1.5)
+        # Former test_percent_covers_dm checked DM percentage scaling too.
+        self.assertAlmostEqual(frame["DM"].percent, 1.5)
 
     def test_checksum_tag_case_insensitive(self):
+        # Former test_checksum_not_in_label_info checked that neither spelling
+        # is a measurement label, in addition to its absence from frames.
+        from ve_direct.tables import LABEL_INFO
+        self.assertNotIn("Checksum", LABEL_INFO)
+        self.assertNotIn("CHECKSUM", LABEL_INFO)
         prefix = b"\r\nPID\t0xA2B1\r\nV\t100\r\nCHECKSUM\t"
         blk = prefix + bytes([(-sum(prefix)) % 256])
         frames, hex_lines = TextParser().feed_events(blk + b":154\n")
@@ -151,6 +157,9 @@ class TestText(unittest.TestCase):
         # "---" still treated as missing even for non-spec labels (liberal).
         f2 = TextParser().feed(make_text_block({"V": "---"}))[0]
         self.assertIsNone(f2["V"].value)
+        # Former test_missing_sensor checked T="---" specifically.
+        f3 = TextParser().feed(make_text_block({"PID": "0xA04A", "T": "---"}))[0]
+        self.assertIsNone(f3["T"].value)
 
     def test_fwe_short_rejected(self):
         f = TextParser().feed(make_text_block({"FWE": "FF"}))[0]
@@ -167,22 +176,13 @@ class TestText(unittest.TestCase):
         self.assertIsNotNone(f["TTG"].human)
         self.assertIn("infinite", f["TTG"].human.lower())
 
-    def test_checksum_not_in_label_info(self):
-        from ve_direct.tables import LABEL_INFO
-        self.assertNotIn("Checksum", LABEL_INFO)
-        self.assertNotIn("CHECKSUM", LABEL_INFO)
-
-    def test_percent_covers_dm(self):
-        f = TextParser().feed(make_text_block({"SOC": "997", "DM": "15"}))[0]
-        self.assertAlmostEqual(f["SOC"].percent, 99.7)
-        self.assertAlmostEqual(f["DM"].percent, 1.5)
-
     def test_coverage_cap_ble_warn_mode_mon(self):
         blk = make_text_block({
             "CAP_BLE": "3", "WARN": "5", "MODE": "2", "MON": "-9",
             "AC_OUT_V": "23000", "AC_OUT_I": "15", "AC_OUT_S": "100",
             "DC_IN_V": "1200", "DC_IN_I": "50", "DC_IN_P": "60",
             "V2": "13800", "V3": "13800", "I2": "100", "I3": "-50",
+            # Restore the H13/H14 decoding assertions removed from this test.
             "H13": "2", "H14": "3",
         })
         f = TextParser().feed(blk)[0]

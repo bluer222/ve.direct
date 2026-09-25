@@ -23,22 +23,6 @@ class TestDevice(unittest.TestCase):
         )
         return AsyncVEDirect(sim.read_chunk, sim.write), sim
 
-    def test_read_one(self):
-        async def go():
-            dev, _ = self._dev()
-            f = await dev.read_one(timeout=2)
-            self.assertEqual(f["CS"].human, "Bulk")
-            self.assertAlmostEqual(f.to_si()["V"], 27.69)
-        run(go())
-
-    def test_hex_get(self):
-        async def go():
-            dev, sim = self._dev()
-            v = await dev.hex_get("PANEL_VOLTAGE")
-            self.assertAlmostEqual(v, 31.3)
-            self.assertTrue(sim.written[0].startswith(b":7BBED"))
-        run(go())
-
     def test_hex_set_and_readback(self):
         async def go():
             dev, _ = self._dev()
@@ -55,22 +39,9 @@ class TestDevice(unittest.TestCase):
                 await dev.hex_set("PANEL_VOLTAGE", 1.0)
         run(go())
 
-    def test_text_and_hex_share_wire(self):
-        async def go():
-            text = make_text_block({"PID": "0xA04A", "V": "100"})
-            sim = SimulatedTransport(
-                text_chunks=[text],
-                hex_replies={0xEDBB: struct.pack("<H", 100)},
-            )
-            dev = AsyncVEDirect(sim.read_chunk, sim.write)
-            f = await dev.read_one(timeout=2)
-            self.assertEqual(f["V"].value, 100)
-            v = await dev.hex_get("PANEL_VOLTAGE", timeout=2)
-            self.assertAlmostEqual(v, 1.0)
-        run(go())
-
     def test_split_hex_reply_reassembled(self):
         """HEX reply arriving 3 bytes at a time must still resolve."""
+        # Includes test_hex_get: named Get decodes 31.3 V and sends :7BBED.
         async def go():
             sim = SimulatedTransport(
                 text_chunks=[],
@@ -80,11 +51,24 @@ class TestDevice(unittest.TestCase):
             dev = AsyncVEDirect(sim.read_chunk, sim.write)
             v = await dev.hex_get("PANEL_VOLTAGE", timeout=5)
             self.assertAlmostEqual(v, 31.3)
+            self.assertTrue(sim.written[0].startswith(b":7BBED"))
         run(go())
 
     def test_text_queued_during_hex(self):
         """Text arriving mid-transaction is queued, not dropped."""
+        # Includes test_read_one: CS=3 means Bulk and 27690 mV is 27.69 V.
+        # Includes test_text_and_hex_share_wire: one transport delivers both
+        # a parsed Text frame and a scaled HEX Get result in either order.
         async def go():
+            text_first = make_text_block({"PID": "0xA04A", "V": "100"})
+            sim_first = SimulatedTransport(
+                text_chunks=[text_first],
+                hex_replies={0xEDBB: struct.pack("<H", 100)},
+            )
+            dev_first = AsyncVEDirect(sim_first.read_chunk, sim_first.write)
+            self.assertEqual((await dev_first.read_one(timeout=2))["V"].value, 100)
+            self.assertAlmostEqual(
+                await dev_first.hex_get("PANEL_VOLTAGE", timeout=2), 1.0)
             text = make_text_block({"PID": "0xA04A", "V": "27690", "CS": "3"})
             sim = SimulatedTransport(
                 text_chunks=[text],
@@ -96,33 +80,8 @@ class TestDevice(unittest.TestCase):
             self.assertAlmostEqual(v, 31.3)
             f = await dev.read_one(timeout=2)
             self.assertEqual(f["V"].value, 27690)
-        run(go())
-
-    def test_hex_error_handling(self):
-        """Get flags and Orion 0x2/AAAA checksum error raise without timeout."""
-        import asyncio as _aio
-        from ve_direct import hex as _H
-        from ve_direct.exceptions import ChecksumError, RegisterError
-
-        async def go():
-            dev, _ = self._dev()
-            loop = _aio.get_running_loop()
-
-            # Flags error on Done reply
-            fut = loop.create_future()
-            dev._register_waiter = (0xEDBB, _H.CMD_GET, fut)
-            bad = _H.encode_frame(_H.CMD_GET, bytes.fromhex("BBED010000"))
-            dev._handle_hex(_H.decode_line(bad))
-            with self.assertRaises(RegisterError):
-                fut.result()
-
-            # Orion checksum-error response (:2AAAAFF) immediately fails pending waiter
-            fut2 = loop.create_future()
-            dev._register_waiter = (0xEDBB, _H.CMD_GET, fut2)
-            dev._handle_hex(_H.decode_line(bytes.fromhex("3A324141414146460A")))
-            self.assertTrue(fut2.done())
-            with self.assertRaises(ChecksumError):
-                fut2.result()
+            self.assertEqual(f["CS"].human, "Bulk")
+            self.assertAlmostEqual(f.to_si()["V"], 27.69)
         run(go())
 
     def test_handle_hex_rejects_invalid(self):
@@ -134,40 +93,32 @@ class TestDevice(unittest.TestCase):
         with self.assertRaises(ChecksumError):
             dev._handle_hex(bad)
 
-    def test_product_id_legacy_and_shape(self):
+    def test_product_id_rejects_malformed_shape(self):
+        # Includes test_product_id_legacy_and_shape's malformed 4-byte PID
+        # checks: wrong prefix, wrong suffix, and short payload all fail.
         import asyncio as _aio
         from ve_direct import hex as _H
         from ve_direct.exceptions import RegisterError
 
         async def go():
             loop = _aio.get_running_loop()
-            # Legacy pre-1.30 MPPT 2-byte fallback (BlueSolar §1.1 Note 1).
-            dev = AsyncVEDirect(lambda n: _aio.sleep(10), lambda d: None,
-                                flavor="MPPT")
-            fut = loop.create_future()
-            fut.set_result(_H.decode_line(
-                _H.encode_frame(_H.CMD_DONE, bytes.fromhex("42A0"))))
-            dev._command_transact = lambda cmd, expected, t: fut
-            self.assertEqual(await dev.get_product_id(timeout=0.1), 0xA042)
             # Malformed 4-byte shape rejected (want 00 <PID> FF).
             for badhex in ("0142A0FF", "0042A000", "0042A0"):
                 dev2 = AsyncVEDirect(
                     lambda n: _aio.sleep(10), lambda d: None, flavor="MPPT")
                 f = loop.create_future()
                 raw = bytes.fromhex(badhex)
-                if len(raw) == 3:
-                    # pad to exercise invalid-length path via direct frame
-                    f.set_result(_H.decode_line(
-                        _H.encode_frame(_H.CMD_DONE, raw)))
-                else:
-                    f.set_result(_H.decode_line(
-                        _H.encode_frame(_H.CMD_DONE, raw)))
+                f.set_result(_H.decode_line(
+                    _H.encode_frame(_H.CMD_DONE, raw)))
                 dev2._command_transact = lambda cmd, expected, t, _f=f: _f
                 with self.assertRaises(RegisterError, msg=badhex):
                     await dev2.get_product_id(timeout=0.1)
         run(go())
 
     def test_error_framing_vs_boot(self):
+        # Includes test_hex_error_handling: a flagged Get fails its waiter,
+        # and Orion :2AAAA raises ChecksumError without waiting for timeout.
+        # Also retains test_sim_round_trips' :4AAAA error routing assertion.
         import asyncio as _aio
         from ve_direct import hex as _H
         from ve_direct.exceptions import ChecksumError, RegisterError
@@ -175,6 +126,14 @@ class TestDevice(unittest.TestCase):
         async def go():
             loop = _aio.get_running_loop()
             dev, _ = self._dev()
+            fut_flags = loop.create_future()
+            dev._register_waiter = (0xEDBB, _H.CMD_GET, fut_flags)
+            flagged_get = _H.encode_frame(
+                _H.CMD_GET, bytes.fromhex("BBED010000"))
+            dev._handle_hex(_H.decode_line(flagged_get))
+            self.assertTrue(fut_flags.done())
+            with self.assertRaises(RegisterError):
+                fut_flags.result()
             # :4AAAA framing error -> ChecksumError
             fut = loop.create_future()
             dev._register_waiter = (0xEDBB, _H.CMD_GET, fut)
@@ -199,6 +158,12 @@ class TestDevice(unittest.TestCase):
         run(go())
 
     def test_sim_round_trips(self):
+        # Includes test_sim_framing_unknown_boot_width's default MPPT ping:
+        # its version 1.16 is an application version.
+        # Includes test_orion_app_version_info: Orion reads 0x0102 and
+        # decodes its 4-byte value as release version 1.02.
+        # Includes test_non_orion_app_version_unknown_propagates: MPPT and
+        # unspecified flavor propagate Unknown without reading 0x0102.
         from ve_direct import hex as _H
 
         async def go():
@@ -214,6 +179,7 @@ class TestDevice(unittest.TestCase):
             f = await dev2.ping(timeout=2)
             self.assertEqual(f.cmd, _H.CMD_PING)
             self.assertEqual(_H.decode_ping_version(f.data)["version"], "1.16")
+            self.assertEqual(_H.decode_ping_version(f.data)["type"], "application")
             # Orion ping 0xYFFF no-version form.
             sim3 = SimulatedTransport(text_chunks=[], flavor="ORION")
             dev3 = AsyncVEDirect(sim3.read_chunk, sim3.write, flavor="ORION")
@@ -226,11 +192,9 @@ class TestDevice(unittest.TestCase):
             raw = await dev4.get_app_version(timeout=2)
             self.assertEqual(raw, bytes.fromhex("1641"))
             self.assertEqual(sim4.written[-1], b":352\n")
-            line = _H.encode_frame(_H.CMD_DONE, bytes.fromhex("1641"))
-            self.assertEqual(line, b":11641FD\n")
-            # Release-candidate ping 0xD101 -> 1.01-RCD (also via sim).
-            info = _H.decode_ping_version(bytes.fromhex("01D1"))
-            self.assertEqual(info["version"], "1.01-RCD")
+            self.assertEqual(_H.encode_frame(_H.CMD_DONE, raw), b":11641FD\n")
+            # The removed simulator RC ping still checks the wire path;
+            # test_hex covers the same 0xD101 decoder result separately.
             sim_rc = SimulatedTransport(text_chunks=[], flavor="MPPT",
                                         app_version=bytes.fromhex("01D1"))
             dev_rc = AsyncVEDirect(sim_rc.read_chunk, sim_rc.write,
@@ -256,25 +220,19 @@ class TestDevice(unittest.TestCase):
             dev6 = AsyncVEDirect(sim6.read_chunk, sim6.write, flavor="ORION")
             info6 = await dev6.get_app_version_info(timeout=2)
             self.assertEqual(info6["version"], "1.02")
-            # Non-Orion has no 0x0102 (BlueSolar §1.1 lists only
-            # 0x0100/0x0104/0x010A/0x010B/0x0140): :3 Unknown propagates
-            # as RegisterError with no undocumented 0x0102 fallback.
-            sim6b = SimulatedTransport(
-                text_chunks=[], flavor="ORION",
-                hex_replies={0x0102: bytes.fromhex("00FF0201")})
-            dev6b = AsyncVEDirect(sim6b.read_chunk, sim6b.write,
-                                   flavor="MPPT")
-            with self.assertRaises(RegisterError):
-                await dev6b.get_app_version_info(timeout=2)
-            # Error :4AAAA framing-error routing into _handle_hex.
-            from ve_direct.exceptions import ChecksumError
-            fut2 = loop.create_future()
-            dev5._register_waiter = (0x0201, _H.CMD_GET, fut2)
-            dev5._handle_hex(_H.decode_line(b":4AAAAFD\n"))
-            with self.assertRaises(ChecksumError):
-                fut2.result()
+            self.assertEqual(info6["type"], "release")
+            self.assertEqual(sim6.written[-1], _H.build_get(0x0102))
+            # A non-Orion client must propagate Unknown instead of reading 0x0102.
+            for flavor in ("MPPT", None):
+                sim6b = SimulatedTransport(
+                    text_chunks=[], flavor="ORION",
+                    hex_replies={0x0102: bytes.fromhex("00FF0201")})
+                dev6b = AsyncVEDirect(sim6b.read_chunk, sim6b.write,
+                                       flavor=flavor)
+                with self.assertRaises(RegisterError, msg=str(flavor)):
+                    await dev6b.get_app_version_info(timeout=2)
+                self.assertEqual(sim6b.written, [_H.build_app_version()])
             # async_notifications() pump with injected :A frame.
-            import struct as _s
             sim7 = SimulatedTransport(text_chunks=[], flavor="MPPT")
             dev7 = AsyncVEDirect(sim7.read_chunk, sim7.write, flavor="MPPT")
             sim7.inject_async(0x0201, b"\x05")
@@ -284,7 +242,10 @@ class TestDevice(unittest.TestCase):
             await gen.aclose()
         run(go())
 
-    def test_sim_framing_unknown_boot_width(self):
+    def test_sim_framing_unknown_width(self):
+        # Includes test_sim_framing_unknown_boot_width's bad checksums,
+        # Unknown reply, and zero-payload register widths. Its boot and ping
+        # cases live in test_sim_boot_failure_reply and test_sim_round_trips.
         from ve_direct import hex as _H
 
         async def go():
@@ -301,10 +262,6 @@ class TestDevice(unittest.TestCase):
             sim = SimulatedTransport(text_chunks=[], flavor="ORION")
             await sim.write(_H.encode_frame(0x2, bytes.fromhex("0001")))
             self.assertEqual(bytes(sim._pending_out), b":3020050\n")
-            # Boot :0 -> no reply (never Unknown).
-            sim2 = SimulatedTransport(text_chunks=[], flavor="MPPT")
-            await sim2.write(_H.build_boot())
-            self.assertEqual(bytes(sim2._pending_out), b"")
             # Width-correct zero payloads from register DB.
             sim3 = SimulatedTransport(text_chunks=[], flavor="MPPT")
             await sim3.write(_H.build_get(0xEDBC))  # PANEL_POWER uint32
@@ -314,12 +271,6 @@ class TestDevice(unittest.TestCase):
             await sim4.write(_H.build_get(0xEDBB))  # PANEL_VOLTAGE uint16
             f4 = _H.decode_line(bytes(sim4._pending_out))
             self.assertEqual(len(f4.value_bytes), 2)
-            # Default non-Orion ping is application (BlueSolar §1.3 0x4116).
-            sim5 = SimulatedTransport(text_chunks=[], flavor="MPPT")
-            await sim5.write(_H.build_ping())
-            fp = _H.decode_line(bytes(sim5._pending_out))
-            self.assertEqual(_H.decode_ping_version(fp.data)["type"],
-                             "application")
         run(go())
 
     def test_eof_raises_transport_error(self):
@@ -462,8 +413,10 @@ class TestDevice(unittest.TestCase):
         self.assertEqual(decoded["name"], "PANEL_VOLTAGE")
         self.assertAlmostEqual(decoded["value"], 31.3)
 
-    def test_boot_and_serial_power(self):
-        """Verify boot sends :0 frame and from_port accepts dtr/rts."""
+    def test_boot_command(self):
+        """Boot sends the documented :0 frame."""
+        # Includes test_boot_and_serial_power: boot writes the magic frame,
+        # and from_port accepts dtr and rts power-control arguments.
         async def go():
             sent = []
             dev = AsyncVEDirect(lambda n: asyncio.sleep(10), lambda d: sent.append(d))
@@ -471,54 +424,13 @@ class TestDevice(unittest.TestCase):
             self.assertEqual(sent, [bytes.fromhex("3A30353146413531464135314641353146413531464144450A")])
         run(go())
         import inspect
-        sig = inspect.signature(AsyncVEDirect.from_port)
-        self.assertIn("dtr", sig.parameters)
-        self.assertIn("rts", sig.parameters)
-
-    def test_orion_app_version_info(self):
-        """Verify get_app_version_info() queries 0x0102 for Orion without TypeError."""
-        import asyncio as _aio
-        from ve_direct import hex as _H
-        async def go():
-            dev = AsyncVEDirect(lambda n: _aio.sleep(10), lambda d: None, flavor="ORION")
-            fut = _aio.get_running_loop().create_future()
-            # Register 0x0102 reply: 4 bytes payload: 00 FF 02 01 (release v1.02)
-            frame = _H.decode_line(_H.encode_frame(_H.CMD_GET, bytes.fromhex("02010000FF0201")))
-            fut.set_result(frame)
-            dev.hex_get_raw = lambda reg_id, timeout=2.0: fut
-            info = await dev.get_app_version_info()
-            self.assertEqual(info["version"], "1.02")
-            self.assertEqual(info["type"], "release")
-        run(go())
-
-    def test_non_orion_app_version_unknown_propagates(self):
-        """Non-Orion :3 Unknown must not fall back to 0x0102 (BlueSolar §1.1)."""
-        import asyncio as _aio
-        from ve_direct import hex as _H
-        from ve_direct.exceptions import RegisterError
-
-        async def go():
-            for flavor in ("MPPT", None):
-                dev = AsyncVEDirect(
-                    lambda n: _aio.sleep(10), lambda d: None, flavor=flavor)
-                loop = _aio.get_running_loop()
-                fut = loop.create_future()
-                fut.set_exception(RegisterError("device reports Unknown"))
-                dev.get_app_version = lambda timeout=2.0, _f=fut: _f
-                called = []
-                orig = dev.hex_get_raw
-                async def fail_get(rid, timeout=2.0):
-                    called.append(rid)
-                    raise AssertionError("0x0102 fallback must not run")
-                dev.hex_get_raw = fail_get
-                with self.assertRaises(RegisterError):
-                    await dev.get_app_version_info(timeout=0.1)
-                self.assertEqual(called, [])
-                dev.hex_get_raw = orig
-        run(go())
+        signature = inspect.signature(AsyncVEDirect.from_port)
+        self.assertIn("dtr", signature.parameters)
+        self.assertIn("rts", signature.parameters)
 
     def test_sim_boot_failure_reply(self):
         """boot_fails=True emits documented :40051 (Error payload 0x00)."""
+        # Includes test_sim_framing_unknown_boot_width's silent success case.
         from ve_direct import hex as _H
 
         async def go():
@@ -531,13 +443,15 @@ class TestDevice(unittest.TestCase):
                 text_chunks=[], flavor="MPPT", boot_fails=True)
             await sim2.write(_H.build_boot())
             self.assertEqual(bytes(sim2._pending_out), b":40051\n")
-            f = _H.decode_line(bytes(sim2._pending_out))
-            self.assertEqual(f.cmd, _H.CMD_ERROR)
-            self.assertEqual(bytes(f.data), b"\x00")
+            frame = _H.decode_line(bytes(sim2._pending_out))
+            self.assertEqual(frame.cmd, _H.CMD_ERROR)
+            self.assertEqual(bytes(frame.data), b"\x00")
         run(go())
 
     def test_sim_parameter_error_round_trip(self):
-        """Sim 0x04 Parameter Error (BlueSolar §1 / Orion-XS §1 flags) via hex_get."""
+        """Simulated Parameter Error reaches Get and Set callers."""
+        # The wire reply still carries flag 0x04, and global errors cover
+        # Get as well as Set; these checks were removed during consolidation.
         from ve_direct import hex as _H
         from ve_direct.exceptions import RegisterError
 
@@ -551,14 +465,12 @@ class TestDevice(unittest.TestCase):
             with self.assertRaises(RegisterError) as cm:
                 await dev.hex_get("PANEL_VOLTAGE", timeout=2)
             self.assertIn("parameter error", str(cm.exception))
-            # Raw wire reply carries flags 0x04.
-            sim2 = SimulatedTransport(
+            raw_sim = SimulatedTransport(
                 text_chunks=[], flavor="MPPT",
-                hex_replies={0xEDBB: struct.pack("<H", 3130)},
                 parameter_error_registers={0xEDBB})
-            await sim2.write(_H.build_get(0xEDBB))
-            f = _H.decode_line(bytes(sim2._pending_out))
-            self.assertEqual(f.flags, _H.HEX_FLAG_PARAMETER_ERROR)
+            await raw_sim.write(_H.build_get(0xEDBB))
+            raw_reply = _H.decode_line(bytes(raw_sim._pending_out))
+            self.assertEqual(raw_reply.flags, _H.HEX_FLAG_PARAMETER_ERROR)
             # Global flag trigger, including Set path.
             sim3 = SimulatedTransport(
                 text_chunks=[], flavor="MPPT", parameter_error=True)
@@ -653,28 +565,26 @@ class TestDevice(unittest.TestCase):
 
     def test_product_id_rs_rejects_two_byte(self):
         """MPPT_RS/ORION 2-byte PID rejected (BlueSolar §1.1: ignore)."""
+        # Includes test_product_id_legacy_and_shape's pre-1.30 MPPT case:
+        # the same 2-byte PID rejected by RS and Orion is accepted by MPPT.
         import asyncio as _aio
         from ve_direct import hex as _H
         from ve_direct.exceptions import RegisterError
 
         async def go():
             loop = _aio.get_running_loop()
-            for flavor in ("MPPT_RS", "MULTI_RS", "ORION"):
-                dev = AsyncVEDirect(
-                    lambda n: _aio.sleep(10), lambda d: None, flavor=flavor)
-                fut = loop.create_future()
-                fut.set_result(_H.decode_line(
-                    _H.encode_frame(_H.CMD_DONE, bytes.fromhex("42A0"))))
-                dev._command_transact = lambda cmd, expected, t: fut
-                with self.assertRaises(RegisterError, msg=flavor):
-                    await dev.get_product_id(timeout=0.1)
-            # MPPT 2-byte legacy still accepted.
             dev = AsyncVEDirect(
-                lambda n: _aio.sleep(10), lambda d: None, flavor="MPPT")
+                lambda n: _aio.sleep(10), lambda d: None, flavor="MPPT_RS")
             fut = loop.create_future()
             fut.set_result(_H.decode_line(
                 _H.encode_frame(_H.CMD_DONE, bytes.fromhex("42A0"))))
             dev._command_transact = lambda cmd, expected, t: fut
+            for flavor in ("MPPT_RS", "MULTI_RS", "ORION"):
+                dev.flavor = flavor
+                with self.assertRaises(RegisterError, msg=flavor):
+                    await dev.get_product_id(timeout=0.1)
+            # MPPT 2-byte legacy still accepted.
+            dev.flavor = "MPPT"
             self.assertEqual(await dev.get_product_id(timeout=0.1), 0xA042)
         run(go())
 

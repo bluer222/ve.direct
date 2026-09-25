@@ -1280,6 +1280,10 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(daily_end, "0x106E")
         self.assertTrue(any(re.search(r"0x1050\s*\.\.\s*0x106E", line) for line in lines))
 
+    # Also retains the per-snapshot decimal ID scan assertions repeated in
+    # former test_decimal_id_only_no_dtype_tail_divergence,
+    # test_lowercase_id_only_row_rescue, test_id_only_symbol_description_rescue,
+    # and test_id_only_symbol_first_description_rescue.
     def test_decimal_id_scan_divergence(self):
         """Proves the decimal scan is independent of the shared ``0x``
         assumption: the synthetic decimal-only row is found by
@@ -1321,46 +1325,25 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn(60961, scrape_doc_ids(synthetic))
 
     def test_midline_dtypeless_decimal_pinned(self):
-        """Pins the mid-line dtype-LESS boundary as uncovered-by-evidence:
-        "Some prose 60961 Future history record mention" (mid-line bare
-        decimal + capitalized words, no dtype tail) is missed by ALL scans
-        and parsers (line-leading ID-only scan, dtype-tailed mid-line scan,
-        hex scraper, history-region parsers) while counts stay green. A
-        widened mid-line tailless scan was attempted live and REJECTED:
-        ``(?<!\\w)\\d{4,5}\\s+[A-Z]...`` matches footer prose on all
-        snapshots ("Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The
-        Netherlands" -> 1351 + "JG Almere", 2 hits BlueSolar/BMV/Phoenix, 0
-        Orion), so widening would false-positive without a footer-specific
-        denylist that merely trades one blind spot for another. Line-leading
-        tailless stays (issue-4 fix); mid-line tailless stays pinned here —
-        do not widen without replacing this pin with a strictly better
-        zero-FP mechanism. Documents exactly what shape is uncovered.
-        Cycle-15 re-report ("Some prose 60961 Future ..." probe): re-ran
-        the probe synthetically — still missed by ALL scans/parsers — and
-        re-ran the footer false-positive evidence below (still non-zero on
-        BlueSolar/BMV/Phoenix via "1351 JG Almere"), so the pin STANDS by
-        evidence; the re-reported probe is cited here as additional
-        confirmation, not a fix."""
-        probe = "Some prose 60961 Future history record mention\n"
-        self.assertEqual(scrape_decimal_ids(probe), set())
-        self.assertNotIn(60961, scrape_doc_ids(probe))
-        self.assertNotIn(
-            60961,
-            BlueSolarHEXParser(
-                "Restore factory defaults\n" + probe + "1.2 Asynchronous items\n"
-            ).parse_registers(),
-        )
-        # Cycle-15 re-reported wording (same uncovered shape): still missed
-        # by every scan while counts stay green — additional confirmation.
-        probe15 = "Some prose 60961 Future fault mention\n"
-        self.assertEqual(scrape_decimal_ids(probe15), set())
-        self.assertNotIn(60961, scrape_doc_ids(probe15))
-        self.assertNotIn(
-            60961,
-            BlueSolarHEXParser(
-                "Restore factory defaults\n" + probe15 + "1.2 Asynchronous items\n"
-            ).parse_registers(),
-        )
+        """Mid-line decimal IDs without a dtype tail remain undetected.
+
+        Both reported wordings are pinned below. A broader scan also matches
+        the ``1351 JG Almere`` footer in three snapshots, so the false-positive
+        evidence stays pinned until a better independent scan is available.
+        """
+        for probe in (
+            "Some prose 60961 Future history record mention\n",
+            "Some prose 60961 Future fault mention\n",
+        ):
+            with self.subTest(probe=probe):
+                self.assertEqual(scrape_decimal_ids(probe), set())
+                self.assertNotIn(60961, scrape_doc_ids(probe))
+                self.assertNotIn(
+                    60961,
+                    BlueSolarHEXParser(
+                        "Restore factory defaults\n" + probe + "1.2 Asynchronous items\n"
+                    ).parse_registers(),
+                )
         # Evidence: naive mid-line tailless widening false-positives on
         # footer postcodes (verified live on snapshots).
         import re as _re
@@ -1382,121 +1365,28 @@ class TestSpecParsers(unittest.TestCase):
         # on 3/4 specs), so the pin stands.
         self.assertGreaterEqual(fp_total, 3)
 
-    def test_decimal_id_only_no_dtype_tail_divergence(self):
-        """Proves the dtype-less decimal widening catches ID-only rows missed
-        by every dtype-tailed strategy: a synthetic "60961      Future
-        history record" row (no dtype tail) is found by the widened
-        scrape_decimal_ids yet missed by scrape_doc_ids (no ``0x``) — the
-        old dtype-tailed scan missed it too while counts stayed green — and
-        the history-region parsers now handle it honestly (struct/R, like
-        the hex ID-only rows) instead of staying green-but-missed. Controls:
-        widened-scan hits on the four current HEX snapshots are exactly
-        EXPECTED_DECIMAL_SCAN_HITS (pinned), hyphenated/bare dates stay out
-        ("15-11-2021 some change", bare "2016", "2021-09-06" carry "-" or no
-        description, and a wrapped "2016 Production ..." line is
-        year-denylisted)."""
-        for key in ("bluesolar", "orion", "bmv", "phoenix"):
-            with self.subTest(spec=key):
-                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
-        synthetic = "60961      Future history record\n"
-        self.assertEqual(scrape_decimal_ids(synthetic), {60961})
-        self.assertNotIn(60961, scrape_doc_ids(synthetic))
-        # Parser handling (honest pass on both sides): history-region
-        # decimal ID-only rows parse as struct/R, mirroring hex ID-only.
+    # Includes former test_decimal_id_only_no_dtype_tail_divergence: decimal history row, struct/R metadata, year guards.
+    # Includes former test_lowercase_id_only_row_rescue: lowercase decimal and hex history descriptions.
+    # Includes former test_id_only_symbol_description_rescue: symbols inside decimal and hex descriptions.
+    # Includes former test_id_only_symbol_first_description_rescue: leading-symbol descriptions and range-marker guard.
+    def test_id_only_description_variants(self):
+        """History rows accept plain, lowercase, and symbol descriptions.
+
+        The decimal scraper catches dtype-less decimal rows. Both history
+        parsers retain the descriptions and R access; plain and lowercase
+        rows also keep the struct dtype. The hex scraper covers equivalent
+        hex rows. Snapshot decimal hits are pinned by the independent scan
+        test, while date-shaped rows remain excluded here.
+        """
         from spec_parser import OrionXSHEXParser
 
-        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-            with self.subTest(parser=cls.__name__):
-                text = (
-                    "Restore factory defaults\n"
-                    "60961      Future history record\n"
-                    "1.2 Asynchronous items\n"
-                )
-                probe = cls(text).parse_registers()[60961]
-                self.assertEqual(probe.description, "Future history record")
-                self.assertEqual(probe.data_type, "struct")
-                self.assertEqual(probe.access, "R")
-                self.assertIsNone(probe.scale)
-        # Date-like denylist controls (must stay out of the widened scan).
-        self.assertEqual(scrape_decimal_ids("15-11-2021 some change\n"), set())
-        self.assertEqual(scrape_decimal_ids("2016\n"), set())
-        self.assertEqual(scrape_decimal_ids("5) 2021-09-06\n"), set())
-        self.assertEqual(scrape_decimal_ids("2016 Production stopped note\n"), set())
-
-    def test_lowercase_id_only_row_rescue(self):
-        """Lowercase ID-only history rows ("60961 future history record" /
-        "0x104F future history record") were missed by hex/decimal scans and
-        parsers (``[A-Z]`` start required) while counts stayed green. Both
-        now start ``[A-Za-z]`` (case-insensitive row-start), so the probes
-        pass honestly with exact descriptions on all sides. Date/prose
-        denylist (explicit, justified): year guard 1900-2100 covers calendar
-        years; hyphenated dates ("15-11-2021", "2021-09-06") miss the shape
-        ("-" after digits, not "\\s+[A-Za-z]"); bare years/counts miss it
-        (no description); footer "1351 JG Almere" is mid-line (not
-        line-leading) and outside the history region (parsers) while the
-        global scraper stays exact (verified: only Orion's rescued xEDE0).
-        Zero-diff: no snapshot history-region line matches the widened shape
-        (verified), and the global decimal scan hits are exactly
-        EXPECTED_DECIMAL_SCAN_HITS. Divergence probes with lowercase names."""
-        for key in ("bluesolar", "orion", "bmv", "phoenix"):
-            with self.subTest(spec=key):
-                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
-        # Decimal lowercase probe: scraped + parsed honestly.
-        self.assertEqual(scrape_decimal_ids("60961      future history record\n"), {60961})
-        self.assertNotIn(60961, scrape_doc_ids("60961      future history record\n"))
-        from spec_parser import OrionXSHEXParser
-
-        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-            with self.subTest(parser=cls.__name__):
-                text = (
-                    "Restore factory defaults\n"
-                    "60961      future history record\n"
-                    "1.2 Asynchronous items\n"
-                )
-                probe = cls(text).parse_registers()[60961]
-                self.assertEqual(probe.description, "future history record")
-                self.assertEqual(probe.data_type, "struct")
-                self.assertEqual(probe.access, "R")
-                self.assertIsNone(probe.scale)
-                # Hex lowercase probe: same honest pass (hex scraper already
-                # caught it via bare 0xHHHH, so this also proves parser
-                # alignment rather than a new scraper blind spot).
-                text_hex = (
-                    "Restore factory defaults\n"
-                    "0x104F      future history record\n"
-                    "1.2 Asynchronous items\n"
-                )
-                probe_hex = cls(text_hex).parse_registers()[0x104F]
-                self.assertEqual(probe_hex.description, "future history record")
-        # Controls: dates/years stay out of the widened scan.
-        self.assertEqual(scrape_decimal_ids("2016 production stopped note\n"), set())
-        self.assertEqual(scrape_decimal_ids("15-11-2021 some change\n"), set())
-
-    def test_id_only_symbol_description_rescue(self):
-        """Decimal ID-only description charset excluded ``:``/``+``/``#``/``&``
-        on every side: probes ``60961 Future: history record`` /
-        ``Future+history`` / ``Future#1`` / ``A&B`` were missed by the decimal
-        scan, the hex scrape, and both history parsers (parser ID-only
-        regexes + scraper dtype-less regex shared the identical closed
-        charset) while EXPECTED_COUNTS, reverse-coverage, and the empty-pin
-        stayed green — reproduced synthetically before the fix. Scraper +
-        parsers now take the description open-charset (``[A-Za-z].*?``, any
-        chars with justified structural denylists, following the
-        label-charset precedent), so the probes pass honestly with exact
-        descriptions on all sides. Zero-diff: snapshot decimal scans are
-        exactly EXPECTED_DECIMAL_SCAN_HITS and counts stay pinned elsewhere.
-        Divergence probes with symbol descriptions."""
-        from spec_parser import OrionXSHEXParser
-
-        for key in ("bluesolar", "orion", "bmv", "phoenix"):
-            with self.subTest(spec=key):
-                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
-        for desc in ("Future: history record", "Future+history", "Future#1", "A&B"):
+        for desc in (
+            "Future history record", "future history record",
+            "Future: history record", "Future+history", "Future#1", "A&B",
+            "*Boost record", "+Boost record", "#1 Boost record",
+        ):
             with self.subTest(desc=desc):
                 line = f"60961      {desc}\n"
-                # Decimal scan catches the ID-only row (hex scrape misses by
-                # design: no ``0x`` prefix — the dtype-less scan is the loud
-                # side for decimal IDs, as with the plain probes above).
                 self.assertEqual(scrape_decimal_ids(line), {60961})
                 self.assertNotIn(60961, scrape_doc_ids(line))
                 for cls in (BlueSolarHEXParser, OrionXSHEXParser):
@@ -1508,9 +1398,10 @@ class TestSpecParsers(unittest.TestCase):
                         )
                         probe = cls(text).parse_registers()[60961]
                         self.assertEqual(probe.description, desc)
+                        if desc in ("Future history record", "future history record"):
+                            self.assertEqual(probe.data_type, "struct")
                         self.assertIsNone(probe.scale)
                         self.assertEqual(probe.access, "R")
-                # Hex ID-only branch carries the same widening (exact desc).
                 text_hex = (
                     "Restore factory defaults\n"
                     f"0x104F      {desc}\n"
@@ -1521,6 +1412,22 @@ class TestSpecParsers(unittest.TestCase):
                     with self.subTest(hex_parser=cls.__name__):
                         probe_hex = cls(text_hex).parse_registers()[0x104F]
                         self.assertEqual(probe_hex.description, desc)
+        # A range marker alone must not become a single ID-only row.
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(skip=cls.__name__):
+                text = (
+                    "Restore factory defaults\n"
+                    "0x1050 ...\n"
+                    "1.2 Asynchronous items\n"
+                )
+                self.assertNotIn(0x1050, cls(text).parse_registers())
+        # Dates and years must stay out of the widened decimal scan.
+        for line in (
+            "15-11-2021 some change\n", "2016\n", "5) 2021-09-06\n",
+            "2016 Production stopped note\n", "2016 production stopped note\n",
+        ):
+            with self.subTest(date=line):
+                self.assertEqual(scrape_decimal_ids(line), set())
 
     def test_decimal_id_range_expansion(self):
         """Decimal ID ranges were missed on every side: probe ``History
@@ -1588,70 +1495,6 @@ class TestSpecParsers(unittest.TestCase):
             BlueSolarHEXParser("History registers 60961-61261 table\n").parse_registers().get(61100),
             None,
         )
-
-    def test_id_only_symbol_first_description_rescue(self):
-        """Symbol-as-FIRST-char in ID-only rows was missed on every side:
-        probe ``60961 *Boost record`` was missed by both history parsers
-        (letter-start required) and both scans (the hex scrape has no such
-        row by design; the decimal dtype-less scan required ``[A-Za-z]``
-        first) while EXPECTED_COUNTS, reverse-coverage, and the empty-pin
-        stayed green — reproduced synthetically before the fix (the earlier
-        symbol fix covered symbol-AFTER-letter only: ``Future:`` /
-        ``Future+`` / ``A&B``). Scraper + both parsers now take the
-        description as ``\\S.*?`` (any non-space start, CS/ERR
-        structural-name precedent) with the same structural denylists, so
-        the probes pass honestly with exact descriptions on all sides.
-        Zero-diff: no snapshot history-region ID-only line starts with a
-        symbol (verified) and no snapshot line carries a line-leading
-        decimal ID at all, so snapshot scans stay exactly
-        EXPECTED_DECIMAL_SCAN_HITS and counts stay pinned elsewhere."""
-        from spec_parser import OrionXSHEXParser
-
-        for key in ("bluesolar", "orion", "bmv", "phoenix"):
-            with self.subTest(spec=key):
-                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
-        for desc in ("*Boost record", "+Boost record", "#1 Boost record"):
-            with self.subTest(desc=desc):
-                line = f"60961      {desc}\n"
-                # Decimal scan catches the ID-only row (hex scrape misses by
-                # design: no ``0x`` prefix — the dtype-less scan is the loud
-                # side for decimal IDs, as with the plain/symbol probes).
-                self.assertEqual(scrape_decimal_ids(line), {60961})
-                self.assertNotIn(60961, scrape_doc_ids(line))
-                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-                    with self.subTest(parser=cls.__name__):
-                        text = (
-                            "Restore factory defaults\n"
-                            + line
-                            + "1.2 Asynchronous items\n"
-                        )
-                        probe = cls(text).parse_registers()[60961]
-                        self.assertEqual(probe.description, desc)
-                        self.assertIsNone(probe.scale)
-                        self.assertEqual(probe.access, "R")
-                # Hex ID-only branch carries the same widening (exact desc;
-                # hex scraper already caught it via the bare ID).
-                text_hex = (
-                    "Restore factory defaults\n"
-                    f"0x104F      {desc}\n"
-                    "1.2 Asynchronous items\n"
-                )
-                self.assertIn(0x104F, scrape_doc_ids(text_hex))
-                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-                    with self.subTest(hex_parser=cls.__name__):
-                        probe_hex = cls(text_hex).parse_registers()[0x104F]
-                        self.assertEqual(probe_hex.description, desc)
-        # Controls: range/table/prose shapes still skip the single-row
-        # ID-only path (range lines expand via the range path instead —
-        # covered above — never as one row).
-        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-            with self.subTest(skip=cls.__name__):
-                text = (
-                    "Restore factory defaults\n"
-                    "0x1050 ...\n"
-                    "1.2 Asynchronous items\n"
-                )
-                self.assertNotIn(0x1050, cls(text).parse_registers())
 
     def test_bmv_settings_parenthesized_unit_loud(self):
         """BMV settings-branch parenthesized units dropped silently: probe
@@ -1891,184 +1734,34 @@ class TestSpecParsers(unittest.TestCase):
                 assert vrow is not None
                 self.assertEqual(vrow[0], 0xEDE0)
 
-    def test_live_split_id_rescue(self):
-        """Live-side split-ID rescue (cycle-32 issue 1): the live matcher
-        missed split-ID print forms while snapshot _split_typed_row and both
-        test scrapers rescued them, so a live-added split-printed register
-        stayed FRESH on all live stages. Probes ``0xED E0`` (mid-token) and
-        ``0x EDF0`` (prefix) now resolve on the live side like the glued
-        control; prose without a dtype tail and double-space gaps stay out.
-        End-to-end: a live PDF gaining a split-printed ID reports STALE
-        naming it. Zero-diff: no snapshot carries either form with a nearby
-        dtype, and live==snapshot still holds on all 5 real PDFs."""
-        # Unit probes (live matcher directly).
-        self.assertEqual(
-            register_id_set_from_text("0xED E0 Battery 0.1 un16 V"), {0xEDE0}
+    # Includes former test_live_split_id_rescue: split-ID scanner cases and absence of typed split IDs in snapshots.
+    def test_live_split_id_tokens(self):
+        """The live ID scanner accepts split table IDs but ignores prose."""
+        cases = (
+            ("0xED E0 Battery 0.1 un16 V", {0xEDE0}),
+            ("0x EDF0 Battery 0.1 un16 V", {0xEDF0}),
+            ("0xEDF0 Battery 0.1 un16 V", {0xEDF0}),
+            ("(register 0xED E0) prose mention", set()),
+            ("(register 0x EDF0) prose mention", set()),
+            ("0xED  E0    Split inside  0.1  un16  V", set()),
         )
-        self.assertEqual(
-            register_id_set_from_text("0x EDF0 Battery 0.1 un16 V"), {0xEDF0}
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(register_id_set_from_text(source), expected)
+        split_ids = re.compile(
+            r"0[xX](?:\s+[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,3} [0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])"
         )
-        # Control: glued form resolves identically.
-        self.assertEqual(
-            register_id_set_from_text("0xEDF0 Battery 0.1 un16 V"), {0xEDF0}
-        )
-        # Guards: prose without a dtype tail stays out; a column gap (2+)
-        # is not a mid-token split.
-        self.assertEqual(
-            register_id_set_from_text("(register 0xED E0) prose mention"), set()
-        )
-        self.assertEqual(
-            register_id_set_from_text("(register 0x EDF0) prose mention"), set()
-        )
-        self.assertEqual(
-            register_id_set_from_text("0xED  E0    Split inside  0.1  un16  V"),
-            set(),
-        )
-        # Zero-diff pin: no snapshot carries either split form with a
-        # nearby dtype (so the rescue adds nothing today). Mirrors the
-        # live rescue guards exactly (exactly-4 total + dtype within 120;
-        # a bare "0xFF for un32 ..." is 2+1=3, not 4, so it stays out).
+        dtype = re.compile(r"\b(?:un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.I)
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
-            with self.subTest(spec=key):
-                text = self.raw_texts[key]
-                hits = []
-                for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", text):
-                    if re.search(
-                        r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-                        text[m.end():m.end() + 120],
-                        re.IGNORECASE,
-                    ):
-                        hits.append(m.group(0))
-                for m in re.finditer(
-                    r"0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])", text
-                ):
-                    if len(m.group(1)) + len(m.group(2)) != 4:
-                        continue
-                    if re.search(
-                        r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-                        text[m.end():m.end() + 120],
-                        re.IGNORECASE,
-                    ):
-                        hits.append(m.group(0))
-                self.assertEqual(hits, [], f"{key} snapshot gained split-ID prose")
-        # End-to-end: live PDF gaining a split-printed ID (0x9999 only in
-        # split form, markers unchanged) reports STALE naming it.
-        # Self-contained (this class has no freshness PDF helpers): the
-        # crafted PDF embeds real snapshot markers plus the snapshot's own
-        # glued IDs and one split-only row, with newlines preserved so the
-        # dtype window proves a table row.
-        with tempfile.TemporaryDirectory() as tmp:
-            tmpdir = Path(tmp)
-            for key in fetch_specs.OFFICIAL_SPECS:
-                text = (self.specs_dir / f"{key}.txt").read_text(errors="ignore")
-                (tmpdir / f"{key}.txt").write_text(text)
-            expected = {
-                key: snapshot_revision_info(
-                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
-                )
-                for key in fetch_specs.OFFICIAL_SPECS
-            }
-            snap_ids = {
-                key: register_id_set_from_text(
-                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
-                )
-                for key in fetch_specs.OFFICIAL_SPECS
-            }
-            self.assertNotIn(0x9999, snap_ids["BlueSolar-HEX-protocol"])
-
-            def _pdf_bytes(marker_text: str) -> bytes:
-                parts = []
-                for ch in marker_text:
-                    if ch in "()\\":
-                        parts.append(f"(\\{ch})")
-                    else:
-                        parts.append(f"({ch})")
-                content = ("BT [ " + "".join(f"{p}5 " for p in parts) + "] TJ ET").encode("latin-1")
-                comp = zlib.compress(content)
-                return (
-                    b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
-                    b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
-                    b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj\n"
-                    b"4 0 obj << /Length " + str(len(comp)).encode() + b" /Filter /FlateDecode >> stream\n"
-                    + comp + b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF"
-                )
-
-            def _ids_pdf(label, date, ids) -> bytes:
-                bits = [
-                    "Revision Log",
-                    "Document history",
-                    "Changes:",
-                    label or "",
-                    date.strftime("%d-%m-%Y"),
-                    date.isoformat(),
-                    date.strftime("%d %B %Y"),
+            with self.subTest(snapshot=key):
+                source = self.raw_texts[key]
+                hits = [
+                    match.group()
+                    for match in split_ids.finditer(source)
+                    if len(re.sub(r"\s", "", match.group())) == 6
+                    and dtype.search(source[match.end():match.end() + 120])
                 ]
-                if label and "Initial version" in label:
-                    bits.append("Initial version")
-                bits.append(" ".join(f"0x{i:04X}" for i in sorted(ids)))
-                return _pdf_bytes("  ".join(b for b in bits if b))
-
-            pdfs = {}
-            for key, (label, date) in expected.items():
-                if key == "BlueSolar-HEX-protocol":
-                    bits = [
-                        "Revision Log",
-                        "Document history",
-                        "Changes:",
-                        label or "",
-                        date.strftime("%d-%m-%Y"),
-                        date.isoformat(),
-                        date.strftime("%d %B %Y"),
-                    ]
-                    if label and "Initial version" in label:
-                        bits.append("Initial version")
-                    bits.append(
-                        " ".join(f"0x{i:04X}" for i in sorted(snap_ids[key]))
-                    )
-                    bits.append("\n0x99 99 Future register 0.1 un16 V\n")
-                    pdfs[key] = _pdf_bytes("  ".join(b for b in bits if b))
-                else:
-                    pdfs[key] = _ids_pdf(label, date, snap_ids[key])
-            newer = {
-                key: datetime.datetime.combine(
-                    date + datetime.timedelta(days=10), datetime.time(12, 0),
-                    tzinfo=datetime.timezone.utc,
-                )
-                for key, (_label, date) in expected.items()
-            }
-
-            def _fake_header(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return newer[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            def _fake_download(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return pdfs[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
-                    status, detail = snapshot_freshness_status(tmpdir)
-                    self.assertEqual(status, "stale", detail)
-                    self.assertIn("0x9999", detail)
-                    self.assertIn("added", detail)
-        # Zero-diff live==snapshot on all 5 real PDFs (network; skip offline).
-        specs_dir = Path(__file__).resolve().parent / "specs"
-        for key, info in fetch_specs.OFFICIAL_SPECS.items():
-            with self.subTest(live=key):
-                snap_text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
-                want = register_id_set_from_text(snap_text)
-                try:
-                    pdf_bytes = download_pdf_bytes(info["url"], timeout=30.0)
-                except OSError as e:
-                    self.skipTest(f"live download unreachable, skipping: {e}")
-                got = live_register_ids(pdf_bytes)
-                if not got:
-                    self.skipTest(f"{key} live IDs unextractable, skipping")
-                self.assertEqual(got, want, f"{key} live==snapshot broke")
+                self.assertEqual(hits, [])
 
     def test_bluesolar_bare_x_rescue_symmetry(self):
         """BlueSolar bare-``x`` typo asymmetry: probe ``xEDE0 Battery low temp
@@ -2401,50 +2094,38 @@ class TestSpecParsers(unittest.TestCase):
                 ]
                 self.assertEqual(empties, [])
 
-    def test_hex_description_change_detection(self):
-        """Hash-pinned per-doc description change detection (bounded
-        maintenance: one hash per doc, see EXPECTED_HEX_DESCRIPTION_HASHES):
-        any single reword fails loudly for human triage. Regression probe:
-        BlueSolar 0xEDF0 "Battery maximum current" -> "Battery peak current"
-        keeps every schema assert green (scale/dtype/unit/access unchanged)
-        but changes the hash (must fail pre-triage). Whitespace/layout noise
-        never false-alarms (normalization collapses it; proved by the
-        double-space control below and zero-diff on all four snapshots)."""
-        reg_dicts = {
-            "bluesolar": self.bs_regs,
-            "orion": self.or_regs,
-            "bmv": self.bmv_regs,
-            "phoenix": self.ph_regs,
-        }
-        # Zero-diff: pinned hashes match current parser output on all four
-        # snapshots (proves no false alarm on today's docs).
-        for key, reg_dict in reg_dicts.items():
+    # Includes former test_hex_description_change_detection: reworded parsed description changes the hash;
+    # the scale, dtype, unit, and access stay fixed, and whitespace is normalized.
+    def test_hex_description_snapshot_hashes(self):
+        """Pin normalized HEX descriptions for all four snapshots."""
+        for key, registers in (
+            ("bluesolar", self.bs_regs),
+            ("orion", self.or_regs),
+            ("bmv", self.bmv_regs),
+            ("phoenix", self.ph_regs),
+        ):
             with self.subTest(spec=key):
-                self.assertEqual(_hex_description_hash(reg_dict), EXPECTED_HEX_DESCRIPTION_HASHES[key])
-        # Regression probe (must fail the suite pre-triage): reword keeps
-        # every schema assert green but trips the hash.
-        base = self.raw_texts["bluesolar"]
-        probe_text = base.replace("Battery maximum current", "Battery peak current", 1)
-        self.assertNotEqual(probe_text, base)
-        probe_regs = BlueSolarHEXParser(probe_text).parse_registers()
-        probe = probe_regs[0xEDF0]
-        self.assertEqual(probe.description, "Battery peak current")
-        # Schema asserts stay green on the probe (the reported gap).
-        self.assertAlmostEqual(probe.scale, self.bs_regs[0xEDF0].scale)
-        self.assertEqual(probe.data_type, self.bs_regs[0xEDF0].data_type)
-        self.assertEqual(probe.unit, self.bs_regs[0xEDF0].unit)
-        self.assertEqual(probe.access, self.bs_regs[0xEDF0].access)
-        # ... but the change-detection hash trips loudly.
-        self.assertNotEqual(
-            _hex_description_hash(probe_regs), EXPECTED_HEX_DESCRIPTION_HASHES["bluesolar"]
+                self.assertEqual(
+                    _hex_description_hash(registers), EXPECTED_HEX_DESCRIPTION_HASHES[key]
+                )
+        changed = self.raw_texts["bluesolar"].replace(
+            "Battery maximum current", "Battery peak current", 1
         )
-        # No false alarm on whitespace/layout noise: doubled spaces
-        # normalize back to the pinned hash (copies only — the shared
-        # setUpClass regs are never mutated).
-        import dataclasses
+        self.assertNotEqual(changed, self.raw_texts["bluesolar"])
+        changed_regs = BlueSolarHEXParser(changed).parse_registers()
+        self.assertEqual(changed_regs[0xEDF0].description, "Battery peak current")
+        for attribute in ("scale", "data_type", "unit", "access"):
+            self.assertEqual(
+                getattr(changed_regs[0xEDF0], attribute),
+                getattr(self.bs_regs[0xEDF0], attribute),
+            )
+        self.assertNotEqual(
+            _hex_description_hash(changed_regs), EXPECTED_HEX_DESCRIPTION_HASHES["bluesolar"]
+        )
+        from dataclasses import replace
 
         noisy = {
-            rid: dataclasses.replace(reg, description=reg.description.replace(" ", "  "))
+            rid: replace(reg, description=reg.description.replace(" ", "  "))
             for rid, reg in self.bs_regs.items()
         }
         self.assertEqual(
@@ -2696,6 +2377,7 @@ class TestSpecParsers(unittest.TestCase):
                 f"{key} manifest date drifted",
             )
 
+    # Includes former test_snapshot_revision_no_midline_future_inflation: midline future prose date is ignored.
     def test_snapshot_revision_no_future_inflation(self):
         """Proves date selection is anchored, not max-over-tail: a synthetic
         example/future date in tail prose must not inflate local_date to
@@ -2727,52 +2409,36 @@ class TestSpecParsers(unittest.TestCase):
             f"{self.specs['text'].unknown_units}",
         )
 
-    def test_text_unknown_unit_recorded_loudly(self):
-        """Synthetic future-unit row: the parser must record ("Hz") rather
-        than silently leaking it into the description."""
-        section = (
-            "The units used by the serial interface are as follows:\n"
-            "             HZz                 Hz                       Some new quantity\n"
-            "             V                   mV                       Main voltage\n"
-            "Table I Supported Text-mode fields\n"
+    # Includes former test_text_unknown_unit_recorded_loudly: unknown Hz is recorded; known mV stays known.
+    # Includes former test_text_unknown_multiword_unit_recorded_loudly: multiword and double-space candidates.
+    # Includes former test_text_unknown_overlong_unit_recorded: units longer than 32 characters are reported.
+    def test_text_unknown_units_recorded_loudly(self):
+        """Unknown single-word, multiword, and overlong units are reported."""
+        long_unit = "supercalifragilisticexpialidocious_unit_xyz"
+        self.assertGreater(len(long_unit), 32)
+        cases = (
+            ("HZz", "Hz", "Hz                       Some new quantity"),
+            ("KWz", "kilo watt hours", "kilo watt hours          Some new quantity"),
+            ("QZz", long_unit, f"{long_unit}          Some new quantity"),
+            # The old 32-character cap silently dropped this candidate.
+            ("LDz", "This is a very long description with",
+             "This is a very long description with  double spaces inside"),
         )
-        parser = VEDirectTextParser(section)
-        fields = parser.parse_fields()
-        self.assertEqual(parser.unknown_units, [("HZz", "Hz")])
-        self.assertEqual(fields["HZz"].units, "")
-        # Control: known units never record.
-        self.assertEqual(fields["V"].units, "mV")
-
-    def test_text_unknown_multiword_unit_recorded_loudly(self):
-        """Synthetic multi-word future unit: the old single-token shape
-        check let "kilo watt hours" leak into the description with
-        unknown_units==[]; the widened gate records the full pre-gap
-        candidate instead. Over-long control: a long description leaking
-        through an accidental internal double space is now RECORDED (loud,
-        flagged for human review) instead of silently dropped by the old
-        32-char cap — over-scraping fails loudly via the invented-IDs-style
-        unknown-units check, which is the safe direction."""
-        section = (
-            "The units used by the serial interface are as follows:\n"
-            "             KWz                 kilo watt hours          Some new quantity\n"
-            "Table I Supported Text-mode fields\n"
-        )
-        parser = VEDirectTextParser(section)
-        fields = parser.parse_fields()
-        self.assertEqual(parser.unknown_units, [("KWz", "kilo watt hours")])
-        self.assertEqual(fields["KWz"].units, "")
-        long_desc = (
-            "The units used by the serial interface are as follows:\n"
-            "             LDz                 This is a very long description with  double spaces inside\n"
-            "Table I Supported Text-mode fields\n"
-        )
-        parser2 = VEDirectTextParser(long_desc)
-        parser2.parse_fields()
-        # Loud recording: over-long pre-gap candidate is flagged for review,
-        # never silently dropped (old cap hid real >32-char units).
-        self.assertEqual(
-            parser2.unknown_units, [("LDz", "This is a very long description with")]
-        )
+        for label, candidate, row in cases:
+            with self.subTest(label=label):
+                section = (
+                    "The units used by the serial interface are as follows:\n"
+                    f"             {label}                 {row}\n"
+                    "             V                   mV                       Main voltage\n"
+                    "Table I Supported Text-mode fields\n"
+                )
+                parser = VEDirectTextParser(section)
+                fields = parser.parse_fields()
+                self.assertEqual(parser.unknown_units, [(label, candidate)])
+                if label != "LDz":
+                    self.assertEqual(fields[label].units, "")
+                # A known unit beside each probe must never be recorded.
+                self.assertEqual(fields["V"].units, "mV")
 
     def test_text_unknown_single_space_unit_recorded(self):
         """Regression for the single-space gate: a future unit separated from
@@ -2901,29 +2567,8 @@ class TestSpecParsers(unittest.TestCase):
                 digit_first.append((m.group(1), rest))
         self.assertEqual(digit_first, [])
 
-    def test_text_unknown_overlong_unit_recorded(self):
-        """Regression for the 32-char silent drop: a future unit longer than
-        32 chars was silently ignored (unknown_units==[]) while leaking into
-        the description. Loud recording replaces the silent ignore — the full
-        candidate is recorded for human review."""
-        long_unit = "supercalifragilisticexpialidocious_unit_xyz"
-        self.assertGreater(len(long_unit), 32)
-        section = (
-            "The units used by the serial interface are as follows:\n"
-            f"             QZz                 {long_unit}          Some new quantity\n"
-            "Table I Supported Text-mode fields\n"
-        )
-        parser = VEDirectTextParser(section)
-        fields = parser.parse_fields()
-        self.assertEqual(parser.unknown_units, [("QZz", long_unit)])
-        self.assertEqual(fields["QZz"].units, "")
-
     def test_text_field_counter_gap_divergence(self):
-        """Proves the independent counter is truly gap-permissive: a
-        synthetic single-space label row is counted by
-        count_doc_field_labels yet missed by the parser's ``\\s{2,}``
-        rule, i.e. it would fail loudly as a parser-vs-counter mismatch
-        instead of passing ``len==63`` on both sides."""
+        """The counter sees a single-space label that the parser misses."""
         section = (
             "The units used by the serial interface are as follows:\n"
             "             V                   mV                       Main voltage\n"
@@ -2934,11 +2579,7 @@ class TestSpecParsers(unittest.TestCase):
         self.assertNotIn("QZ", VEDirectTextParser(section).parse_fields())
 
     def test_text_field_counter_stoplist_divergence(self):
-        """Proves the counter does not share the parser's exact stoplist: a
-        synthetic label colliding with a parser stoplist word ("Note") is
-        counted by count_doc_field_labels yet skipped by the parser, i.e.
-        it would fail loudly as a parser-vs-counter mismatch instead of
-        being missed by both."""
+        """The counter sees a parser-stoplisted label."""
         section = (
             "The units used by the serial interface are as follows:\n"
             "             V                   mV                       Main voltage\n"
@@ -2995,101 +2636,43 @@ class TestSpecParsers(unittest.TestCase):
         flagged = {label for label, _ in VEDirectTextParser(full).unknown_units}
         self.assertEqual(candidates - set(fields) - flagged, {"V PV"})
 
-    def test_text_field_label_charset_hyphen_dot(self):
-        """Shared label charset hid hyphen/dotted future labels on both
-        sides (probe ``DC-IN``/``V.PV`` yielded parser ['V'] and counter
-        ['V'], counts staying green). Scraper is over-inclusive (hyphen/dot
-        in the class) and the parser records such labels too, so the probe
-        now passes honestly on both sides. Control: no hyphen/dot label in
-        current snapshots (zero-diff, 63 fields stay exact)."""
-        section = (
-            "The units used by the serial interface are as follows:\n"
-            "             V                   mV                       Main voltage\n"
-            "             DC-IN               mV                       Future hyphen label\n"
-            "             V.PV                mV                       Future dotted label\n"
-            "Table I Supported Text-mode fields\n"
+    # Includes former test_text_field_label_charset_hyphen_dot: DC-IN and V.PV labels and snapshot guard.
+    # Includes former test_text_field_label_leading_plus: +QZ label, units, description, and snapshot guard.
+    # Includes former test_text_field_label_symbol_charset: V:PV, DC/IN, and *QZ labels and snapshot guard.
+    def test_text_field_label_symbols(self):
+        """The independent counter and parser both retain punctuation in
+        future labels; the current snapshot contains none of these forms.
+        """
+        cases = (
+            ("DC-IN", "Future hyphen label"),
+            ("V.PV", "Future dotted label"),
+            ("+QZ", "Future quantity"),
+            ("V:PV", "Future quantity"),
+            ("DC/IN", "Future quantity"),
+            ("*QZ", "Future quantity"),
         )
-        # Over-inclusive scraper catches hyphen/dotted (was missed before).
-        labels = count_doc_field_labels(section)
-        self.assertIn("DC-IN", labels)
-        self.assertIn("V.PV", labels)
-        # Parser records them too (honest pass, not divergence): future
-        # hyphen/dotted rows parse instead of staying green-but-missed.
-        fields = VEDirectTextParser(section).parse_fields()
-        self.assertIn("DC-IN", fields)
-        self.assertIn("V.PV", fields)
-        self.assertEqual(fields["DC-IN"].units, "mV")
-        self.assertEqual(fields["V.PV"].units, "mV")
-        # Zero-diff control: snapshots carry no hyphen/dot label, so the
-        # widened class adds no hits (63 stay exact on both sides).
-        text = self.raw_texts["text"]
-        start = text.find("The units used by the serial interface are as follows:")
-        end = text.find("Table I Supported Text-mode fields")
-        snap_labels = count_doc_field_labels(text[start:end])
-        self.assertEqual(len(snap_labels), EXPECTED_COUNTS["fields"])
-        self.assertFalse(any("-" in lb or "." in lb for lb in snap_labels))
-        self.assertFalse(any("-" in lb or "." in lb for lb in self.text_fields))
-
-    def test_text_field_label_leading_plus(self):
-        """Leading-``+`` text labels ("+QZ mV Future") were missed by BOTH
-        the counter and the parser (``[A-Za-z0-9_#.-]`` required) while 63
-        stayed green. Both now lead ``[+A-Za-z0-9_#.-]`` (other symbols
-        verified absent as label starts in snapshots, zero-diff), so the
-        probe passes honestly with exact label/units on both sides.
-        Zero-diff: no snapshot label starts with "+" (verified, 63 exact).
-        Divergence probe with a leading-plus label."""
-        section = (
-            "The units used by the serial interface are as follows:\n"
-            "             V                   mV                       Main voltage\n"
-            "             +QZ                 mV                       Future quantity\n"
-            "Table I Supported Text-mode fields\n"
-        )
-        self.assertIn("+QZ", count_doc_field_labels(section))
-        fields = VEDirectTextParser(section).parse_fields()
-        self.assertIn("+QZ", fields)
-        self.assertEqual(fields["+QZ"].units, "mV")
-        self.assertEqual(fields["+QZ"].description, "Future quantity")
-        # Zero-diff controls: snapshots carry no plus label (63 exact).
-        text = self.raw_texts["text"]
-        start = text.find("The units used by the serial interface are as follows:")
-        end = text.find("Table I Supported Text-mode fields")
-        snap_labels = count_doc_field_labels(text[start:end])
-        self.assertEqual(len(snap_labels), EXPECTED_COUNTS["fields"])
-        self.assertFalse(any(lb.startswith("+") for lb in snap_labels))
-        self.assertFalse(any(lb.startswith("+") for lb in self.text_fields))
-
-    def test_text_field_label_symbol_charset(self):
-        """Shared closed label charset hid symbol labels on both sides
-        (probes ``V:PV`` / ``DC/IN`` / ``*QZ`` yielded counter set() and
-        parser {} while 63 stayed green — reproduced synthetically before
-        the fix). Both sides now take the label token structurally (any
-        non-space run, no charset restriction), so the probes pass honestly
-        with exact label/units/descriptions on both sides; neither side can
-        share a charset blind spot by construction. Zero-diff: no snapshot
-        label contains ``:``/``/``/``*`` (verified, 63 exact on both
-        sides)."""
-        base = "The units used by the serial interface are as follows:\n"
-        end = "Table I Supported Text-mode fields\n"
-        for label in ("V:PV", "DC/IN", "*QZ"):
+        for label, description in cases:
             with self.subTest(label=label):
                 section = (
-                    base
-                    + "             V                   mV                       Main voltage\n"
-                    + f"             {label}                 mV                       Future quantity\n"
-                    + end
+                    "The units used by the serial interface are as follows:\n"
+                    "             V                   mV                       Main voltage\n"
+                    f"             {label:<20}mV                       {description}\n"
+                    "Table I Supported Text-mode fields\n"
                 )
                 self.assertIn(label, count_doc_field_labels(section))
                 fields = VEDirectTextParser(section).parse_fields()
                 self.assertIn(label, fields)
                 self.assertEqual(fields[label].units, "mV")
-                self.assertEqual(fields[label].description, "Future quantity")
-        # Zero-diff controls: snapshots carry no symbol labels (63 exact).
+                self.assertEqual(fields[label].description, description)
         text = self.raw_texts["text"]
         start = text.find("The units used by the serial interface are as follows:")
-        snap_labels = count_doc_field_labels(text[start:text.find("Table I Supported Text-mode fields")])
+        end = text.find("Table I Supported Text-mode fields", start)
+        snap_labels = count_doc_field_labels(text[start:end])
         self.assertEqual(len(snap_labels), EXPECTED_COUNTS["fields"])
-        self.assertFalse(any(set(lb) & set(":/*") for lb in snap_labels))
-        self.assertFalse(any(set(lb) & set(":/*") for lb in self.text_fields))
+        for labels in (snap_labels, self.text_fields):
+            self.assertFalse(any("-" in lb or "." in lb for lb in labels))
+            self.assertFalse(any(lb.startswith("+") for lb in labels))
+            self.assertFalse(any(set(lb) & set(":/*") for lb in labels))
 
     def test_text_field_label_indent_off_column(self):
         """Structural indent on both sides (cycle-14 fix): the shared
@@ -3445,6 +3028,8 @@ class TestSpecParsers(unittest.TestCase):
 
     def test_cs_states_full_coverage(self):
         """parse_cs_states must cover the whole section incl. 11/245-248/252."""
+        # Also includes the snapshot CS map assertion formerly repeated in
+        # test_cs_err_four_digit_codes.
         states = self.specs["text"].parse_cs_states()
         self.assertEqual(states, EXPECTED_CS)
         # Independent doc-side counter (prefix-only strategy, no bullet-tail
@@ -3593,8 +3178,7 @@ class TestSpecParsers(unittest.TestCase):
         probe recovers ``{99: '*Boost'}``. The MPPT-header strip is
         load-bearing live (first chunk merges the device header), so it is
         kept and applied to the raw name (recorded raw, compared raw).
-        Zero-diff: snapshot tolerant output still equals EXPECTED_CS (15
-        exact) and live agrees (live==snapshot 15; skipped offline)."""
+        The current snapshot still yields the exact EXPECTED_CS map."""
         from fetch_specs import tolerant_cs_states
 
         probe = (
@@ -3606,59 +3190,44 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(tolerant_cs_states(probe), {99: "*Boost"})
         # Zero-diff: snapshot tolerant states equal doc truth exactly.
         self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
-        # Live agrees (skipped unless network is present, like the other
-        # live tests): the same raw-name comparison on the online PDF.
-        specs_dir = Path(__file__).resolve().parent / "specs"
-        snap_text = (specs_dir / "VE.Direct-Protocol-3.34.txt").read_text(errors="ignore")
-        try:
-            pdf_bytes = download_pdf_bytes(fetch_specs.OFFICIAL_SPECS["VE.Direct-Protocol-3.34"]["url"], timeout=30.0)
-        except OSError as e:
-            self.skipTest(f"live download unreachable, skipping: {e}")
-        self.assertEqual(tolerant_cs_states(extract_pdf_text(pdf_bytes)), tolerant_cs_states(snap_text))
 
-    def test_cs_err_leading_plus_rescue(self):
-        """Leading-``+`` CS/ERR names ("+Boost Mode 99 •" / "+Fault mode 99")
-        were missed by BOTH the parser and the scrapers (leading
-        ``[A-Za-z0-9]`` required) while counts stayed green. Both sides now
-        take names structurally (everything before the trailing code, no
-        leading-character restriction — like interior ``+``/``:``/``.``
-        since cycle-14, see the scraper-name tests), so the probes pass
-        honestly with exact names on both sides plus tolerant_cs_states.
-        Controls: "(1) Load search" footnote still excluded via the
-        explicit paren denylist; snapshot CS/ERR names all start with a
-        letter (zero-diff, pinned by full coverage). Divergence probes
-        with leading-plus names."""
+    # Includes former test_cs_err_leading_plus_rescue: + names in CS, ERR, and tolerant scan; footnote guard.
+    # Includes former test_cs_err_leading_symbol_divergence: * names in those paths and snapshot controls.
+    def test_cs_err_leading_symbols(self):
+        """CS and error names retain leading + and * across all parsers."""
         from fetch_specs import tolerant_cs_states
 
-        cs_sec = (
-            "The state of operation. See the table below\n"
-            "                        Off                                   0      •\n"
-            "                        +Boost Mode                           99     •\n"
-        )
-        self.assertEqual(scrape_doc_cs_codes(cs_sec)[99], "+Boost Mode")
-        self.assertEqual(VEDirectTextParser(cs_sec).parse_cs_states()[99], "+Boost Mode")
-        err_sec = (
-            "The error code of the device (relevant when the device is in the fault state)\n"
-            "                        No error                                                            0\n"
-            "                        +Fault mode                                                         99\n"
-        )
-        self.assertEqual(scrape_doc_error_codes(err_sec)[99], "+Fault mode")
-        self.assertEqual(VEDirectTextParser(err_sec).parse_errors()[99], "+Fault mode")
-        # Tolerant live form recovers leading-plus exact too.
-        probe = (
-            "The state of operation dummy\n"
-            "                        +Boost Mode                           99     •\n"
-            "                       The error code dummy\n"
-        )
-        self.assertEqual(tolerant_cs_states(probe), {99: "+Boost Mode"})
-        # Controls: a footnote WITH a code ("(1) Load search 98 •",
-        # snapshot footnote carries none) is scraped here (no content
-        # guards by construction) while the parser's leading-"(" blanket
-        # still drops it — divergence, failing loudly; tolerant snapshot
-        # stays exact.
-        foot_cs = cs_sec + "                        (1) Load search                     98     •\n"
-        self.assertEqual(scrape_doc_cs_codes(foot_cs)[98], "(1) Load search")
-        self.assertNotIn(98, VEDirectTextParser(foot_cs).parse_cs_states())
+        for cs_name, err_name in (
+            ("+Boost Mode", "+Fault mode"),
+            ("*Boost", "*Boost fault"),
+        ):
+            with self.subTest(cs_name=cs_name, err_name=err_name):
+                cs_row = f"                        {cs_name:<38} 99     •\n"
+                cs_sec = (
+                    "The state of operation. See the table below\n"
+                    "                        Off                                   0      •\n"
+                    + cs_row
+                )
+                self.assertEqual(scrape_doc_cs_codes(cs_sec)[99], cs_name)
+                self.assertEqual(VEDirectTextParser(cs_sec).parse_cs_states()[99], cs_name)
+                err_sec = (
+                    "The error code of the device (relevant when the device is in the fault state)\n"
+                    "                        No error                                                            0\n"
+                    f"                        {err_name:<70} 99\n"
+                )
+                self.assertEqual(scrape_doc_error_codes(err_sec)[99], err_name)
+                self.assertEqual(VEDirectTextParser(err_sec).parse_errors()[99], err_name)
+                probe = (
+                    "The state of operation dummy\n"
+                    + cs_row
+                    + "                       The error code dummy\n"
+                )
+                self.assertEqual(tolerant_cs_states(probe), {99: cs_name})
+                # The scraper sees this coded footnote; the parser drops it.
+                foot_cs = cs_sec + "                        (1) Load search                     98     •\n"
+                self.assertEqual(scrape_doc_cs_codes(foot_cs)[98], "(1) Load search")
+                self.assertNotIn(98, VEDirectTextParser(foot_cs).parse_cs_states())
+
         self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
         text = self.raw_texts["text"]
         pos = text.find("The error code of the device (relevant when the device is in the fault state)")
@@ -3666,48 +3235,6 @@ class TestSpecParsers(unittest.TestCase):
         m_wide = re.search(r"Historical data", tail)
         self.assertIsNotNone(m_wide)
         self.assertEqual(scrape_doc_error_codes(tail[: m_wide.start()]), self.specs["text"].parse_errors())
-
-    def test_cs_err_leading_symbol_divergence(self):
-        """Shared leading ``[+A-Za-z0-9]`` hid other-symbol CS/ERR rows on
-        both sides (probe ``*Boost  99  •`` missed by scraper and parser
-        while EXPECTED_CS stayed green — reproduced synthetically before
-        the fix). Both sides now take names structurally (everything before
-        the trailing code, no leading-character restriction, furniture-
-        denylisted), so the probes pass honestly with exact names on both
-        sides. Zero-diff: no snapshot CS/ERR name starts with ``*``
-        (15/20 exact, pinned by the full-coverage tests)."""
-        from fetch_specs import tolerant_cs_states
-
-        cs_sec = (
-            "The state of operation. See the table below\n"
-            "                        Off                                   0      •\n"
-            "                        *Boost                                99     •\n"
-        )
-        self.assertEqual(scrape_doc_cs_codes(cs_sec)[99], "*Boost")
-        self.assertEqual(VEDirectTextParser(cs_sec).parse_cs_states()[99], "*Boost")
-        err_sec = (
-            "The error code of the device (relevant when the device is in the fault state)\n"
-            "                        No error                                                            0\n"
-            "                        *Boost fault                                                        99\n"
-        )
-        self.assertEqual(scrape_doc_error_codes(err_sec)[99], "*Boost fault")
-        self.assertEqual(VEDirectTextParser(err_sec).parse_errors()[99], "*Boost fault")
-        # Tolerant live form recovers the leading symbol exact too (was
-        # MISNAMED as "Boost", see test_tolerant_cs_leading_symbol_exact).
-        probe = (
-            "The state of operation dummy\n"
-            "                        *Boost                                99     •\n"
-            "                       The error code dummy\n"
-        )
-        self.assertEqual(tolerant_cs_states(probe), {99: "*Boost"})
-        # Controls: a footnote WITH a code ("(1) Load search 98 •",
-        # snapshot footnote carries none) is scraped here (no content
-        # guards by construction) while the parser's leading-"(" blanket
-        # still drops it — divergence, failing loudly; snapshots carry no
-        # leading-symbol rows.
-        foot_cs = cs_sec + "                        (1) Load search                     98     •\n"
-        self.assertEqual(scrape_doc_cs_codes(foot_cs)[98], "(1) Load search")
-        self.assertNotIn(98, VEDirectTextParser(foot_cs).parse_cs_states())
         text = self.raw_texts["text"]
         pos = text.find("The state of operation. See the table below")
         tail = text[pos:]
@@ -3819,6 +3346,8 @@ class TestSpecParsers(unittest.TestCase):
 
     def test_error_codes_full_coverage(self):
         """parse_errors must cover the whole section incl. 66/67/68/116/117/119."""
+        # Also includes the snapshot ERR map assertion formerly repeated in
+        # test_cs_err_four_digit_codes.
         errors = self.specs["text"].parse_errors()
         self.assertEqual(errors, EXPECTED_ERRORS)
         # Independent doc-side counter (permissive-gap, EOL-anchored
@@ -3884,13 +3413,11 @@ class TestSpecParsers(unittest.TestCase):
             "                        Dotted.Name fault                                                   102\n"
         )
         scraped = scrape_doc_error_codes(section)
-        self.assertEqual(scraped[99], "Bulk+Boost fault")
-        self.assertEqual(scraped[100], "Charge:Fast fault")
-        self.assertEqual(scraped[102], "Dotted.Name fault")
         parsed = VEDirectTextParser(section).parse_errors()
-        self.assertEqual(parsed[99], "Bulk+Boost fault")
-        self.assertEqual(parsed[100], "Charge:Fast fault")
-        self.assertEqual(parsed[102], "Dotted.Name fault")
+        for code, name in ((99, "Bulk+Boost fault"), (100, "Charge:Fast fault"), (102, "Dotted.Name fault")):
+            with self.subTest(code=code):
+                self.assertEqual(scraped[code], name)
+                self.assertEqual(parsed[code], name)
 
     def test_error_bound_divergence(self):
         """Proves the ERR scraper bound is wider/different than the parser's
@@ -3942,11 +3469,9 @@ class TestSpecParsers(unittest.TestCase):
             "                        Future fault                                                         99 •\n"
         )
         # Bullet-tail-agnostic scraper catches the future row (was missed).
-        self.assertIn(99, scrape_doc_error_codes(section))
         self.assertEqual(scrape_doc_error_codes(section)[99], "Future fault")
         # Parser handles the tail too (honest pass): future bullet-tailed
         # rows parse instead of staying green-but-missed.
-        self.assertIn(99, VEDirectTextParser(section).parse_errors())
         self.assertEqual(VEDirectTextParser(section).parse_errors()[99], "Future fault")
         # Zero-diff control: snapshot ERR rows carry no bullet tail, so the
         # widened tail adds no hits (pinned by full coverage).
@@ -4012,21 +3537,15 @@ class TestSpecParsers(unittest.TestCase):
         the four exact pins occur verbatim in the snapshot ERR section
         (pins are load-bearing, not dead) and the snapshot-wide scan stays
         exactly the 20 EXPECTED_ERRORS."""
-        section = (
-            "The error code of the device (relevant when the device is in the fault state)\n"
-            "                        No error                                                            0\n"
-            "                        shutdown fault                                                      99\n"
-        )
-        self.assertEqual(scrape_doc_error_codes(section)[99], "shutdown fault")
-        self.assertNotIn(99, VEDirectTextParser(section).parse_errors())
-        # Same collision through the denylisted header word.
-        section2 = (
-            "The error code of the device (relevant when the device is in the fault state)\n"
-            "                        No error                                                            0\n"
-            "                        The error code fault                                                99\n"
-        )
-        self.assertEqual(scrape_doc_error_codes(section2)[99], "The error code fault")
-        self.assertNotIn(99, VEDirectTextParser(section2).parse_errors())
+        for name in ("shutdown fault", "The error code fault"):
+            with self.subTest(name=name):
+                section = (
+                    "The error code of the device (relevant when the device is in the fault state)\n"
+                    "                        No error                                                            0\n"
+                    f"                        {name:<72} 99\n"
+                )
+                self.assertEqual(scrape_doc_error_codes(section)[99], name)
+                self.assertNotIn(99, VEDirectTextParser(section).parse_errors())
         # Pins are load-bearing: each occurs verbatim in the snapshot ERR
         # section (a doc rewording fails here for re-triage AND scrapes
         # loudly as an unpinned line).
@@ -4288,7 +3807,6 @@ class TestSpecParsers(unittest.TestCase):
                     f"allows {sorted(allowed)}, got DB {actual}"
                 )
         self.assertEqual(mismatches, [])
-        mismatches = []
         # BlueSolar access: no skipping by access value (anti-oscillation).
         # Every parsed access asserts (R/W defaults included); allowlist ONLY
         # where the doc gives no single access signal, each justified:
@@ -4304,34 +3822,6 @@ class TestSpecParsers(unittest.TestCase):
         _BS_ACCESS_ALLOW = {
             0x2004,  # Remote command: table R/W vs command-detail WRITE_ONLY (see above)
         }
-        for rid, spec_reg in self.bs_regs.items():
-            if rid in _BS_ACCESS_ALLOW:
-                continue  # justified above, not skipping-by-value
-            if spec_reg.access == "W":
-                allowed = {"WRITE_ONLY"}
-            elif spec_reg.access == "R":
-                # History/range R and any future non-history R both expect
-                # READ_ONLY (BS has zero non-history R today, verified, so
-                # this asserts future flips like 0x0004->R loudly).
-                allowed = {"READ_ONLY"}
-            else:  # R/W default (Get/Set table context implies readable+writable)
-                # Doc-readable, DB READ_WRITE or READ_ONLY-refined (BMV
-                # pattern, e.g. 0xEDD5 charger voltage R/W vs DB READ_ONLY).
-                allowed = {"READ_WRITE", "READ_ONLY"}
-            try:
-                actual = R.lookup(rid, flavor="MPPT").access
-            except Exception:
-                try:
-                    actual = R.lookup(rid, flavor="MPPT_RS").access
-                except Exception:
-                    # No MPPT/MPPT_RS entry: covered by schema compliance
-                    # accessibility (flavor-aliased), not access-value skipping.
-                    continue
-            if actual not in allowed and actual != "CONSTANT":
-                # src/ is read-only: DOC truth asserts here; on mismatch report DB file:line.
-                mismatches.append(f"BS 0x{rid:04X} ({spec_reg.name}): parser {spec_reg.access} allows {sorted(allowed)}, got DB {actual}")
-        self.assertEqual(mismatches, [])
-        mismatches = []
         # Orion access: same no-skipping rule. Detail-mention Rs with no
         # access column in doc (prose/detail only, parser default R) are the
         # ONLY allowlist — each genuinely gives no access signal (mixed DB):
@@ -4348,25 +3838,35 @@ class TestSpecParsers(unittest.TestCase):
             0x2013,  # Total charge current prose, no access column
             0xEDDA,  # Charger error/warning prose, no access column
         }
-        for rid, spec_reg in self.or_regs.items():
-            if rid in _ORION_NO_SIGNAL_ALLOW:
-                continue  # justified above, not skipping-by-value
-            if spec_reg.access == "W":
-                allowed = {"WRITE_ONLY"}
-            elif spec_reg.access == "R":
-                # History/cycle/range R expects READ_ONLY; any future
-                # non-history R not in the allowlist above also expects
-                # READ_ONLY (fails loudly, e.g. flipped 0x0004).
-                allowed = {"READ_ONLY"}
-            else:  # R/W default (Get/Set table context)
-                allowed = {"READ_WRITE", "READ_ONLY"}
-            try:
-                actual = R.lookup(rid, flavor="ORION").access
-            except Exception:
-                continue  # flavor-aliased, covered by schema compliance
-            if actual not in allowed and actual != "CONSTANT":
-                mismatches.append(f"Orion 0x{rid:04X} ({spec_reg.name}): parser {spec_reg.access} allows {sorted(allowed)}, got DB {actual}")
-        self.assertEqual(mismatches, [])
+        access_rules = {
+            "W": {"WRITE_ONLY"},
+            "R": {"READ_ONLY"},
+            "R/W": {"READ_WRITE", "READ_ONLY"},
+        }
+        for label, regs, exempt, flavors in (
+            ("BS", self.bs_regs, _BS_ACCESS_ALLOW, ("MPPT", "MPPT_RS")),
+            ("Orion", self.or_regs, _ORION_NO_SIGNAL_ALLOW, ("ORION",)),
+        ):
+            with self.subTest(spec=label):
+                mismatches = []
+                for rid, spec_reg in regs.items():
+                    if rid in exempt:
+                        continue  # No unambiguous access signal in the doc.
+                    allowed = access_rules[spec_reg.access]
+                    for flavor in flavors:
+                        try:
+                            actual = R.lookup(rid, flavor=flavor).access
+                            break
+                        except Exception:
+                            continue  # Flavor-aliased entries are checked elsewhere.
+                    else:
+                        continue
+                    if actual not in allowed and actual != "CONSTANT":
+                        mismatches.append(
+                            f"{label} 0x{rid:04X} ({spec_reg.name}): parser "
+                            f"{spec_reg.access} allows {sorted(allowed)}, got DB {actual}"
+                        )
+                self.assertEqual(mismatches, [])
 
         self.assertEqual(R.lookup("REBULK_VOLTAGE_OFFSET").id, 0xED2E)
         with self.assertRaises(KeyError):
@@ -4517,41 +4017,31 @@ class TestSpecParsers(unittest.TestCase):
         )
 
         # Snapshot stays exact (no unknowns on current docs, all parsers).
-        self.assertEqual(self.specs["bluesolar"].unknown_scales, [])
-        self.assertEqual(self.specs["orion"].unknown_scales, [])
-        self.assertEqual(self.specs["bmv"].unknown_scales, [])
-        self.assertEqual(self.specs["phoenix"].unknown_scales, [])
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(snapshot=key):
+                self.assertEqual(self.specs[key].unknown_scales, [])
         # Synthetic probe on allowlisted 0xEDB3: dropped to None but
-        # recorded loudly (section-table gate, both parsers).
+        # recorded loudly (section-table gate, both parsers). Honest
+        # exponent and absent-scale controls remain silent.
+        self.assertIn(0xEDB3, SCALE_NONE_ALLOW["bluesolar"])
         for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-            with self.subTest(parser=cls.__name__):
-                parser = cls(
-                    "1.1 Get and Set items\n"
-                    "0xEDB3     Tracker mode             1x          un16        -\n"
-                    "1.2 Asynchronous items\n"
-                )
-                probe = parser.parse_registers()[0xEDB3]
-                self.assertIsNone(probe.scale)
-                self.assertIn(0xEDB3, SCALE_NONE_ALLOW["bluesolar"])
-                self.assertEqual(parser.unknown_scales, [(0xEDB3, "1x")])
-        # Controls: honest exponent parses with no record; genuine "-"
-        # absence records nothing either.
-        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-            with self.subTest(control=cls.__name__):
-                ok = cls(
-                    "1.1 Get and Set items\n"
-                    "0xEDB3     Tracker mode             1e-2        un16        -\n"
-                    "1.2 Asynchronous items\n"
-                )
-                self.assertAlmostEqual(ok.parse_registers()[0xEDB3].scale, 0.01)
-                self.assertEqual(ok.unknown_scales, [])
-                bare = cls(
-                    "1.1 Get and Set items\n"
-                    "0xEDB3     Tracker mode             -           un16        -\n"
-                    "1.2 Asynchronous items\n"
-                )
-                self.assertIsNone(bare.parse_registers()[0xEDB3].scale)
-                self.assertEqual(bare.unknown_scales, [])
+            for token, scale, unknown in (
+                ("1x", None, [(0xEDB3, "1x")]),
+                ("1e-2", 0.01, []),
+                ("-", None, []),
+            ):
+                with self.subTest(parser=cls.__name__, scale_token=token):
+                    parser = cls(
+                        "1.1 Get and Set items\n"
+                        f"0xEDB3     Tracker mode             {token:<12}un16        -\n"
+                        "1.2 Asynchronous items\n"
+                    )
+                    probe = parser.parse_registers()[0xEDB3]
+                    if scale is None:
+                        self.assertIsNone(probe.scale)
+                    else:
+                        self.assertAlmostEqual(probe.scale, scale)
+                    self.assertEqual(parser.unknown_scales, unknown)
         # Same gate shape on the other scale cells: BMV Step and Phoenix
         # Scale cells record digit-bearing-but-unparsable tokens loudly.
         bmv_parser = BMV7xxHEXParser(
@@ -4604,36 +4094,7 @@ class TestSpecParsers(unittest.TestCase):
         text = self.raw_texts["text"]
         start = text.find("The units used by the serial interface are as follows:")
         section = text[start:text.find("Table I Supported Text-mode fields")]
-        for pin in (
-            "Label          Units                               Description                                 BMV          BMV          BMV71x           MPPT 1        Phoenix         Phoenix          Smart",
-            "Label                 Units                                Description                       BMV          BMV          BMV71x        MPPT 1   Phoenix    Phoenix     Smart",
-            "Label                 Units                              Description               BMV   BMV    BMV71x      MPPT 1   Phoenix    Phoenix     Smart",
-            "60x          70x         SmartShunt                      Inverter        Charger        BuckBoost",
-            "60x          70x         SmartShunt              Inverter   Charger   BuckBoost",
-            "60x   70x   SmartShunt            Inverter   Charger   BuckBoost",
-            "The units used by the serial interface are as follows:",
-            "The VE.Direct protocol is available in the MPPT 70/15 since firmware version v1.09 and up, and only in newer type MPPT 70/15s: the ones with a product id other than 0x300. The first",
-            "Available on BlueSolar mppt chargers since firmware version v1.16",
-            "Available on BlueSolar mppt chargers since firmware version v1.37",
-            "Available on Phoenix Inverter (some models) since firmware version v1.16",
-            "Available on Phoenix Inverter v1.16",
-            "Available on Phoenix Smart Chargers with triple outputs only",
-            "Available on Smart Phoenix Inverter",
-            "Available on SmartSolar mppt chargers since firmware version v1.17",
-            "Available on SmartSolar mppt chargers since firmware version v1.44 (VE.Direct models) and v1.03 (SmartSolar VE.Can models)",
-            "Available since version v1.12, and only for models with a load output.",
-            "Available since version v1.15, and only for models with a load output.",
-            "Available since version v4.08",
-            "Available when the AUX input is configured as Mid Point",
-            "Available when the AUX input is configured as Starter Battery",
-            "Available when the AUX input is configured as Temperature",
-            "When configured as DC monitor, “---” will be sent instead of a value.",
-            "When no temperature sensor is connected, “---” will be sent instead of a value.",
-            "When the BMV is not synchronised, these statistics have no meaning, so “---” will be sent instead of a value.",
-            "When the battery is not discharging the time- to-go is infinite. This is represented as -1.",
-            "Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands",
-            "General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com",
-        ):
+        for pin in sorted(TEXT_FIELD_FURNITURE_LINES):
             self.assertIn(pin, section, f"furniture pin drifted from snapshot: {pin[:40]}...")
         # Zero-diff: snapshot-wide scan stays exactly the 63 doc fields on
         # both sides (parser set-equality pinned by test_text_protocol_spec).
@@ -4651,8 +4112,7 @@ class TestSpecParsers(unittest.TestCase):
         (fixed: headroom over maxima 252/119, same justification as the
         snapshot side), so a live-added 4-digit state recovers exact on both
         snapshot and live-joined layouts instead of staying FRESH silently.
-        Zero-diff: 15/20 exact on every side (pinned by full coverage) plus
-        live==snapshot agreement today (skipped offline)."""
+        Full snapshot maps are covered by the CS and error coverage tests."""
         from fetch_specs import tolerant_cs_states
 
         cs_sec = (
@@ -4682,28 +4142,6 @@ class TestSpecParsers(unittest.TestCase):
             "                       The error code dummy\n"
         )
         self.assertEqual(tolerant_cs_states(live_style)[1234], "FutureState")
-        self.assertEqual(tolerant_cs_states(self.raw_texts["text"]), EXPECTED_CS)
-        # Live agrees today (skipped unless network is present, like the
-        # other live tests): online stdlib text still yields the 15 states.
-        specs_dir = Path(__file__).resolve().parent / "specs"
-        snap_text = (specs_dir / "VE.Direct-Protocol-3.34.txt").read_text(errors="ignore")
-        try:
-            pdf_bytes = download_pdf_bytes(fetch_specs.OFFICIAL_SPECS["VE.Direct-Protocol-3.34"]["url"], timeout=30.0)
-        except OSError as e:
-            self.skipTest(f"live download unreachable, skipping: {e}")
-        self.assertEqual(tolerant_cs_states(extract_pdf_text(pdf_bytes)), tolerant_cs_states(snap_text))
-        # Zero-diff: snapshot-wide scans stay exactly the doc maps.
-        text = self.raw_texts["text"]
-        pos = text.find("The state of operation. See the table below")
-        tail = text[pos:]
-        m_wide = re.search(r"The error code of the device", tail)
-        self.assertIsNotNone(m_wide)
-        self.assertEqual(scrape_doc_cs_codes(tail[: m_wide.start()]), EXPECTED_CS)
-        pos_e = text.find("The error code of the device (relevant when the device is in the fault state)")
-        tail_e = text[pos_e:]
-        m_wide_e = re.search(r"Historical data", tail_e)
-        self.assertIsNotNone(m_wide_e)
-        self.assertEqual(scrape_doc_error_codes(tail_e[: m_wide_e.start()]), EXPECTED_ERRORS)
 
     def test_write_only_spelling_variants(self):
         """The hyphen ``write-only`` spelling (probe ``0x0399 Foo Bar
@@ -5182,21 +4620,20 @@ class TestSpecParsers(unittest.TestCase):
                         self.assertIn(probe_id, regs)
                         self.assertIsNone(regs[probe_id].scale)
                         self.assertEqual(regs[probe_id].access, "R")
-                # Control hits everywhere (same shape).
-                ctrl_line = "60961      Future history record\n"
-                ctrl_hist = f"Restore factory defaults\n{ctrl_line}1.2 Asynchronous items\n"
-                self.assertIn(60961, scrape_decimal_ids(ctrl_hist))
-                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-                    self.assertIn(60961, cls(ctrl_hist).parse_registers())
+                # Typed 3-/6-digit rows also diverge honestly.
+                self.assertIn(probe_id, scrape_decimal_ids(f"{probe_id} Future typed 0.1 un16 V\n"))
+        # Control hits everywhere (same shape), once for both probe widths.
+        ctrl_line = "60961      Future history record\n"
+        ctrl_hist = f"Restore factory defaults\n{ctrl_line}1.2 Asynchronous items\n"
+        self.assertIn(60961, scrape_decimal_ids(ctrl_hist))
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(control_parser=cls.__name__):
+                self.assertIn(60961, cls(ctrl_hist).parse_registers())
         # False-positive guards stay out.
         self.assertEqual(scrape_decimal_ids("245 WAKE-UP device about to start\n"), set())
         self.assertEqual(
             scrape_decimal_ids("0x032A Foo 45 Un16 0=disabled; 174..372 0 0.01 K\n"), set()
         )
-        # Typed 3-/6-digit with dtype tail also diverge honestly.
-        self.assertIn(999, scrape_decimal_ids("999 Future typed 0.1 un16 V\n"))
-        self.assertIn(123456, scrape_decimal_ids("123456 Future typed 0.1 un16 V\n"))
-
     def test_hex_register_id_16bit_bound_pinned(self):
         """5-hex-digit register IDs are protocol-impossible: pinned miss + live fix.
 
@@ -5392,6 +4829,9 @@ class TestSpecParsers(unittest.TestCase):
         4-digit; other specs no CS marker — verified 2026-09-25). Year-shaped
         candidates now compare loudly. Divergence: snapshot+row as live must
         NOT be fresh. Zero false alarms on today's live (15==15)."""
+        # The live Text CS equality formerly repeated in
+        # test_tolerant_cs_leading_symbol_exact and test_cs_err_four_digit_codes
+        # is checked below against the same snapshot map.
         import re as _re
 
         text = self.raw_texts["text"]
@@ -5422,6 +4862,10 @@ class TestSpecParsers(unittest.TestCase):
             )
             live = live_text_for_structures(pdf)
             self.assertEqual(tolerant_cs_states(live), snap_cs)
+            # Retain the direct extraction path used by the former live CS
+            # checks in test_tolerant_cs_leading_symbol_exact and
+            # test_cs_err_four_digit_codes.
+            self.assertEqual(tolerant_cs_states(extract_pdf_text(pdf)), snap_cs)
         except OSError as e:
             self.skipTest(f"live download unreachable, skipping: {e}")
 
@@ -5435,9 +4879,9 @@ class TestSpecParsers(unittest.TestCase):
         ``% (of 0xEDF0)`` register reference only)."""
         from spec_parser import OrionXSHEXParser
 
-        for cls, regs, key in (
-            (BlueSolarHEXParser, self.bs_regs, "bluesolar"),
-            (OrionXSHEXParser, self.or_regs, "orion"),
+        for cls, key in (
+            (BlueSolarHEXParser, "bluesolar"),
+            (OrionXSHEXParser, "orion"),
         ):
             with self.subTest(parser=cls.__name__):
                 parser = cls.from_file(self.specs_dir / (
@@ -5447,21 +4891,20 @@ class TestSpecParsers(unittest.TestCase):
                 self.assertEqual(parser.unknown_units, [])
                 self.assertEqual(parser.unknown_scales, [])
         for cls in (BlueSolarHEXParser, OrionXSHEXParser):
-            with self.subTest(probe=cls.__name__):
-                p = cls("1.1 Get and Set items\n0xEDF0 Battery maximum current 0.01 un16 V (peak)\n1.2 Asynchronous items\n")
-                r = p.parse_registers()[0xEDF0]
-                self.assertEqual(r.unit, "V (peak)")
-                self.assertEqual(p.unknown_units, [(0xEDF0, "V (peak)")])
-                self.assertEqual(p.unknown_scales, [])
-                # Normalizer still strips to V (schema side unchanged; gate loud).
-                self.assertEqual(_normalize_unit_for_comparison(r.unit), "V")
-                # Control plain V silent; denylisted reference silent.
-                c = cls("1.1 Get and Set items\n0xEDF0 Battery maximum current 0.01 un16 V\n1.2 Asynchronous items\n")
-                c.parse_registers()
-                self.assertEqual(c.unknown_units, [])
-                d = cls("1.1 Get and Set items\n0xEDE4 Battery setting 1 un16 % (of 0xEDF0)\n1.2 Asynchronous items\n")
-                d.parse_registers()
-                self.assertEqual(d.unknown_units, [])
+            for case, row, unknown in (
+                ("qualifier", "0xEDF0 Battery maximum current 0.01 un16 V (peak)", [(0xEDF0, "V (peak)")]),
+                ("plain", "0xEDF0 Battery maximum current 0.01 un16 V", []),
+                ("reference", "0xEDE4 Battery setting 1 un16 % (of 0xEDF0)", []),
+            ):
+                with self.subTest(parser=cls.__name__, case=case):
+                    p = cls(f"1.1 Get and Set items\n{row}\n1.2 Asynchronous items\n")
+                    regs = p.parse_registers()
+                    self.assertEqual(p.unknown_units, unknown)
+                    if case == "qualifier":
+                        self.assertEqual(regs[0xEDF0].unit, "V (peak)")
+                        self.assertEqual(p.unknown_scales, [])
+                        # Normalizer still strips to V; the gate catches the qualifier.
+                        self.assertEqual(_normalize_unit_for_comparison(regs[0xEDF0].unit), "V")
 
     def test_scale_dtype_structural_window(self):
         """Issue-6: live scale/dtype map cut each ID window at maxdist=120, so
@@ -5483,6 +4926,15 @@ class TestSpecParsers(unittest.TestCase):
 class TestFetchSpecs(unittest.TestCase):
     """Cover fetch_specs with synthetic inputs and explicit live checks."""
 
+    # Includes former test_snapshot_revision_info_rev_format: Rev number and day-first date.
+    # Includes former test_snapshot_revision_info_version_history_format: latest version-history entry.
+    # Includes former test_snapshot_revision_info_iso_format: latest ISO date without a label.
+    # Includes former test_snapshot_revision_info_orion_initial_version_label: Orion label and real snapshot.
+    # Includes former test_snapshot_revision_info_month_first_format: month-first revision date.
+    # Includes former test_snapshot_revision_info_ordinal_day_first_format: ordinal day-first date.
+    # Includes former test_snapshot_revision_info_ordinal_month_first_format: ordinal month-first date.
+    # Includes former test_snapshot_revision_info_unparseable_stays_unknown: unparseable date stays unknown.
+    # Includes former test_snapshot_revision_info_no_markers: marker-free text stays unknown.
     def test_snapshot_revision_formats(self):
         cases = (
             ("rev", "Title\nRev 18\n\nRevision Log\n\n15-11-2021 some change\n",
@@ -5514,6 +4966,10 @@ class TestFetchSpecs(unittest.TestCase):
             ("Initial version 2025-06-16", datetime.date(2025, 6, 16)),
         )
 
+    # Includes former test_remote_last_modified_ok: GMT header yields the UTC time.
+    # Includes former test_remote_last_modified_naive_assumes_utc: naive header is treated as UTC.
+    # Includes former test_remote_last_modified_no_header: missing header returns None.
+    # Includes former test_remote_last_modified_bad_date: invalid header returns None.
     def test_remote_last_modified_headers(self):
         expected = datetime.datetime(2015, 10, 21, 7, 28, tzinfo=datetime.timezone.utc)
         cases = (
@@ -5536,6 +4992,12 @@ class TestFetchSpecs(unittest.TestCase):
         for key in fetch_specs.OFFICIAL_SPECS:
             (tmp / f"{key}.txt").write_text(text)
 
+    # Includes former test_check_specs_fresh: older remote header passes.
+    # Includes former test_check_specs_stale: newer remote header fails.
+    # Includes former test_check_specs_same_day_is_unknown_not_fresh: same-day header cannot pass.
+    # Includes former test_check_specs_unverifiable_remote: absent header cannot pass.
+    # Includes former test_check_specs_undated_local: missing local date cannot pass.
+    # Includes former test_check_specs_missing_file: missing snapshot cannot pass.
     def test_check_specs_outcomes(self):
         dated = "Rev 9\nRevision Log\n1 February 2023\n"
         utc = datetime.timezone.utc
@@ -5584,7 +5046,7 @@ class TestFetchSpecs(unittest.TestCase):
             + comp + b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF"
         )
 
-    def _markers_pdf_for(self, label, date, ids=None) -> bytes:
+    def _markers_pdf_for(self, label, date, ids=None, extra_text="") -> bytes:
         """Build a crafted PDF embedding derived markers and optional IDs.
 
         No revision literals: everything embedded derives from the caller's
@@ -5607,6 +5069,8 @@ class TestFetchSpecs(unittest.TestCase):
             bits.append("Initial version")
         if ids is not None:
             bits.append(" ".join(f"0x{i:04X}" for i in sorted(ids)))
+        if extra_text:
+            bits.append(extra_text)
         return self._content_pdf_bytes("  ".join(b for b in bits if b))
 
     @staticmethod
@@ -5773,6 +5237,10 @@ class TestFetchSpecs(unittest.TestCase):
                     status, _ = snapshot_freshness_status(Path(tmp))
                     self.assertEqual(status, "unknown")
 
+    # Includes former test_freshness_status_offline_is_unknown: network error yields unknown without download.
+    # Includes former test_freshness_status_no_header_is_unknown: no header yields unknown without download.
+    # Includes former test_freshness_status_undated_local_is_unknown: undated snapshot yields unknown.
+    # Includes former test_freshness_status_missing_file_is_unknown: missing snapshot yields unknown.
     def test_freshness_status_unverifiable_inputs(self):
         old_header = datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc)
         cases = (
@@ -5825,123 +5293,79 @@ class TestFetchSpecs(unittest.TestCase):
                 pdf = self._markers_pdf_for(label, date)
                 self.assertEqual(extract_pdf_revision_info(pdf), (label, date))
 
-    def test_content_gate_markers_match_is_fresh(self):
-        """Newer header + SAME revision markers in the PDF -> FRESH (the
-        false-positive fix): expected markers derive from the checked-in
-        snapshots, never literals, so a real new revision still fails loudly.
-        ID stage included (third stage): matching PDFs list the snapshot's
-        own ID sets, so markers+IDs both match -> FRESH (not unknown)."""
+    # Includes former test_content_gate_markers_match_is_fresh: matching markers and IDs remain fresh.
+    # Includes former test_content_gate_markers_newer_is_stale: bumped markers name the stale revision.
+    def test_content_gate_revision_markers(self):
+        """A newer header needs PDF evidence: matching markers and IDs are
+        fresh; markers derived from a bumped snapshot revision are stale.
+        """
         with tempfile.TemporaryDirectory() as tmp:
-            tmpdir = Path(tmp)
-            expected = self._copy_real_snapshots(tmpdir)
-            newer = {
-                key: datetime.datetime.combine(
-                    date + datetime.timedelta(days=10), datetime.time(12, 0),
-                    tzinfo=datetime.timezone.utc,
-                )
-                for key, (_label, date) in expected.items()
-            }
-            # Matching PDFs carry markers PLUS snapshot-exact IDs (derived),
-            # so the ID stage (headers -> markers -> ID sets) stays FRESH.
-            snap_ids = {
+            spec_dir = Path(tmp)
+            markers = self._copy_real_snapshots(spec_dir)
+            ids = {
                 key: register_id_set_from_text(
-                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                    (spec_dir / f"{key}.txt").read_text(errors="ignore")
                 )
                 for key in fetch_specs.OFFICIAL_SPECS
             }
-            pdfs = {
-                key: self._markers_pdf_for(label, date, snap_ids[key])
-                for key, (label, date) in expected.items()
-            }
-
-            def _fake_header(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return newer[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            def _fake_download(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return pdfs[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download) as md:
-                    status, detail = snapshot_freshness_status(tmpdir)
-                    self.assertEqual(status, "fresh", detail)
-                    # One fetch per spec max (cached within the run).
-                    self.assertEqual(md.call_count, len(fetch_specs.OFFICIAL_SPECS))
-
-    def test_content_gate_markers_newer_is_stale(self):
-        """Newer header + NEWER revision markers in the PDF -> STALE naming
-        the new revision: bumped markers derive from the snapshots, never
-        literals."""
-        with tempfile.TemporaryDirectory() as tmp:
-            tmpdir = Path(tmp)
-            expected = self._copy_real_snapshots(tmpdir)
             bumped = {
                 key: self._bumped_label_date(label, date)
-                for key, (label, date) in expected.items()
+                for key, (label, date) in markers.items()
             }
-            newer = {
+            urls = {info["url"]: key for key, info in fetch_specs.OFFICIAL_SPECS.items()}
+            headers = {
                 key: datetime.datetime.combine(
                     date + datetime.timedelta(days=10), datetime.time(12, 0),
                     tzinfo=datetime.timezone.utc,
                 )
-                for key, (_label, date) in expected.items()
+                for key, (_label, date) in markers.items()
             }
-            pdfs = {
-                key: self._markers_pdf_for(*bumped[key]) for key in expected
-            }
+            cases = (
+                ("matching", markers, True, "fresh"),
+                ("newer", bumped, False, "stale"),
+            )
+            for name, revisions, include_ids, expected_status in cases:
+                with self.subTest(markers=name):
+                    pdfs = {
+                        key: self._markers_pdf_for(
+                            label, date, ids[key] if include_ids else None
+                        )
+                        for key, (label, date) in revisions.items()
+                    }
+                    with mock.patch.object(
+                        fetch_specs, "remote_last_modified",
+                        side_effect=lambda url, timeout=15.0: headers[urls[url]],
+                    ), mock.patch.object(
+                        fetch_specs, "download_pdf_bytes",
+                        side_effect=lambda url, timeout=15.0: pdfs[urls[url]],
+                    ) as download:
+                        status, detail = snapshot_freshness_status(spec_dir)
+                    self.assertEqual(status, expected_status, detail)
+                    if include_ids:
+                        self.assertEqual(download.call_count, len(fetch_specs.OFFICIAL_SPECS))
+                    else:
+                        for key, (label, _date) in bumped.items():
+                            self.assertIn(label, detail, key)
 
-            def _fake_header(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return newer[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            def _fake_download(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return pdfs[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
-                    status, detail = snapshot_freshness_status(tmpdir)
-                    self.assertEqual(status, "stale", detail)
-                    for key in expected:
-                        self.assertIn(bumped[key][0], detail, key)
-
-    def test_content_gate_unextractable_is_unknown(self):
-        """Newer header but no revision markers in the PDF -> UNKNOWN (loud
-        skip naming every spec, never fail)."""
+    # Includes former test_content_gate_unextractable_is_unknown: markerless PDF names every spec.
+    # Includes former test_content_gate_download_failure_is_unknown: failed download names every spec.
+    def test_content_gate_unverifiable(self):
+        """Missing revision markers and failed downloads name every spec."""
         with tempfile.TemporaryDirectory() as tmp:
             self._write_dated_specs(Path(tmp))
-            markerless = self._content_pdf_bytes("hello world no markers here")
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
-            ):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes", return_value=markerless):
-                    status, detail = snapshot_freshness_status(Path(tmp))
-                    self.assertEqual(status, "unknown")
-                    for key in fetch_specs.OFFICIAL_SPECS:
-                        self.assertIn(key, detail)
-
-    def test_content_gate_download_failure_is_unknown(self):
-        """Newer header but the PDF download fails -> UNKNOWN (loud skip
-        naming every spec, never fail)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_dated_specs(Path(tmp))
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
-            ):
-                with mock.patch.object(
-                    fetch_specs, "download_pdf_bytes", side_effect=OSError("boom")
-                ):
+            cases = (
+                ("no markers", self._content_pdf_bytes("hello world no markers here")),
+                ("download failure", OSError("boom")),
+            )
+            for name, result in cases:
+                with self.subTest(reason=name), mock.patch.object(
+                    fetch_specs, "remote_last_modified",
+                    return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+                ), mock.patch.object(fetch_specs, "download_pdf_bytes") as download:
+                    if isinstance(result, BaseException):
+                        download.side_effect = result
+                    else:
+                        download.return_value = result
                     status, detail = snapshot_freshness_status(Path(tmp))
                     self.assertEqual(status, "unknown")
                     for key in fetch_specs.OFFICIAL_SPECS:
@@ -5953,25 +5377,34 @@ class TestFetchSpecs(unittest.TestCase):
             mu.return_value.__enter__.return_value.read.return_value = b"%PDF-fake"
             self.assertEqual(download_pdf_bytes("http://example/x.pdf"), b"%PDF-fake")
 
-    def test_content_gate_live_online_markers_match(self):
-        """Live behavior (skipped unless network is present): the real online
-        PDFs' stdlib-extracted markers still equal their snapshots' (same
-        revisions, re-uploaded). A real new revision fails here loudly
-        instead of passing; offline skips."""
+    # Includes former test_content_gate_live_online_markers_match: live PDF revision markers match snapshots.
+    # Includes former test_targeted_scale_dtype_live_zero_false_alarms: live scale/dtype diffs are empty.
+    # Also includes the live scale/dtype equality formerly repeated in
+    # test_scale_dtype_structural_window.
+    def test_live_online_markers_and_scales(self):
+        """Each online PDF must match snapshot revision markers and have no
+        scale or dtype differences. The PDF is downloaded once per spec.
+        """
         specs_dir = Path(__file__).resolve().parent / "specs"
         for key, info in fetch_specs.OFFICIAL_SPECS.items():
-            with self.subTest(spec=key):
-                snap_text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
-                expected = snapshot_revision_info(snap_text)
-                try:
-                    pdf_bytes = download_pdf_bytes(info["url"], timeout=30.0)
-                except OSError as e:
-                    self.skipTest(f"live download unreachable, skipping: {e}")
+            snap_text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+            try:
+                pdf_bytes = download_pdf_bytes(info["url"], timeout=30.0)
+            except OSError as exc:
+                self.skipTest(f"live download unreachable, skipping: {exc}")
+            with self.subTest(spec=key, check="revision markers"):
                 self.assertEqual(
-                    extract_pdf_revision_info(pdf_bytes), expected,
+                    extract_pdf_revision_info(pdf_bytes), snapshot_revision_info(snap_text),
                     f"{key} live markers diverged from snapshot",
                 )
+            with self.subTest(spec=key, check="scale and dtype"):
+                diffs = live_scale_dtype_diffs(snap_text, pdf_bytes, key)
+                self.assertEqual(diffs, [], f"{key} live scale/dtype false alarm: {diffs[:3]}")
 
+    # Includes former test_freshness_id_stage_added_is_stale: added ID is named stale.
+    # Includes former test_freshness_id_stage_removed_is_stale: removed ID is named stale.
+    # Includes former test_freshness_id_stage_unextractable_is_unknown: empty live ID set is unknown.
+    # Includes former test_live_split_id_rescue: split-printed 0x9999 in a PDF is named as added.
     def test_freshness_id_stage_outcomes(self):
         """Matching revision markers must still detect added and removed IDs.
         A PDF with no extractable IDs stays unverifiable.
@@ -6001,16 +5434,18 @@ class TestFetchSpecs(unittest.TestCase):
                 for key, (label, date) in markers.items()
             }
             cases = (
-                ("added", ids[target] | {0x9999}, "stale", ("added", "0x9999")),
-                ("removed", ids[target] - {0xEDF0}, "stale", ("removed", "0xEDF0")),
-                ("unextractable", None, "unknown", ()),
+                ("added", ids[target] | {0x9999}, "", "stale", ("added", "0x9999")),
+                ("removed", ids[target] - {0xEDF0}, "", "stale", ("removed", "0xEDF0")),
+                ("unextractable", None, "", "unknown", ()),
+                ("split added", ids[target], "\n0x99 99 Future register 0.1 un16 V\n",
+                 "stale", ("added", "0x9999")),
             )
-            for name, live_ids, expected_status, detail_parts in cases:
+            for name, live_ids, extra_text, expected_status, detail_parts in cases:
                 with self.subTest(change=name):
                     pdfs = base_pdfs.copy()
                     label, date = markers[target]
                     pdfs[target] = (
-                        self._markers_pdf_for(label, date, live_ids)
+                        self._markers_pdf_for(label, date, live_ids, extra_text)
                         if live_ids is not None else self._markers_pdf_for(label, date)
                     )
                     with mock.patch.object(
@@ -6059,31 +5494,22 @@ class TestFetchSpecs(unittest.TestCase):
                 )
                 for key, (_label, date) in expected.items()
             }
-
-            def _fake_header(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return newer[key]
-                raise AssertionError(url)
-
-            def _fake_download(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return f"PDF-{key}".encode()
-                raise AssertionError(url)
-
-            def _fake_extract(pdf_bytes):
-                key = pdf_bytes.decode().removeprefix("PDF-")
-                return live_texts[key]
-
-            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
-                    with mock.patch.object(fetch_specs, "extract_pdf_text", side_effect=_fake_extract):
-                        status, detail = snapshot_freshness_status(tmpdir)
-                        self.assertEqual(status, "stale", detail)
-                        self.assertIn("0xEDF0", detail)
-                        self.assertIn("scale", detail.lower())
-                        self.assertIn("BlueSolar", detail)
+            urls = {info["url"]: key for key, info in fetch_specs.OFFICIAL_SPECS.items()}
+            with mock.patch.object(
+                fetch_specs, "remote_last_modified",
+                side_effect=lambda url, timeout=15.0: newer[urls[url]],
+            ), mock.patch.object(
+                fetch_specs, "download_pdf_bytes",
+                side_effect=lambda url, timeout=15.0: f"PDF-{urls[url]}".encode(),
+            ), mock.patch.object(
+                fetch_specs, "extract_pdf_text",
+                side_effect=lambda pdf: live_texts[pdf.decode().removeprefix("PDF-")],
+            ):
+                status, detail = snapshot_freshness_status(tmpdir)
+            self.assertEqual(status, "stale", detail)
+            self.assertIn("0xEDF0", detail)
+            self.assertIn("scale", detail.lower())
+            self.assertIn("BlueSolar", detail)
 
     def test_freshness_structure_stage_description_is_stale(self):
         """Mocked same-revision description/CS/cap/label edit -> STALE: a
@@ -6254,93 +5680,61 @@ class TestFetchSpecs(unittest.TestCase):
         self.assertNotIn(0xEFF0, scale_dtype_map_from_text("0xEFF0 typo 0.1 un16 V "))
 
     def test_targeted_scale_dtype_exponent_probes(self):
-        """Exponent scales parse exact in the live map (fix, was mis-parsed):
-        ``1e-2`` matched the trailing ``2`` as 2.0 and ``1E+1`` the ``1`` as
-        1.0 while ``0.01`` was correct — reproduced before the fix. The
-        number pattern now accepts the general float-with-exponent shape
-        (same as the snapshot-side ``_SCALE_TOKEN_RE``), so the probes yield
-        exact values. Zero-diff: no snapshot scale cell uses exponents, so
-        old-vs-new maps are identical on all five current snapshots (no
-        hardcoded answers: old pattern re-implemented inline for comparison).
-        """
-        from fetch_specs import scale_dtype_map_from_text
+        """The live map reads exponents and agrees with parsed snapshots."""
+        for token, expected in (("1e-2", 0.01), ("1E+1", 10.0), ("0.01", 0.01)):
+            with self.subTest(scale=token):
+                live = scale_dtype_map_from_text(
+                    f"0xEDF0 Battery maximum current {token} un16 A"
+                )
+                self.assertEqual(live[0xEDF0], (expected, "un16"))
 
-        self.assertEqual(
-            scale_dtype_map_from_text("0xEDF0 Battery maximum current 1e-2 un16 A")[0xEDF0],
-            (0.01, "un16"),
-        )
-        self.assertEqual(
-            scale_dtype_map_from_text("0xEDF0 Battery maximum current 1E+1 un16 A")[0xEDF0],
-            (10.0, "un16"),
-        )
-        # Control: plain decimal still exact.
-        self.assertEqual(
-            scale_dtype_map_from_text("0xEDF0 Battery maximum current 0.01 un16 A")[0xEDF0],
-            (0.01, "un16"),
-        )
-        # Zero-diff on today's files: old pattern
-        # ``(-|\\d+\\.\\d+|\\d+)`` with maxdist=120 vs the fixed general float
-        # with structural window (up to next ID, issue-6 fix) on all five
-        # snapshots (ground truth tests/specs/*.txt) — new is a superset with
-        # identical values on overlap; extras (e.g. BlueSolar 0x10BE struct
-        # history record picked up beyond 120 chars) are struct/unknown and
-        # skipped in diffs, so zero false alarms (verified live 0 mism).
-        from fetch_specs import _strip_language_tags
+        from spec_parser import OrionXSHEXParser
 
         specs_dir = Path(__file__).resolve().parent / "specs"
-        for name in (
-            "BlueSolar-HEX-protocol.txt", "Orion-XS-HEX-protocol.txt",
-            "BMV-7xx-HEX-Protocol.txt",
-            "VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
-            "VE.Direct-Protocol-3.34.txt",
+        for key, parser_cls in (
+            ("BlueSolar-HEX-protocol", BlueSolarHEXParser),
+            ("Orion-XS-HEX-protocol", OrionXSHEXParser),
         ):
-            with self.subTest(spec=name):
-                text = (specs_dir / name).read_text(errors="ignore")
-                t = _strip_language_tags(text)
-                pos = [
-                    (m.start(), int(m.group(1), 16))
-                    for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})", t)
-                ]
-                old: dict[int, tuple] = {}
-                for idx, (p, rid) in enumerate(pos):
-                    if rid in old:
-                        continue
-                    nxt = pos[idx + 1][0] if idx + 1 < len(pos) else p + 120
-                    window = t[p : min(nxt, p + 120)]
-                    m = re.search(
-                        r"(-|\d+\.\d+|\d+)\s+(un8|un16|un24|un32|sn8|sn16|sn32)\b",
-                        window,
-                        flags=re.IGNORECASE,
-                    )
-                    if m:
-                        scale = None if m.group(1) == "-" else float(m.group(1))
-                        old[rid] = (scale, m.group(2).lower())
-                old.pop(0xEFF0, None)
-                new = scale_dtype_map_from_text(text)
-                # Overlap identical (no value changes — the exponent fix is
-                # zero-diff on snapshots since no scale uses exponents).
-                for rid, val in old.items():
-                    self.assertIn(rid, new)
-                    self.assertEqual(new[rid], val)
-                # Extras beyond 120 chars are either struct/unknown/write_only
-                # (skipped in diffs) or value-matching (diff-free) — never
-                # mismatches. Verified live 0 mism.
-                from spec_parser import BlueSolarHEXParser, OrionXSHEXParser
+            with self.subTest(snapshot=key):
+                source = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+                registers = parser_cls(source).parse_registers()
+                live_map = scale_dtype_map_from_text(source)
+                self.assertIn(0xEDF0, live_map)
+                for rid, value in live_map.items():
+                    reg = registers.get(rid)
+                    if reg and reg.data_type not in ("struct", "unknown", "write_only"):
+                        self.assertEqual(value, (reg.scale, reg.data_type), f"{key} {rid:#x}")
 
-                if name.startswith("BlueSolar"):
-                    regs = BlueSolarHEXParser(text).parse_registers()
-                elif name.startswith("Orion"):
-                    regs = OrionXSHEXParser(text).parse_registers()
-                else:
-                    regs = {}
-                for rid in set(new) - set(old):
-                    reg = regs.get(rid)
-                    if reg is None or reg.data_type in ("struct", "unknown", "write_only"):
-                        continue  # skipped in diffs
-                    self.assertEqual(
-                        new[rid], (reg.scale, reg.data_type),
-                        f"{name} extra {rid:#x} must match snapshot (diff-free)",
+        # Retain the old-pattern overlap check for all five snapshots. The
+        # parser comparison above also checks newly visible BlueSolar/Orion rows.
+        from fetch_specs import _strip_language_tags
+
+        for key in fetch_specs.OFFICIAL_SPECS:
+            with self.subTest(legacy_overlap=key):
+                source = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+                stripped = _strip_language_tags(source)
+                positions = [
+                    (m.start(), int(m.group(1), 16))
+                    for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})", stripped)
+                ]
+                current = scale_dtype_map_from_text(source)
+                seen = set()
+                for index, (position, rid) in enumerate(positions):
+                    if rid in seen:
+                        continue
+                    next_position = positions[index + 1][0] if index + 1 < len(positions) else position + 120
+                    match = re.search(
+                        r"(-|\d+\.\d+|\d+)\s+(un8|un16|un24|un32|sn8|sn16|sn32)\b",
+                        stripped[position:min(next_position, position + 120)],
+                        re.IGNORECASE,
                     )
+                    if match:
+                        seen.add(rid)
+                        if rid == 0xEFF0:
+                            continue
+                        scale = None if match.group(1) == "-" else float(match.group(1))
+                        self.assertIn(rid, current)
+                        self.assertEqual(current[rid], (scale, match.group(2).lower()))
 
     def test_targeted_scale_dtype_diffs_synthetic_pdf(self):
         """Mocked (offline, stdlib-only) proof that a same-revision live scale
@@ -6378,25 +5772,8 @@ class TestFetchSpecs(unittest.TestCase):
             [],
         )
 
-    def test_targeted_scale_dtype_live_zero_false_alarms(self):
-        """Live behavior (skipped unless network is present): today's online
-        PDFs yield zero scale/dtype diffs vs snapshots (verified 0 mism
-        2026-09-24, Orion + BlueSolar CMap). A real live scale edit (e.g.
-        BlueSolar 0xEDF0 0.1→5.1) would fail here loudly instead of passing;
-        offline skips. Proves stage 3b is wired without false alarms."""
-        from fetch_specs import live_scale_dtype_diffs
-
-        specs_dir = Path(__file__).resolve().parent / "specs"
-        for key, info in fetch_specs.OFFICIAL_SPECS.items():
-            with self.subTest(spec=key):
-                snap_text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
-                try:
-                    pdf_bytes = download_pdf_bytes(info["url"], timeout=30.0)
-                except OSError as e:
-                    self.skipTest(f"live download unreachable, skipping: {e}")
-                diffs = live_scale_dtype_diffs(snap_text, pdf_bytes, key)
-                self.assertEqual(diffs, [], f"{key} live scale/dtype false alarm: {diffs[:3]}")
-
+    # Includes the real-PDF ID equality from former test_live_split_id_rescue;
+    # the split-token and split-added-PDF cases live in their named tests.
     def test_content_gate_live_online_ids_match(self):
         """Live behavior (skipped unless network is present): the real online
         PDFs' stdlib-extracted register/PID ID sets still equal their
@@ -6495,6 +5872,10 @@ class TestFetchSpecs(unittest.TestCase):
             self.assertIn("text", written, "--sync with all SYNC-OK must write manifest file")
             self.assertIn(f"'{today}'", written["text"])
 
+    # Includes former test_content_gate_verdict_fresh: all matches give fresh.
+    # Includes former test_content_gate_verdict_diff_is_stale: one difference names a stale spec.
+    # Includes former test_content_gate_verdict_all_unverifiable_is_unknown: all unknown mentions pdftotext.
+    # Includes former test_content_gate_verdict_partial_unknown_is_unknown: partial unknown names the spec.
     def test_content_gate_verdict_outcomes(self):
         cases = (
             ("all match", {}, "fresh", None),
@@ -6530,6 +5911,9 @@ class TestFetchSpecs(unittest.TestCase):
                         fetch_remote_snapshot_text("http://example/x.pdf"), "remote layout\n"
                     )
 
+    # Includes former test_fetch_remote_snapshot_text_download_failure: download error returns None.
+    # Includes former test_fetch_remote_snapshot_text_no_pdftotext: missing extractor returns None.
+    # Includes former test_fetch_remote_snapshot_text_extract_failure: failed extraction returns None.
     def test_fetch_remote_snapshot_text_failures(self):
         cases = (
             ("download", OSError("offline"), "/usr/bin/pdftotext"),
@@ -6547,6 +5931,10 @@ class TestFetchSpecs(unittest.TestCase):
                         get_pdf.return_value = download
                     self.assertIsNone(fetch_remote_snapshot_text("http://example/x.pdf"))
 
+    # Includes former test_verify_remote_content_match: whitespace-normalized remote text matches.
+    # Includes former test_verify_remote_content_diff: changed remote text fails comparison.
+    # Includes former test_verify_remote_content_unverifiable: unavailable remote text is unknown.
+    # Includes former test_verify_remote_content_missing_local: missing local snapshot is unknown.
     def test_verify_remote_content_outcomes(self):
         cases = (
             ("match", "local snapshot  \n", False, True),

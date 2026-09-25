@@ -18,6 +18,7 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.lookup(0xEDBB, flavor="ORION").name, "INPUT_VOLTAGE")
         with self.assertRaises(AmbiguousRegisterError):
             R.lookup(0xEDBB)
+        # Both colliding IDs must reject an unflavored lookup.
         with self.assertRaises(AmbiguousRegisterError):
             R.lookup(0xED8E)
         with self.assertRaises(KeyError):
@@ -74,20 +75,10 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.decode_value(reg, b"\x05\x00"),
                          ["low_battery_voltage", "low_soc"])
 
-    def test_full_error_map(self):
-        m = R.ENUM_MAPS["CHR_ERROR_CODE"]
-        self.assertEqual(m[57], "inverter_ac")
-        self.assertEqual(m[114], "cpu_temperature_high")
-        self.assertGreater(len(m), 50)
-        self.assertEqual(R.DEVICE_STATE_MAP[250], "blocked")
-        self.assertNotIn(250, R.LINK_DEVICE_STATE_MAP)
-        self.assertEqual(R.DEVICE_STATE_MAP[0xF5], "wake_up")
-        self.assertEqual(R.RELAY_MODE_MAP[1], "charger")
-
     def test_bmv71_flavor(self):
-        self.assertIn("BMV71", R.lookup("DC_MONITOR_MODE").flavors)
         # BMV-712 v4.07+ monitor register is visible in the BMV view too.
         self.assertIn("BMV", R.lookup("DC_MONITOR_MODE").flavors)
+        self.assertIn("BMV71", R.lookup("DC_MONITOR_MODE").flavors)
         self.assertIn("DC_MONITOR_MODE", R.for_flavor("BMV"))
         self.assertIn("DC_MONITOR_MODE", R.for_flavor("BMV71"))
         self.assertEqual(R.lookup(0xEEB8, flavor="BMV").name, "DC_MONITOR_MODE")
@@ -97,19 +88,8 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.decode_value(reg, b"\x00"), "off")
         self.assertEqual(R.decode_value(reg, b"\x01"), "on")
 
-    def test_flavors(self):
-        mppt = R.for_flavor("MPPT")
-        self.assertIn("PANEL_VOLTAGE", mppt)
-        self.assertIn("DEVICE_STATE", mppt)  # ANY always included
-        self.assertNotIn("AC_OUT_VOLTAGE", mppt)
-        self.assertIn("AC_OUT_VOLTAGE", R.for_flavor("INV"))
-
-    def test_count(self):
-        self.assertGreater(len(R.REGISTERS), 90)
-
     # --- phantom registers 0x0209/0x020A (absent from all snapshots) ---
     def test_phantom_registers_removed(self):
-        from ve_direct.exceptions import AmbiguousRegisterError  # noqa: F401
         self.assertNotIn("INVERTER_DEVICE_STATE", R.REGISTERS)
         self.assertNotIn("CHARGER_DEVICE_STATE", R.REGISTERS)
         with self.assertRaises(KeyError):
@@ -127,6 +107,8 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(bmv.name, "BMV_RELAY_MODE")
         self.assertEqual(R.decode_value(bmv, b"\x00"), "default")
         self.assertEqual(R.decode_value(bmv, b"\x01"), "charger")
+        # Includes the relay entry checked by former test_full_error_map.
+        self.assertEqual(R.RELAY_MODE_MAP[1], "charger")
         self.assertEqual(R.decode_value(bmv, b"\x02"), "remote")
         self.assertEqual(R.decode_value(bmv, b"\x03"), "unknown(3)")
         self.assertEqual(R.encode_value(bmv, "default"), b"\x00")
@@ -134,8 +116,6 @@ class TestRegisters(unittest.TestCase):
             R.encode_value(bmv, "warnings")  # Phoenix-family name rejected
         with self.assertRaises(ValueError):
             R.encode_value(bmv, "fan")  # undocumented name rejected
-        # Raw ints pass through unwidened, like every other ENUM register;
-        # decoding them back surfaces unknown(n) instead of a wrong name.
         # Named lookup with flavor resolves to the BMV override as well.
         self.assertEqual(R.lookup("BMV_RELAY_MODE", flavor="BMV").name, "BMV_RELAY_MODE")
         self.assertEqual(R.lookup(0x034F, flavor="BMV").name, "BMV_RELAY_MODE")
@@ -163,6 +143,8 @@ class TestRegisters(unittest.TestCase):
 
     # --- Orion/Inv device state + mode overrides ---
     def test_orion_device_state_override(self):
+        # Includes former test_device_state_0_not_charging and
+        # test_device_state_245_wake_up: generic, MPPT and Orion state values.
         st = R.lookup(0x0201, flavor="ORION")
         self.assertEqual(st.name, "ORION_DEVICE_STATE")
         self.assertEqual(R.decode_value(st, b"\x00"), "not_charging")
@@ -173,6 +155,11 @@ class TestRegisters(unittest.TestCase):
         # Generic map follows BlueSolar-HEX §1.1 (0 = NOT_CHARGING).
         self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), b"\x00"), "not_charging")
         self.assertEqual(R.decode_value(R.lookup("DEVICE_STATE"), bytes([245])), "wake_up")
+        self.assertEqual(R.decode_value(R.lookup(0x0201, flavor="MPPT"), b"\x00"),
+                         "not_charging")
+        self.assertEqual(R.DEVICE_STATE_MAP[0], "not_charging")
+        # Includes the 245 entry checked by former test_full_error_map.
+        self.assertEqual(R.DEVICE_STATE_MAP[0xF5], "wake_up")
 
     def test_orion_device_mode_override(self):
         mo = R.lookup(0x0200, flavor="ORION")
@@ -185,11 +172,16 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.encode_value(mo, 4), b"\x04")
 
     def test_inv_device_state_mode_overrides(self):
+        # Former test_device_state_0_not_charging and
+        # test_device_state_245_wake_up also checked the Phoenix exceptions.
         st = R.lookup(0x0201, flavor="INV")
         self.assertEqual(st.name, "INV_DEVICE_STATE")
+        self.assertEqual(R.decode_value(st, b"\x00"), "off")
+        self.assertEqual(R.DEVICE_STATE_INV_MAP[0], "off")
         self.assertEqual(R.decode_value(st, b"\x09"), "inverting")
         # Generic charger states never occur on Phoenix (Rev 5 §2.3.1).
         self.assertEqual(R.decode_value(st, b"\x03"), "unknown(3)")
+        self.assertEqual(R.decode_value(st, bytes([245])), "unknown(245)")
         mo = R.lookup(0x0200, flavor="INV")
         self.assertEqual(mo.name, "INV_DEVICE_MODE")
         self.assertEqual(R.decode_value(mo, b"\x02"), "inverter_on")
@@ -204,8 +196,7 @@ class TestRegisters(unittest.TestCase):
         # Bits undocumented for Phoenix (Rev 5 §2.3.3) stay bitN.
         self.assertEqual(R.decode_value(w, b"\x04\x00"), ["bit2"])
         self.assertEqual(R.decode_value(w, b"\x80\x00"), ["bit7"])
-        a = R.lookup(0x031E, flavor="INV")
-        self.assertEqual(a.name, "INV_ALARM_REASON")
+        self.assertEqual(R.lookup(0x031E, flavor="INV").name, "INV_ALARM_REASON")
         # Generic map unchanged.
         self.assertEqual(R.decode_value(R.lookup("WARNING_REASON"), b"\x04\x00"), ["low_soc"])
 
@@ -217,22 +208,26 @@ class TestRegisters(unittest.TestCase):
 
     # --- MPPT off-reason bits: 7..8 reserved, 9 battery-temp-low ---
     def test_mppt_off_reason_bits(self):
+        # Keep both the map entries and their decoded wire behavior.
         bits = R.OFF_REASON_MPPT_BITS
         self.assertNotIn(7, bits)
         self.assertNotIn(8, bits)
-        self.assertIn(9, bits)
+        self.assertEqual(bits[9], "battery_temperature")
         reg = R.lookup("DEVICE_OFF_REASON_2", flavor="MPPT")
         self.assertEqual(R.decode_value(reg, b"\x80\x00\x00\x00"), ["bit7"])
         self.assertEqual(
-            R.decode_value(reg, b"\x00\x02\x00\x00"), [bits[9]])
+            R.decode_value(reg, b"\x00\x01\x00\x00"), ["bit8"])
+        self.assertEqual(
+            R.decode_value(reg, b"\x00\x02\x00\x00"), ["battery_temperature"])
 
-    # --- NETWORK_INFO bit 8 (doc lists it under un8: undecodable) ---
-    def test_network_info_bit8_falls_back(self):
+    # --- NETWORK_INFO is an 8-bit mask ---
+    def test_network_info_named_bits(self):
+        # Includes former test_network_info_bit8_falls_back: an 8-bit
+        # NETWORK_INFO register has no named bit 8 and decodes bit 0.
         reg = R.lookup("NETWORK_INFO")
         self.assertEqual(reg.dtype, "uint8_t")
         self.assertNotIn(8, R.ENUM_MAPS["NETWORK_INFO"])
         self.assertEqual(R.decode_value(reg, b"\x01"), ["bms_controlled"])
-        # A hypothetical bit-8 payload still surfaces instead of vanishing.
         self.assertEqual(
             R.decode_value(reg, b"\xff"),
             ["bms_controlled", "vset_remote", "charge_slave", "charge_master",
@@ -246,11 +241,19 @@ class TestRegisters(unittest.TestCase):
         self.assertAlmostEqual(
             R.decode_value(reg, struct.pack("<i", 12345)), 12.345)
 
-    # --- charger error 19 (disabled since fw 1.15, still decodes) ---
-    def test_chr_error_19(self):
+    # --- charger error names, including 19 (disabled since fw 1.15) ---
+    def test_charger_error_names(self):
+        # Includes the charger entries and map size from former
+        # test_full_error_map, plus former test_chr_error_19's wire round-trip.
         reg = R.lookup("CHR_ERROR_CODE")
+        error_map = R.ENUM_MAPS["CHR_ERROR_CODE"]
+        self.assertEqual(error_map[57], "inverter_ac")
+        self.assertEqual(error_map[114], "cpu_temperature_high")
+        self.assertGreater(len(error_map), 50)
         self.assertEqual(R.decode_value(reg, b"\x13"), "charger_current_polarity_reversed")
         self.assertEqual(R.encode_value(reg, "charger_current_polarity_reversed"), b"\x13")
+        self.assertEqual(R.decode_value(reg, b"\x39"), "inverter_ac")
+        self.assertEqual(R.decode_value(reg, b"\x72"), "cpu_temperature_high")
 
     # --- BMV SW version AA.BB ---
     def test_bmv_sw_version_aa_bb(self):
@@ -263,7 +266,9 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.encode_value(reg, "4.07"), bytes.fromhex("0704"))
 
     # --- Un8 0..1 (OFF,ON) settings stay BOOLEAN: wire 0/1 round-trip ---
-    def test_boolean_wire_values_roundtrip(self):
+    def test_boolean_register_wire_values(self):
+        # Includes former test_boolean_wire_values_roundtrip for every
+        # listed Boolean register, including both wire values and Python bools.
         for name in ["ALARM_BUZZER", "BMV_RELAY_INVERT", "BMV_BACKLIGHT_ALWAYS_ON",
                      "BMV_SHOW_VOLTAGE", "BMV_SHOW_POWER", "BMV_SETUP_LOCK",
                      "BMV_START_SYNCHRONIZED", "RELAY_CONTROL", "INV_DYN_CUTOFF_ENABLE"]:
@@ -274,63 +279,57 @@ class TestRegisters(unittest.TestCase):
                 self.assertEqual(R.encode_value(reg, 1), b"\x01")
                 self.assertEqual(R.encode_value(reg, False), b"\x00")
                 self.assertEqual(R.encode_value(reg, True), b"\x01")
-                self.assertEqual(R.decode_value(reg, b"\x00"), 0)  # False == 0
-                self.assertEqual(R.decode_value(reg, b"\x01"), 1)  # True == 1
                 self.assertIs(R.decode_value(reg, b"\x00"), False)
                 self.assertIs(R.decode_value(reg, b"\x01"), True)
 
-    # --- doc-aligned access labels (no behavior change) ---
-    def test_doc_aligned_access(self):
-        self.assertEqual(R.lookup("CAPABILITIES_BLE").access, "READ_ONLY")
-        self.assertEqual(R.lookup("VOLTAGE_RANGE_MIN").access, "READ_ONLY")
-        self.assertEqual(R.lookup("VOLTAGE_RANGE_MAX").access, "READ_ONLY")
-
-    def test_bmv_temperature_coefficient_unit(self):
+    def test_register_metadata(self):
+        # Includes former test_count's register catalog size check.
+        self.assertGreater(len(R.REGISTERS), 90)
+        # Includes former test_doc_aligned_access for all three read-only entries.
+        for name in ("CAPABILITIES_BLE", "VOLTAGE_RANGE_MIN", "VOLTAGE_RANGE_MAX"):
+            with self.subTest(name=name):
+                self.assertEqual(R.lookup(name).access, "READ_ONLY")
+        # Includes former test_bmv_temperature_coefficient_unit.
         self.assertEqual(R.lookup("BMV_TEMPERATURE_COEFFICIENT").unit, "%CAP/degC")
 
     # --- ADJUSTABLE_VOLTAGE_MIN/MAX visible under MPPT (BlueSolar-HEX §1.1
     # Charger-data Note 6: fw 1.30, no RS-only marker) ---
     def test_adjustable_voltage_mppt_flavor(self):
+        # Includes former test_flavors: MPPT has panel voltage and the ANY
+        # device state, excludes the INV AC voltage, and INV includes it.
+        mppt = R.for_flavor("MPPT")
+        self.assertIn("PANEL_VOLTAGE", mppt)
+        self.assertIn("DEVICE_STATE", mppt)
+        self.assertNotIn("AC_OUT_VOLTAGE", mppt)
+        self.assertIn("AC_OUT_VOLTAGE", R.for_flavor("INV"))
         for name in ("ADJUSTABLE_VOLTAGE_MIN", "ADJUSTABLE_VOLTAGE_MAX"):
             reg = R.lookup(name)
             self.assertIn("MPPT", reg.flavors)
             self.assertIn("MPPT_RS", reg.flavors)
-        mppt = R.for_flavor("MPPT")
         self.assertIn("ADJUSTABLE_VOLTAGE_MIN", mppt)
         self.assertIn("ADJUSTABLE_VOLTAGE_MAX", mppt)
         self.assertIn("ADJUSTABLE_VOLTAGE_MIN", R.for_flavor("MPPT_RS"))
         self.assertEqual(R.lookup(0x2211, flavor="MPPT").name, "ADJUSTABLE_VOLTAGE_MIN")
         self.assertEqual(R.lookup(0x2211, flavor="INV").name, "VOLTAGE_RANGE_MIN")
 
-    # --- shared 0x0201 state 245 is WAKE-UP; INV override unaffected ---
-    def test_device_state_245_wake_up(self):
-        self.assertEqual(R.DEVICE_STATE_MAP[0xF5], "wake_up")
-        self.assertEqual(
-            R.decode_value(R.lookup("DEVICE_STATE"), bytes([245])), "wake_up")
-        # Orion override agrees; Phoenix defines only 0,1,2,9 so 245 stays unknown.
-        self.assertEqual(
-            R.decode_value(R.lookup(0x0201, flavor="ORION"), bytes([245])), "wake_up")
-        self.assertEqual(
-            R.decode_value(R.lookup(0x0201, flavor="INV"), bytes([245])), "unknown(245)")
+    def test_bat_type_generic_uses_large_charger_map(self):
+        # Includes former test_bat_type_small_charger_limitation: model-specific
+        # helper values differ, while the generic register uses the large map.
+        # A small charger needs decode_bat_type(raw, "small") for its own table.
+        self.assertEqual(R.decode_bat_type(1, "small"), "type_2")
+        self.assertEqual(R.decode_bat_type(1, "large"), "type_1")
+        self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\x01"), "type_1")
+        self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\xFF"), "user")
 
     # --- 0x200C LINK map has no 250 (absent from both 0x200C tables) ---
     def test_link_device_state_no_250(self):
+        # Includes former test_full_error_map's distinction between LINK
+        # state 250 and the blocked value in the two 0x0201 state maps.
         self.assertNotIn(250, R.LINK_DEVICE_STATE_MAP)
         link = R.lookup("LINK_DEVICE_STATE")
         self.assertEqual(R.decode_value(link, bytes([250])), "unknown(250)")
-        # 250 BLOCKED survives only in the 0x0201 maps.
         self.assertEqual(R.DEVICE_STATE_MAP[250], "blocked")
         self.assertEqual(R.DEVICE_STATE_ORION_MAP[250], "blocked")
-
-    # --- BAT_TYPE small-charger limitation (no small-charger flavor) ---
-    def test_bat_type_small_charger_limitation(self):
-        # Helper decodes small models correctly...
-        self.assertEqual(R.decode_bat_type(1, "small"), "type_2")
-        self.assertEqual(R.decode_bat_type(1, "large"), "type_1")
-        # ...but the generic register binds the large table, so value 1 on a
-        # 10/15/20A model reads type_1 via hex_get (documented limitation).
-        self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\x01"), "type_1")
-        self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\xFF"), "user")
 
     # --- 0x0400 semantic collision (BlueSolar ENUM vs BMV BOOLEAN) ---
     def test_0400_flavor_disambiguation(self):
@@ -357,6 +356,8 @@ class TestRegisters(unittest.TestCase):
 
     # --- BMV temp 0=disabled (0x032A-032D/0x035A-035D, valid 174..372 K) ---
     def test_bmv_temp_zero_disabled(self):
+        # Each of the eight registers still checks disabled-value round-trip
+        # and its own nonzero scale, as before the test cleanup.
         for name in [
             "BMV_ALARM_LOW_TEMPERATURE",
             "BMV_ALARM_LOW_TEMPERATURE_CLEAR",
@@ -372,12 +373,10 @@ class TestRegisters(unittest.TestCase):
                 self.assertIsNone(R.decode_value(reg, bytes.fromhex("0000")))
                 self.assertEqual(
                     R.encode_value(reg, None), bytes.fromhex("0000"))
-                # Round-trip disabled state.
-                self.assertIsNone(
-                    R.decode_value(reg, R.encode_value(reg, None)))
-                # Nonzero behavior unchanged (174 K = 17400 raw).
-                import struct as _s
-                raw = _s.pack("<H", 17400)
+                self.assertIsNone(R.decode_value(reg, R.encode_value(reg, None)))
+                # Keep the original nonzero check for each register. Their
+                # individual scales could differ even with a shared codec.
+                raw = struct.pack("<H", 17400)
                 self.assertAlmostEqual(R.decode_value(reg, raw), 174.0)
                 self.assertEqual(R.encode_value(reg, 174.0), raw)
 
@@ -386,19 +385,21 @@ class TestRegisters(unittest.TestCase):
         # BlueSolar-HEX §1.1 Device-state-values + Orion-XS-HEX
         # Device-state-values both list 255 as UNAVAILABLE (LINK 0x200C
         # agrees); no snapshot defines 0x0201=255 differently.
-        self.assertEqual(R.DEVICE_STATE_MAP[0xFF], "unavailable")
         self.assertEqual(
             R.decode_value(R.lookup("DEVICE_STATE"), bytes([255])),
             "unavailable")
+        self.assertEqual(R.DEVICE_STATE_MAP[0xFF], "unavailable")
         self.assertEqual(
             R.decode_value(R.lookup(0x0201, flavor="MPPT"), bytes([255])),
             "unavailable")
-        # Family overrides resolve independently.
         self.assertEqual(
             R.decode_value(R.lookup(0x0201, flavor="ORION"), bytes([255])),
             "unavailable")
         self.assertEqual(R.DEVICE_STATE_ORION_MAP[255], "unavailable")
         self.assertEqual(R.LINK_DEVICE_STATE_MAP[255], "unavailable")
+        self.assertEqual(
+            R.decode_value(R.lookup("LINK_DEVICE_STATE"), bytes([255])),
+            "unavailable")
         # Phoenix Rev 5 §2.3.1 defines only 0,1,2,9: 255 stays unknown there.
         self.assertEqual(
             R.decode_value(R.lookup(0x0201, flavor="INV"), bytes([255])),
@@ -414,6 +415,7 @@ class TestRegisters(unittest.TestCase):
         reg = R.lookup("BAT_VOLTAGE")
         self.assertIsNone(R.decode_value(reg, b"\x00"))
         self.assertEqual(R.encode_value(reg, None), b"\x00")
+        # Preserve the composed None round-trip from the original test.
         self.assertIsNone(R.decode_value(reg, R.encode_value(reg, None)))
         # Nonzero behavior unchanged.
         self.assertAlmostEqual(R.decode_value(reg, b"\x0c"), 12.0)
@@ -427,15 +429,17 @@ class TestRegisters(unittest.TestCase):
 
     # --- cycle-5 issue 4: pluggable-display 0x0401-0x0404 enums ---
     def test_display_pluggable_enums(self):
+        # Every documented value still checks decode, encode and their
+        # composed wire round-trip, as before the test cleanup.
         # BlueSolar-HEX Pluggable display settings (same values in the
         # MPPT RS Internal display table for 0x0401/0x0402/0x0404).
         cases = {
-            "DISPLAY_BACKLIGHT_INTENSITY": ({0: "off", 1: "on"}, "off", "on"),
-            "DISPLAY_SCROLL_SPEED": ({1: "slow", 5: "fast"}, "slow", "fast"),
-            "DISPLAY_SETUP_LOCK": ({0: "unlocked", 1: "locked"}, "unlocked", "locked"),
-            "DISPLAY_TEMPERATURE_UNIT": ({0: "celsius", 1: "fahrenheit"}, "celsius", "fahrenheit"),
+            "DISPLAY_BACKLIGHT_INTENSITY": {0: "off", 1: "on"},
+            "DISPLAY_SCROLL_SPEED": {1: "slow", 5: "fast"},
+            "DISPLAY_SETUP_LOCK": {0: "unlocked", 1: "locked"},
+            "DISPLAY_TEMPERATURE_UNIT": {0: "celsius", 1: "fahrenheit"},
         }
-        for name, (mapping, first, last) in cases.items():
+        for name, mapping in cases.items():
             with self.subTest(name=name):
                 reg = R.lookup(name)
                 self.assertEqual(reg.cls, "ENUM")
@@ -444,7 +448,6 @@ class TestRegisters(unittest.TestCase):
                     self.assertEqual(
                         R.decode_value(reg, bytes([raw])), label)
                     self.assertEqual(R.encode_value(reg, label), bytes([raw]))
-                    # Round-trip through the wire value.
                     self.assertEqual(
                         R.decode_value(reg, R.encode_value(reg, label)), label)
         # Only the documented endpoints are named on 0x0402.
@@ -469,26 +472,8 @@ class TestRegisters(unittest.TestCase):
             R.encode_value(reg, ["internal_reason"]),
             b"\x10\x00\x00\x00")
 
-    # --- cycle-4 issue 1: shared 0x0201 state 0 is NOT_CHARGING ---
-    def test_device_state_0_not_charging(self):
-        # BlueSolar-HEX §1.1 + Orion-XS-HEX both list 0 as NOT_CHARGING.
-        self.assertEqual(R.DEVICE_STATE_MAP[0], "not_charging")
-        self.assertEqual(
-            R.decode_value(R.lookup("DEVICE_STATE"), b"\x00"), "not_charging")
-        self.assertEqual(
-            R.decode_value(R.lookup(0x0201, flavor="MPPT"), b"\x00"),
-            "not_charging")
-        # Family overrides resolve independently (Phoenix Off stays).
-        self.assertEqual(
-            R.decode_value(R.lookup(0x0201, flavor="ORION"), b"\x00"),
-            "not_charging")
-        self.assertEqual(
-            R.decode_value(R.lookup(0x0201, flavor="INV"), b"\x00"), "off")
-        self.assertEqual(R.DEVICE_STATE_INV_MAP[0], "off")
-
     # --- cycle-4 issue 2: 0x0350-0x0353 generic scoped to MPPT family ---
     def test_relay_bat_scoped_out_of_bmv(self):
-        import struct as _s
         bmv = R.for_flavor("BMV")
         for name in ("RELAY_BAT_LOW_SET", "RELAY_BAT_LOW_CLEAR",
                      "RELAY_BAT_HIGH_SET", "RELAY_BAT_HIGH_CLEAR"):
@@ -498,18 +483,16 @@ class TestRegisters(unittest.TestCase):
         # BMV flavor resolves the 0.1 V BMV meanings (10x apart).
         reg_bmv = R.lookup(0x0350, flavor="BMV")
         self.assertEqual(reg_bmv.name, "BMV_RELAY_LOW_VOLTAGE")
-        self.assertAlmostEqual(reg_bmv.scale, 0.1)
+        self.assertEqual(reg_bmv.scale, 0.1)
         self.assertEqual(
             R.lookup("RELAY_BAT_LOW_SET", flavor="BMV").name,
             "BMV_RELAY_LOW_VOLTAGE")
-        self.assertEqual(
-            R.lookup("RELAY_BAT_LOW_SET", flavor="BMV").scale, 0.1)
+        self.assertEqual(R.lookup("RELAY_BAT_LOW_SET", flavor="BMV").scale, 0.1)
         # Scale contrast proves the collision mattered: same raw = 10x value.
-        raw = _s.pack("<H", 1200)
+        raw = struct.pack("<H", 1200)
         self.assertAlmostEqual(
             R.decode_value(R.lookup("RELAY_BAT_LOW_SET"), raw), 12.0)
         self.assertAlmostEqual(R.decode_value(reg_bmv, raw), 120.0)
-        # MPPT-family access unchanged.
         self.assertIn("RELAY_BAT_LOW_SET", R.for_flavor("MPPT"))
         self.assertIn("RELAY_BAT_LOW_SET", R.for_flavor("MPPT_RS"))
         self.assertEqual(
@@ -526,7 +509,7 @@ class TestRegisters(unittest.TestCase):
         self.assertIn("ANY", reg.flavors)
         self.assertEqual(R.lookup(0x0150, flavor="BMV").name, "CAPABILITIES_BLE")
         self.assertEqual(R.lookup(0x0150, flavor="INV").name, "CAPABILITIES_BLE")
-        # Orion-family names kept for bits 2-8 (BMV/Phoenix reserve them).
+        # Orion-family names are used for bits BMV reserves.
         self.assertEqual(R.ENUM_MAPS["CAPABILITIES_BLE"][2], "ble_off_recovery_time")
         self.assertEqual(R.ENUM_MAPS["CAPABILITIES_BLE"][8], "settings_lock")
         # Reserved bits decode best-effort; documented bits 0-1 unchanged.
