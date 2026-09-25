@@ -295,6 +295,19 @@ def scrape_doc_ids(text: str) -> set[int]:
     ids = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})\b", text)}
     for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", text):
         ids.add(int(m.group(1), 16))
+    # Mid-token split rescue ("0xED E0" for 0xEDE0, layout glitch splitting
+    # the hex run itself): line-leading table-row shape plus a dtype tail on
+    # the same line (prose never carries a dtype token), runs of 1-3 hex
+    # digits each rejoining to exactly 4 with a single space. Verified
+    # zero-diff: no snapshot line matches, so no prose false positives.
+    for _line in text.splitlines():
+        _mm = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})\b", _line)
+        if (
+            _mm
+            and len(_mm.group(1)) + len(_mm.group(2)) == 4
+            and re.search(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", _line, re.IGNORECASE)
+        ):
+            ids.add(int(_mm.group(1) + _mm.group(2), 16))
     # Bare-x typo rescue (``xEDE0``, missing leading 0), symmetric with the
     # Orion/BlueSolar parser rescues and their doc-typo justification (cf.
     # BlueSolar-HEX 0xEDE0 with identical metadata): the ``(?<!\\w)`` guard
@@ -705,6 +718,19 @@ def scrape_decimal_ids(text: str) -> set[int]:
             ids.add(int(m2.group(1), 16))
         for m3 in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", line):
             ids.add(int(m3.group(1), 16))
+        # Mid-token split rescue ("0xED E0" for 0xEDE0, layout glitch
+        # splitting the hex run itself): line-leading table-row shape plus a
+        # dtype tail on the same line (prose never carries a dtype token),
+        # runs of 1-3 hex digits each rejoining to exactly 4 with a single
+        # space. Verified zero-diff: no snapshot line matches, so snapshot
+        # scans stay exactly EXPECTED_DECIMAL_SCAN_HITS.
+        _mid = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})\b", line)
+        if (
+            _mid
+            and len(_mid.group(1)) + len(_mid.group(2)) == 4
+            and re.search(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", line, re.IGNORECASE)
+        ):
+            ids.add(int(_mid.group(1) + _mid.group(2), 16))
         for m4 in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{4})\b", line):
             ids.add(int(m4.group(1), 16))
         # Decimal range mirror of the hex scraper's guard-free inline
@@ -1806,6 +1832,99 @@ class TestSpecParsers(unittest.TestCase):
         # Both scrapers rescue the split form (was missed by both).
         self.assertIn(0xEDF0, scrape_doc_ids("0x EDF0    Split typo  0.01  un16  A\n"))
         self.assertIn(0xEDF0, scrape_decimal_ids("0x EDF0    Split typo  0.01  un16  A\n"))
+
+    def test_midtoken_split_id_rescue_divergence(self):
+        """Proves mid-token-split IDs ("0xED E0" for 0xEDE0, layout glitch
+        splitting the hex run itself) are rescued (not missed by all
+        sides): a synthetic "0xED E0" typed row is now parsed (section
+        tables via _split_typed_row, BMV/Phoenix loops via token rejoin)
+        AND hex-scraped AND decimal-scraped — the glued-only ``0xHHHH`` /
+        prefix-split / bare-x rescues missed all three while counts stayed
+        green (reproduced synthetically before the fix). Rescue-style like
+        the existing prefix-split handling. Shape guards (explicit,
+        justified): single space between 1-3-hex runs rejoining to exactly
+        4, line-leading table-row shape, plus the scale/dtype anchors (or a
+        dtype tail on the same line for the scrapers) — prose without a
+        dtype tail stays out. Control: zero mid-split occurrences in any
+        current HEX snapshot, so the rescue is zero-diff (no prose false
+        positives)."""
+        # Zero-FP pin: no snapshot line carries a mid-token split rejoining
+        # to exactly 4 hex digits (verified live here, not just asserted).
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                mid = [
+                    line
+                    for line in self.raw_texts[key].splitlines()
+                    for m in [re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})\b", line)]
+                    if m and len(m.group(1)) + len(m.group(2)) == 4
+                ]
+                self.assertEqual(mid, [], f"{key} snapshot gained mid-token-split prose")
+                # The dtype-guarded rescue adds zero hits on snapshots, so
+                # reverse-coverage/counts stay pinned elsewhere.
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+        from spec_parser import (
+            BMV7xxHEXParser,
+            OrionXSHEXParser,
+            PhoenixInverterHEXParser,
+            _split_typed_row,
+        )
+
+        # Token-level rescue (single-token + prefix-split rescues miss it).
+        row = _split_typed_row("0xED E0    Split inside  0.1  un16  V")
+        self.assertIsNotNone(row)
+        assert row is not None
+        rid, desc, scale_str, dtype_raw, unit_str, typo = row
+        self.assertEqual(rid, 0xEDE0)
+        self.assertTrue(typo)
+        self.assertEqual(dtype_raw, "un16")
+        self.assertEqual(desc, "Split inside")
+        # Issue probe: section tables (BlueSolar + Orion, incl. the
+        # 0x-section pre-filter).
+        typed = (
+            "1.1 Get and Set items\n"
+            "0xED E0  Split inside  0.1  un16  V\n"
+            "1.2 Asynchronous items\n"
+        )
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                parsed = cls(typed).parse_registers()
+                self.assertIn(0xEDE0, parsed)
+                self.assertEqual(parsed[0xEDE0].data_type, "un16")
+                self.assertAlmostEqual(parsed[0xEDE0].scale, 0.1)
+        # BMV + Phoenix loops (token rejoin; Phoenix needs its VE_REG_ name).
+        bmv = BMV7xxHEXParser(
+            "hdr\n0xED E0     Split inside               -         un16        V\nftr"
+        ).parse_registers()
+        self.assertIn(0xEDE0, bmv)
+        self.assertEqual(bmv[0xEDE0].data_type, "un16")
+        phx = PhoenixInverterHEXParser(
+            "0xED E0 VE_REG_MID_SPLIT R/W un16 1 V\n"
+        ).parse_registers()
+        self.assertIn(0xEDE0, phx)
+        self.assertEqual(phx[0xEDE0].name, "VE_REG_MID_SPLIT")
+        # Both scrapers rescue the mid-split form (were missed by both);
+        # the dtype tail is the table-row guard.
+        self.assertIn(0xEDE0, scrape_doc_ids("0xED E0    Split inside  0.1  un16  V\n"))
+        self.assertIn(0xEDE0, scrape_decimal_ids("0xED E0    Split inside  0.1  un16  V\n"))
+        # Guard controls: prose-shaped mid-splits without a dtype tail stay
+        # out on every side (no false positives); a double-space column gap
+        # is not a mid-token split.
+        self.assertNotIn(0xEDE0, scrape_doc_ids("(register 0xED E0) prose mention\n"))
+        self.assertNotIn(0xEDE0, scrape_decimal_ids("(register 0xED E0) prose mention\n"))
+        self.assertNotIn(
+            0xEDE0,
+            BlueSolarHEXParser(
+                "1.1 Get and Set items\n(register 0xED E0) prose mention\n1.2 Asynchronous items\n"
+            ).parse_registers(),
+        )
+        self.assertIsNone(_split_typed_row("0xED  E0    Split inside  0.1  un16  V"))
+        # Split-position variants rejoin honestly (1+3 and 3+1 shapes).
+        for variant in ("0xE DE0", "0xEDE 0"):
+            with self.subTest(variant=variant):
+                vrow = _split_typed_row(f"{variant}    Split inside  0.1  un16  V")
+                self.assertIsNotNone(vrow)
+                assert vrow is not None
+                self.assertEqual(vrow[0], 0xEDE0)
 
     def test_bluesolar_bare_x_rescue_symmetry(self):
         """BlueSolar bare-``x`` typo asymmetry: probe ``xEDE0 Battery low temp

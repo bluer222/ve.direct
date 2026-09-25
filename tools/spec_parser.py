@@ -170,6 +170,25 @@ _ID_TOKEN_BARE_X_RE = re.compile(r"^[xX][0-9A-Fa-f]{4}$")
 _ID_TOKEN_SPLIT_PREFIXES = ("0x", "0X")
 _HEX4_RE = re.compile(r"^[0-9A-Fa-f]{4}$")
 
+#: Mid-token split "0xED E0" (layout glitch splitting the hex run itself,
+#: cf. the "0x HHHH" prefix split above): after whitespace-splitting this
+#: is TWO tokens ("0xED", "E0") rejoining to exactly 4 hex digits, so both
+#: the single-token _ID_TOKEN_RE and the prefix-split rescue above miss it
+#: everywhere while counts stay green. Rescued at the token level wherever
+#: a table row is split (see _split_typed_row and the BMV/Phoenix
+#: token-merge below) plus the line-level pre-filters and both test-side
+#: scrapers. Shape guards (explicit, justified): exactly one single space
+#: between the runs (a column gap is 2+, enforced on the raw line since
+#: token-split collapses gaps), runs of 1-3 hex digits each rejoining to
+#: exactly 4, line-leading table-row shape, and the scale/dtype anchors
+#: below as the table-row guard (prose never carries a dtype tail).
+#: Verified zero-diff: no "0xHH HHHH" mid-split occurrence in any current
+#: snapshot, so no prose false positives; a future split row is now
+#: rescued instead of missed by all sides.
+_MID_SPLIT_HEAD_RE = re.compile(r"^0[xX][0-9A-Fa-f]{1,3}$")
+_MID_SPLIT_TAIL_RE = re.compile(r"^[0-9A-Fa-f]{1,3}$")
+_MID_SPLIT_LINE_RE = re.compile(r"0[xX][0-9A-Fa-f]{1,3} [0-9A-Fa-f]{1,3}\b")
+
 
 def _normalize_dtype(raw: str) -> Tuple[str, str]:
     """Normalize a dtype-column token to the module convention.
@@ -242,6 +261,24 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
         # single-token rescues above never fire; the remainder starts at
         # tokens[2:]. Typo-flagged like the xEDE0 rescue.
         rid = int(tokens[1], 16)
+        typo = True
+        rest = tokens[2:]
+    elif (
+        len(tokens) >= 4
+        and _MID_SPLIT_HEAD_RE.match(idtok)
+        and _MID_SPLIT_TAIL_RE.match(tokens[1])
+        and len(idtok[2:]) + len(tokens[1]) == 4
+        and _MID_SPLIT_LINE_RE.search(line)
+    ):
+        # Layout glitch splitting the hex run itself ("0xED E0" for
+        # 0xEDE0): two tokens rejoining to exactly 4 hex digits. The
+        # single literal space in _MID_SPLIT_LINE_RE is the shape (a
+        # column gap is 2+; token-split collapses gaps, so the raw-line
+        # check keeps the rescue to true mid-token splits). The
+        # scale/dtype anchors below are the table-row guard: prose never
+        # reaches here with a dtype tail. Typo-flagged like the prefix
+        # rescues; the remainder starts at tokens[2:].
+        rid = int(idtok[2:] + tokens[1], 16)
         typo = True
         rest = tokens[2:]
     else:
@@ -383,7 +420,11 @@ class BlueSolarHEXParser:
         for line in section.splitlines():
             # Split-typo IDs ("0x HHHH") pass the same gate: the optional
             # inner whitespace mirrors the _split_typed_row rescue (zero-diff:
-            # no snapshot line matches the split form, verified). Bare-x
+            # no snapshot line matches the split form, verified). Mid-token
+            # splits ("0xED E0", see _MID_SPLIT_LINE_RE) pass it too; the
+            # exact-4 rejoin plus the scale/dtype anchors in
+            # _split_typed_row stay the strict gate (this pre-filter is
+            # deliberately looser). Bare-x
             # typo IDs ("xEDE0", missing leading 0) pass it too, symmetric
             # with the Orion section-table rescue (same doc-typo
             # justification: cf. BlueSolar-HEX 0xEDE0 with identical
@@ -392,7 +433,7 @@ class BlueSolarHEXParser:
             # bare-x line-start in the BlueSolar snapshot (verified), so no
             # prose false positives; the 0x prose-note guards below are
             # unaffected (bare-x lines never match them).
-            if not re.match(r"^\s*(?:0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4})|[xX][0-9A-Fa-f]{4})\b", line):
+            if not re.match(r"^\s*(?:0[xX](?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,3} [0-9A-Fa-f]{1,3}|\s+[0-9A-Fa-f]{4})|[xX][0-9A-Fa-f]{4})\b", line):
                 continue
             # Skip known prose-note lines that happen to start with a
             # register-looking ID. Each pattern is anchored to its exact note
@@ -1206,7 +1247,25 @@ class BMV7xxHEXParser:
                 and _HEX4_RE.match(tokens[1])
             ):
                 tokens = [tokens[0] + tokens[1]] + tokens[2:]
+            # Mid-token split ("0xED E0" for 0xEDE0, see
+            # _MID_SPLIT_LINE_RE): rejoin the two hex runs so the column
+            # math below is unchanged. The raw-line single space keeps
+            # true splits apart from column gaps; the dtype/dash anchors
+            # below are the table-row guard. Zero-diff: no snapshot line
+            # matches (verified).
+            if (
+                len(tokens) >= 4
+                and _MID_SPLIT_HEAD_RE.match(tokens[0])
+                and _MID_SPLIT_TAIL_RE.match(tokens[1])
+                and len(tokens[0][2:]) + len(tokens[1]) == 4
+                and _MID_SPLIT_LINE_RE.search(line)
+            ):
+                tokens = [tokens[0] + tokens[1]] + tokens[2:]
             if len(tokens) < 3 or not _ID_TOKEN_RE.match(tokens[0]):
+                continue
+            if tokens[1] == "=":
+                # Product-ID prose ("0xA381 = BMV712"), not a table row.
+                continue
                 continue
             if tokens[1] == "=":
                 # Product-ID prose ("0xA381 = BMV712"), not a table row.
@@ -1495,6 +1554,20 @@ class PhoenixInverterHEXParser:
                 len(tokens) >= 4
                 and tokens[0] in _ID_TOKEN_SPLIT_PREFIXES
                 and _HEX4_RE.match(tokens[1])
+            ):
+                tokens = [tokens[0] + tokens[1]] + tokens[2:]
+            # Mid-token split ("0xED E0" for 0xEDE0, see
+            # _MID_SPLIT_LINE_RE): rejoin the two hex runs so the column
+            # math below is unchanged. The raw-line single space keeps
+            # true splits apart from column gaps; the VE_REG_/access
+            # columns below are the table-row guard. Zero-diff: no
+            # snapshot line matches (verified).
+            if (
+                len(tokens) >= 4
+                and _MID_SPLIT_HEAD_RE.match(tokens[0])
+                and _MID_SPLIT_TAIL_RE.match(tokens[1])
+                and len(tokens[0][2:]) + len(tokens[1]) == 4
+                and _MID_SPLIT_LINE_RE.search(line)
             ):
                 tokens = [tokens[0] + tokens[1]] + tokens[2:]
             if len(tokens) < 3 or not re.fullmatch(r"0[xX][0-9A-Fa-f]{4}", tokens[0]):
