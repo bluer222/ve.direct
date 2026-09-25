@@ -599,27 +599,29 @@ def scrape_decimal_ids(text: str) -> set[int]:
     the parsers scan 3). Verified zero-diff: no decimal range line exists
     in any snapshot (the BMV signed cell excluded as above), so snapshot
     scans stay exactly EXPECTED_DECIMAL_SCAN_HITS.
-    Widened to 3-/6-digit IDs (probes "999 Future history record" /
-    "123456 Future record" missed by decimal scan, hex scrape, and both
-    parsers while "60961" hit everywhere — reproduced before fix):
-    calendar years are exactly 4-digit so 3-/6-digit carry NO year
-    collision, but prose counts (3-digit) and offsets/serials (6-digit) are
-    the false-positive risks, so 3-/6-digit require table-row shape
-    (line-leading + description + dtype/unit/table-region context,
-    mirroring the existing widened-scan justifications) with structural
-    denylists:     typed 3-/6-digit (line-leading and mid-line, same dtype-tail
-    requirement as 4-5 digit — dates/versions lack dtype so stay out;
-    verified zero typed 3-/6-digit hits on snapshots); dtype-less 3-/6-digit
-    line-leading globally with 3-digit <=255 skipped as CS/ERR/value domain
-    (verified: all snapshot 3-digit line-leading hits — 116/117/119/245-255
-    etc — fall in 0-255, so zero-diff; 256-999 and all 6-digit parse honestly;
-    no snapshot 6-digit line exists); ranges 3-/6-
-    digit ONLY with history/register context (unlike guard-free 4-5 digit —
-    the BMV 3-digit "174..372" temperature Range cells lack the context so
-    stay excluded, verified) plus the 1024 cap; multi-line 3-/6-digit with
-    the same 8-line overscan (no snapshot "..." start, verified). Denylists
-    stay structural so no content word is shared-blind; snapshots stay
-    exactly EXPECTED_DECIMAL_SCAN_HITS.
+    Widened to 3-/6-/7-digit IDs (probes "999 Future history record" /
+    "123456 Future record" / "1234567 Future record" missed by decimal scan,
+    hex scrape, and both parsers while "60961" hit everywhere — reproduced
+    before fix): calendar years are exactly 4-digit so 3-/6-/7-digit carry
+    NO year collision, but prose counts (3-digit) and offsets/serials
+    (6-digit) are the false-positive risks, so 3-/6-/7-digit require
+    table-row shape (line-leading + description + dtype/unit/table-region
+    context, mirroring the existing widened-scan justifications) with
+    structural denylists:     typed 3-/6-/7-digit (line-leading and mid-line,
+    same dtype-tail requirement as 4-5 digit — dates/versions lack dtype so
+    stay out; verified zero typed 3-/6-/7-digit hits on snapshots);
+    dtype-less 3-/6-/7-digit line-leading globally with 3-digit <=255 skipped
+    as CS/ERR/value domain (verified: all snapshot 3-digit line-leading
+    hits — 116/117/119/245-255 etc — fall in 0-255, so zero-diff; 256-999
+    and all 6-/7-digit parse honestly; no snapshot 6-/7-digit line-leading
+    row exists — HEX-frame colon-led runs ":3020050"/":1000351" miss the
+    ``^`` shape, Text-mode PCB part numbers live outside the HEX snapshots);
+    ranges 3-/6-/7-digit ONLY with history/register context (unlike
+    guard-free 4-5 digit — the BMV 3-digit "174..372" temperature Range
+    cells lack the context so stay excluded, verified) plus the 1024 cap;
+    multi-line 3-/6-/7-digit with the same 8-line overscan (no snapshot
+    "..." start, verified). Denylists stay structural so no content word is
+    shared-blind; snapshots stay exactly EXPECTED_DECIMAL_SCAN_HITS.
     The bare-x typo half (``(?<!\\w)[xX]HHHH``, missing leading 0),
     symmetric with the Orion/BlueSolar parser rescues and the hex
     scraper's bare-x rescue above (same doc-typo justification): the
@@ -666,25 +668,28 @@ def scrape_decimal_ids(text: str) -> set[int]:
                 pass
             else:
                 ids.add(rid)
-        # 3-/6-digit dtype-less (table-row shape: line-leading + description
-        # globally, mirroring the 4-5 digit global above; 3-digit <=255
-        # skipped as CS/ERR/value domain everywhere — see docstring — so
-        # snapshot "245 WAKE-UP" rows (inside and outside history regions)
-        # stay excluded while "999 ..."/"123456 ..." parse honestly;
-        # 6-digit no extra guard, no snapshot hits).
-        for _pat in (r"^\s*(\d{3})(?!\d)\s+(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)\s+(\S.*?)\s*$"):
+        # 3-/6-/7-digit dtype-less (table-row shape: line-leading +
+        # description globally, mirroring the 4-5 digit global above;
+        # 3-digit <=255 skipped as CS/ERR/value domain everywhere — see
+        # docstring — so snapshot "245 WAKE-UP" rows (inside and outside
+        # history regions) stay excluded while "999 ..."/"123456 ..."/
+        # "1234567 ..." parse honestly; 6-/7-digit no extra guard (years are
+        # exactly 4-digit; HEX-frame colon-led runs miss the ``^`` shape;
+        # no snapshot hits, verified).
+        for _pat in (r"^\s*(\d{3})(?!\d)\s+(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)\s+(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)\s+(\S.*?)\s*$"):
             m36 = re.match(_pat, line)
             if m36:
                 _rid36 = int(m36.group(1))
                 if len(m36.group(1)) == 3 and _rid36 <= 255:
                     continue  # CS/ERR/value domain, never a decimal register ID
                 ids.add(_rid36)
-        # 3-/6-digit typed (global, same dtype-tail as 4-5 digit above;
+        # 3-/6-/7-digit typed (global, same dtype-tail as 4-5 digit above;
         # zero-diff: no snapshot hits). Exact lengths with (?!\d) so
         # "60961" never partially matches as "609".
         for _tpat, _flags in (
             (r"^\s*(\d{3})(?!\d)\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
             (r"^\s*(\d{6})(?!\d)\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{7})(?!\d)\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
         ):
             _tm = re.match(_tpat, line, _flags)
             if _tm:
@@ -692,6 +697,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         for _mpat in (
             r"(?<!\w)(\d{3})(?!\d)\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             r"(?<!\w)(\d{6})(?!\d)\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{7})(?!\d)\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
         ):
             for m_mid36 in re.finditer(_mpat, line, re.IGNORECASE):
                 ids.add(int(m_mid36.group(1)))
@@ -712,10 +718,10 @@ def scrape_decimal_ids(text: str) -> set[int]:
             a, b = int(m5.group(1)), int(m5.group(2))
             if 0 < b - a <= 1024:
                 ids.update(range(a, b + 1))
-        # 3-/6-digit ranges ONLY with history/register context (unlike
+        # 3-/6-/7-digit ranges ONLY with history/register context (unlike
         # guard-free 4-5 digit above — the BMV "174..372" Range cells lack
         # it so stay excluded; see docstring). Zero-diff verified.
-        for m536 in re.finditer(r"(?<![\w\-])(\d{3,6})(?!\d)\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,6})(?!\d)(?!\w)", line):
+        for m536 in re.finditer(r"(?<![\w\-])(\d{3,7})(?!\d)\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\d)(?!\w)", line):
             a, b = int(m536.group(1)), int(m536.group(2))
             # Skip pure 4-5 digit pairs already covered guard-free above
             # (avoid double work; guarded path would also match them but the
@@ -728,7 +734,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
                 ids.update(range(a, b + 1))
     # Multi-line decimal "..." mirror of the hex scraper's 8-line overscan
     # (parsers scan 3 — the gap divergence axis). Zero-diff: no snapshot
-    # decimal "..." start line. Widened to 3-/6-digit (no snapshot hits,
+    # decimal "..." start line. Widened to 3-/6-/7-digit (no snapshot hits,
     # verified; same overscan/gap axis as 4-5 digit).
     _lines = text.splitlines()
     for i, line in enumerate(_lines):
@@ -741,13 +747,13 @@ def scrape_decimal_ids(text: str) -> set[int]:
                     if 0 < b - a <= 1024:
                         ids.update(range(a, b + 1))
                     break
-        elif re.match(r"^\s*\d{3}(?!\d)\s*\.\.\.\s*$", line) or re.match(r"^\s*\d{6}(?!\d)\s*\.\.\.\s*$", line):
+        elif re.match(r"^\s*\d{3}(?!\d)\s*\.\.\.\s*$", line) or re.match(r"^\s*\d{6}(?!\d)\s*\.\.\.\s*$", line) or re.match(r"^\s*\d{7}(?!\d)\s*\.\.\.\s*$", line):
             try:
-                a = int(re.match(r"^\s*(\d{3,6})", line).group(1))  # type: ignore[union-attr]
+                a = int(re.match(r"^\s*(\d{3,7})", line).group(1))  # type: ignore[union-attr]
             except Exception:
                 continue
             for nxt in _lines[i + 1 : i + 9]:
-                m636 = re.match(r"^\s*(\d{3,6})(?!\d)\s*$", nxt)
+                m636 = re.match(r"^\s*(\d{3,7})(?!\d)\s*$", nxt)
                 if m636:
                     try:
                         b = int(m636.group(1))
@@ -4890,6 +4896,162 @@ class TestSpecParsers(unittest.TestCase):
         self.assertIn(999, scrape_decimal_ids("999 Future typed 0.1 un16 V\n"))
         self.assertIn(123456, scrape_decimal_ids("123456 Future typed 0.1 un16 V\n"))
 
+    def test_hex_register_id_16bit_bound_pinned(self):
+        """5-hex-digit register IDs are protocol-impossible: pinned miss + live fix.
+
+        Protocol bound (both justifications asserted, not just commented):
+        the HEX Get/Set framing carries the register ID as a 2-byte
+        little-endian field — src/ve_direct/hex.py packs ``"<H"`` (so
+        ``build_get(0x12345)`` raises ``struct.error``: un-addressable) and
+        the BlueSolar-HEX §1 Get example ``:7F0ED0071`` shows cmd nibble +
+        4 LE-hex ID chars — so no 5-hex-digit ID can ever address a
+        register. Snapshot sides therefore miss a ``0x12345`` table row by
+        construction (parser token/fullmatch, hex scraper ``\\b``, decimal
+        scan), pinned here as knowingly-uncovered; the live stdlib matcher
+        used to prefix-catch ``0x1234`` out of it (STALE false alarm on
+        impossible input) and now respects the same exact-4 bound. CMap
+        spaceless-join glue ("0x04080Display" -> 0x0408, "0xED8B0Baery" ->
+        0xED8B, verified live) still rescues via the exactly-5-only
+        rejection in _table_cmap_ids. Zero-diff: snapshot counts/pins
+        unchanged (covered by test_spec_parser_counts et al.).
+        """
+        import struct
+
+        from ve_direct import hex as HX
+        from spec_parser import OrionXSHEXParser
+
+        # Bound evidence: 0x12345 is not packable as a LE u16 register ID.
+        with self.assertRaises(struct.error):
+            struct.pack("<H", 0x12345)
+        with self.assertRaises(struct.error):
+            HX.build_get(0x12345)
+        # Control: the max 4-hex-digit ID packs and round-trips.
+        self.assertEqual(HX.decode_line(HX.build_get(0xFFFF)).register_id, 0xFFFF)
+        # Snapshot sides miss the table-row probe (knowingly-uncovered).
+        row = "0x12345 Future register      0.1         un16        V\n"
+        section = f"1.1 Get and Set items\n{row}1.2 Asynchronous items\n"
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                self.assertNotIn(0x12345, cls(section).parse_registers())
+                self.assertNotIn(0x1234, cls(section).parse_registers())
+        self.assertNotIn(0x12345, scrape_doc_ids(row))
+        self.assertNotIn(0x1234, scrape_doc_ids(row))
+        self.assertEqual(scrape_decimal_ids(row), set())
+        # Detail-mention and range endpoints are bound too (no prefix-collect).
+        mention = "Charge current limit (register 0x12345)\n"
+        self.assertNotIn(0x1234, BlueSolarHEXParser(mention).parse_registers())
+        self.assertNotIn(0x1234, OrionXSHEXParser(mention).parse_registers())
+        # Live side fixed: impossible shape yields nothing (no 0x1234).
+        self.assertEqual(register_id_set_from_text(row), set())
+        self.assertEqual(scale_dtype_map_from_text(row).get(0x1234), None)
+        # Controls: real exact-4 IDs still match on every side.
+        ctrl = "0xEDF0 Battery maximum current      0.01         un16        A\n"
+        self.assertIn(0xEDF0, scrape_doc_ids(ctrl))
+        self.assertEqual(register_id_set_from_text(ctrl), {0xEDF0})
+        self.assertIn(0xEDF0, scale_dtype_map_from_text(ctrl))
+
+    def test_capability_bit_un32_bound_pinned(self):
+        """Capability bits >=100 are protocol-impossible: pinned miss.
+
+        Protocol bound: capability registers 0x0140/0x0150 are un32 in every
+        snapshot (BlueSolar 0x0140, Orion 0x0140, Phoenix 0x0140+0x0150 —
+        asserted below from the raw texts), i.e. bits are 0-31 by
+        construction. The ``\\d{1,2}`` shape therefore misses bit >=100 on
+        parser AND scraper while EXPECTED maps stay green — pinned here as
+        knowingly-uncovered with that justification. The 32-99 band stays
+        loud by contrast: a real bit-32 row parses AND scrapes (failing via
+        EXPECTED set-equality), so only the >=100 tail is pinned.
+        Zero-diff: 25/29 exact (re-asserted).
+        """
+        from spec_parser import OrionXSHEXParser
+
+        # Doc evidence: every capability register is un32 (32 bits, 0-31).
+        # Table rows carry the width (section headers like Phoenix "2.2.4
+        # Capabilities (register 0x0140)" carry none, so require un32).
+        for key, rid in (("bluesolar", "0x0140"), ("orion", "0x0140"), ("phoenix", "0x0140")):
+            line = next(
+                ln for ln in self.raw_texts[key].splitlines()
+                if rid in ln and "un32" in ln and "apabilities" in ln.lower()
+            )
+            self.assertIn("un32", line, f"{key} {rid} must be un32: {line.strip()}")
+        line150 = next(
+            ln for ln in self.raw_texts["phoenix"].splitlines()
+            if "0x0150" in ln and "un32" in ln and "CAPABILITIES" in ln
+        )
+        self.assertIn("un32", line150, line150.strip())
+        self.assertEqual(len(self.specs["bluesolar"].parse_capabilities()), 25)
+        self.assertEqual(len(self.specs["orion"].parse_capabilities()), 29)
+        # Probe >=100: missed on both sides (knowingly-uncovered).
+        for marker, cls in (
+            ("Capabilities (register 0x0140)", BlueSolarHEXParser),
+            ("Capabilities1 (register 0x0140)", OrionXSHEXParser),
+        ):
+            with self.subTest(marker=marker):
+                text = f"{marker}\n0 Load output present (0=no...)\n100 Future mode (0=no...)\n"
+                window = 1500 if "Capabilities (" in marker else 1800
+                self.assertNotIn(100, cls(text).parse_capabilities())
+                self.assertNotIn(100, scrape_doc_capability_bits(text, marker, window))
+        # Loud side: bit 32 parses AND scrapes (would fail EXPECTED loudly).
+        text32 = "Capabilities (register 0x0140)\n0 Load output present (0=no...)\n32 Future mode (0=no...)\n"
+        self.assertIn(32, BlueSolarHEXParser(text32).parse_capabilities())
+        self.assertIn(32, scrape_doc_capability_bits(text32, "Capabilities (register 0x0140)", 1500))
+
+    def test_decimal_7digit_ids_widened(self):
+        """7-digit decimal IDs widen honestly (no protocol bound exists).
+
+        Decimal record numbers carry no 16-bit bound analogous to the HEX
+        ID field / un32 capability width, so the digit run opens to 7 with
+        the same table-row shape guards as the 3-/6-digit widening
+        (line-leading + description + dtype/history-region context).
+        False-positive denylist (verified zero hits on snapshots):
+        HEX-frame colon-led runs (":3020050", ":1000351", ":8001004010038")
+        miss the ``^``-anchored shape and carry no dtype tail; Text-mode PCB
+        part numbers ("9492437") live outside the HEX snapshots and outside
+        history regions. Divergence either way: the typed probe scrapes
+        (hex/parser miss by design outside history -> scraped-but-unparsed
+        loud), the history probes parse AND scrape. Zero-diff: snapshots
+        stay exactly EXPECTED_DECIMAL_SCAN_HITS, counts pinned.
+        """
+        from spec_parser import OrionXSHEXParser
+
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+        # Typed probe: decimal scan hits, hex sides miss by design (loud).
+        typed = "1234567 Future record      0.1         un16        V\n"
+        self.assertIn(1234567, scrape_decimal_ids(typed))
+        self.assertNotIn(1234567, scrape_doc_ids(typed))
+        section = f"1.1 Get and Set items\n{typed}1.2 Asynchronous items\n"
+        self.assertNotIn(1234567, BlueSolarHEXParser(section).parse_registers())
+        # History ID-only probe: both parsers AND the scan hit (agreement).
+        line = "1234567      Future history record\n"
+        hist = f"Restore factory defaults\n{line}1.2 Asynchronous items\n"
+        self.assertIn(1234567, scrape_decimal_ids(hist))
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                regs = cls(hist).parse_registers()
+                self.assertIn(1234567, regs)
+                self.assertIsNone(regs[1234567].scale)
+                self.assertEqual(regs[1234567].access, "R")
+        # History-context range probe: parsers (cap 64) and scan (cap 1024) expand.
+        rng = "History registers 1234567-1234570 table\n"
+        self.assertTrue({1234567, 1234568, 1234569, 1234570} <= scrape_decimal_ids(rng))
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            regs = cls(f"Restore factory defaults\n{rng}1.2 Asynchronous items\n").parse_registers()
+            self.assertTrue({1234567, 1234568, 1234569, 1234570} <= set(regs))
+        # Multi-line "..." probe: parsers (3-line window) and scan (8-line) expand.
+        multi = "Restore factory defaults\n1234567 ...\n1234570\n1.2 Asynchronous items\n"
+        self.assertTrue({1234567, 1234570} <= scrape_decimal_ids(multi))
+        self.assertIn(1234570, BlueSolarHEXParser(multi).parse_registers())
+        # Guards hold: frames, bare years outside history, state rows, Range cells.
+        self.assertEqual(scrape_decimal_ids(":3020050\n"), set())
+        self.assertEqual(scrape_decimal_ids("0xA3F0 = Orion XS 12V/12V-50A                :2000152\n"), set())
+        self.assertEqual(scrape_decimal_ids("Pcb part straight                    9492437      B4B-PH-K-\n"), set())
+        self.assertEqual(scrape_decimal_ids("245 WAKE-UP device about to start\n"), set())
+        self.assertEqual(
+            scrape_decimal_ids("0x032A Foo 45 Un16 0=disabled; 174..372 0 0.01 K\n"), set()
+        )
+
     def test_access_no_skipping_regression(self):
         """Issue-3: access loops ``continue``d on R/W defaults and non-history
         R, so flipping W 0x0004 to R/struct skipped every assert (0x0004 is
@@ -5890,7 +6052,7 @@ class TestFetchSpecs(unittest.TestCase):
         compares attributes (see scale/description tests above). Verified
         live 2026-09-24: BlueSolar 112 vs 206, Orion 29 vs 109, BMV/Phoenix/
         Text 0 vs snapshots, caps {} vs 25, while tolerant IDs match
-        302/118/124/56/151 exact. Extended pin: a real-live attribute-only
+        300/116/124/54/150 exact. Extended pin: a real-live attribute-only
         edit with collapsed text — e.g. BlueSolar 0xEDF0 scale 0.1→5.1 with
         no added/removed ID — stays FRESH here (only --sync+pdftotext would
         catch it, which clean envs skip). That exact case is now caught live
@@ -6163,8 +6325,8 @@ class TestFetchSpecs(unittest.TestCase):
     def test_content_gate_live_online_ids_match(self):
         """Live behavior (skipped unless network is present): the real online
         PDFs' stdlib-extracted register/PID ID sets still equal their
-        snapshots' (same revisions, re-uploaded; verified 302/118/124/56/151
-        exact 2026-09-24). A table edit keeping Rev/date invisible to markers
+        snapshots' (same revisions, re-uploaded; verified 300/116/124/54/150
+        exact 2026-09-25). A table edit keeping Rev/date invisible to markers
         fails here loudly as added/removed instead of passing; offline skips.
         Zero-diff live: headers are newer today yet markers+IDs match, so the
         gate stays FRESH (not unknown/stale)."""

@@ -414,20 +414,31 @@ def _strip_language_tags(text: str) -> str:
 
 
 def register_id_set_from_text(text: str) -> set[int]:
-    """Collect register/PID IDs from text (stdlib Paranoia, nob).
+    """Collect register/PID IDs from text (stdlib Paranoia, exact-4).
 
-    Over-inclusive ``0[xX](HHHH)`` without ``\\b`` (glued IDs from lost
-    layout spaces in stdlib extraction, e.g. BlueSolar "0x04080Display"
-    needs prefix match; ``\\b`` would miss glued real IDs on live while
-    snapshots via ``pdftotext -layout`` keep spaces -> false removed).
-    Spurious longer-hex prefixes ("0xFFFFFFFF" -> 0xFFFF, "0x00000002" ->
-    0x0000, "0x51FA51FA..." -> 0x51FA, "0x0112FF" -> 0x0112) cancel because
-    BOTH sides use nob (snapshot and live share the same longer-hex
-    strings today, verified 302/118/124/56/151 exact). Inline ".." ranges
+    Matches ``0[xX](HHHH)`` with an exact-4 bound (``(?![0-9A-Fa-f])``: a
+    fifth hex digit kills the match, so a protocol-impossible ``0x12345``
+    yields nothing instead of prefix-catching ``0x1234``). The bound is
+    protocol-justified, not arbitrary: the HEX Get/Set framing carries the
+    register ID as a 2-byte little-endian field (see
+    src/ve_direct/hex.py ``struct.pack("<H", ...)`` / ``unpack("<H", ...)``
+    and the BlueSolar-HEX §1 ``:7F0ED0071`` Get example — cmd nibble + 4
+    LE-hex ID chars), so no 5-hex-digit ID can ever address a register and
+    the snapshot sides (parser token/fullmatch, test scraper ``\\b``) share
+    the same exact-4 shape. Glued IDs from lost layout spaces in stdlib
+    extraction (e.g. BlueSolar "0x04080Display" needs prefix match) still
+    match: the bound only rejects a FIFTH hex digit, not trailing
+    non-hex. Longer-hex strings ("0xFFFFFFFF", "0x00000002",
+    "0x51FA51FA...", "0x0112FF") contribute nothing on EITHER side now
+    (previously both sides prefix-caught them via nob and cancelled as
+    agreed-present; now they cancel as agreed-absent — still symmetric,
+    verified live==snapshot below). Inline ".." ranges
     (cap 1024, like the test scraper, not the parser's 64) plus snapshot
     multiline "..." bare-endpoint windows (8 lines, like the test scraper;
-    no-op on joined live text) expand history/timer spans on both sides.
-    Bare-x rescue (``xEDE0`` typo, missing leading 0) on both; discard
+    no-op on joined live text) expand history/timer spans on both sides,
+    with the same exact-4 bound on every endpoint (an over-long endpoint
+    kills that range instead of prefix-expanding it). Bare-x rescue
+    (``xEDE0`` typo, missing leading 0) on both; discard
     ``0xEFF0`` typo (means 0xEDF0, cf. spec_parser.DOC_TYPO_REGISTER_IDS)
     on both. Never raises (empty input -> empty set; caller treats empty
     live as unextractable, never stale).
@@ -436,8 +447,8 @@ def register_id_set_from_text(text: str) -> set[int]:
         if not text:
             return set()
         t = _strip_language_tags(text)
-        ids: set[int] = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})", t)}
-        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", t):
+        ids: set[int] = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t)}
+        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t):
             try:
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
             except Exception:
@@ -446,13 +457,13 @@ def register_id_set_from_text(text: str) -> set[int]:
                 ids.update(range(a, b + 1))
         lines = t.splitlines()
         for i, line in enumerate(lines):
-            if re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\s*\.\.\.\s*$", line):
+            if re.match(r"^\s*0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])\s*\.\.\.\s*$", line):
                 try:
                     a = int(re.match(r"^\s*0[xX]([0-9A-Fa-f]{4})", line).group(1), 16)  # type: ignore[union-attr]
                 except Exception:
                     continue
                 for nxt in lines[i + 1 : i + 9]:
-                    m2 = re.match(r"^\s*(0[xX][0-9A-Fa-f]{4})\s*$", nxt)
+                    m2 = re.match(r"^\s*(0[xX][0-9A-Fa-f]{4})(?![0-9A-Fa-f])\s*$", nxt)
                     if m2:
                         try:
                             b = int(m2.group(1), 16)
@@ -479,10 +490,19 @@ def _table_cmap_ids(pdf_bytes: bytes) -> set[int]:
     CMaps (``<00><ff>``); stdlib literal extraction yields glyph codes, not
     ASCII, so table IDs (0x0400 etc) are missed while prose IDs are found.
     Decoding every ``(...)``/``<...>`` fragment through the largest 1-byte
-    CMap restores them (verified: std 224 + cmap 147 = 302 == snapshot nob
-    302). Other specs use WinAnsi (no ToUnicode tables) or 2-byte
-    Identity-H (Orion, but std nob already captures tables after language
-    stripping, verified 118==118), so this union is a no-op there (no
+    CMap restores them (verified: stdlib+cmap union == snapshot exact-4 set,
+    300 BlueSolar). The CMap join is spaceless (fragments concatenated, no
+    layout gaps), so real table IDs glue with hex-leading neighbours:
+    "0x04080Display" (0x0408 + Display "0" + description) and
+    "0xED8B0Baery" (0xED8B + "0Battery...", verified live) — a strict
+    exact-4 bound misses both (live 298 vs 300). The matcher therefore
+    rejects ONLY exactly-5-hex runs ``(?![0-9A-Fa-f](?![0-9A-Fa-f]))``: a
+    protocol-impossible ``0x12345`` (5 hex + non-hex, 2-byte LE ID field —
+    see :func:`register_id_set_from_text`) contributes nothing, while
+    glued real IDs (6+ hex run) still prefix-match like before. Other specs
+    use WinAnsi (no ToUnicode tables) or 2-byte
+    Identity-H (Orion, but std exact-4 already captures tables after language
+    stripping, verified 116==116), so this union is a no-op there (no
     1-byte cmaps or empty). Skips huge hex blobs (>2000 chars, binary) like
     :func:`extract_pdf_text`. Never raises: returns ``set()`` on failure.
     """
@@ -558,7 +578,7 @@ def _table_cmap_ids(pdf_bytes: bytes) -> set[int]:
                     continue
                 parts.append("".join(table_cmap.get(bb, "") for bb in raw))
         joined = "".join(parts)
-        ids = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})", joined)}
+        ids = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f](?![0-9A-Fa-f]))", joined)}
         ids.discard(0xEFF0)
         return ids
     except Exception:
@@ -570,9 +590,11 @@ def live_register_ids(pdf_bytes: bytes) -> set[int]:
 
     Stdlib text (FlateDecode + regex, no ``pdftotext``) after language
     stripping plus 1-byte table-CMap union (BlueSolar tables), with the
-    same nob/``..``/bare-x/typo handling as :func:`register_id_set_from_text`
-    on both sides (verified exact live==snapshot 2026-09-24:
-    302/118/124/56/151). Empty set means unextractable (caller -> unknown,
+    same bound/``..``/bare-x/typo handling as :func:`register_id_set_from_text`
+    on both sides (exact-4 stdlib; CMap spaceless-join rejects only
+    exactly-5 runs so glued real IDs still rescue — see
+    :func:`_table_cmap_ids`; verified exact live==snapshot 2026-09-25:
+    300/116/124/54/150). Empty set means unextractable (caller -> unknown,
     never stale): a marker-only PDF ("hello world") must skip, not fail as
     removed-everything. Never raises.
     """
@@ -721,8 +743,9 @@ def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]
 
     Snapshot parsers are line-anchored (``pdftotext -layout`` rows) and fail
     on stdlib live joins (single-line, single-space); this anchors only
-    ``0xHHHH ... scale dtype`` globally (no ``\\\\b`` needed, like the ID
-    stage), trying every ID occurrence until one carries a scale+dtype
+    ``0xHHHH ... scale dtype`` globally (exact-4 bound ``(?![0-9A-Fa-f])``
+    like the ID stage: a protocol-impossible 5-hex-digit ID contributes no
+    entry instead of prefix-attributing its scale/dtype to ``0x1234``), trying every ID occurrence until one carries a scale+dtype
     before the next ID (prose mentions like ``register 0x0102. See
     also...`` carry no dtype before the next ID and are skipped, the later
     table row is used). The window is structural — up to the next
@@ -746,7 +769,7 @@ def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]
         if not text:
             return {}
         t = _strip_language_tags(text)
-        pos = [(m.start(), int(m.group(1), 16)) for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})", t)]
+        pos = [(m.start(), int(m.group(1), 16)) for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t)]
         out: dict[int, tuple] = {}
         for idx, (p, rid) in enumerate(pos):
             if rid in out:
@@ -958,8 +981,9 @@ def tolerant_pid_ids(text: str) -> set[int]:
     the whole PID section to a single line with single spaces (``BMV-700
     0x203 BMV-702 0x204 ...``). Line-anchored snapshot parsers fail live
     (0 vs 153). Scoping to ``The product id:`` .. ``These models are phased
-    out.`` plus ``0[xX](HHH[H])`` globally (no ``\\b`` needed, like the ID
-    stage) yields exactly the 153 IDs on both (verified live==snapshot
+    out.`` plus ``0[xX](HHH[H])`` globally (PID scope carries no 5+ digit
+    runs, verified, so no bound needed here; the register-ID stage pins
+    exact-4 separately) yields exactly the 153 IDs on both (verified live==snapshot
     2026-09-24, including 3-digit). A 3-digit PID added/removed with same
     revision (invisible to the 4-digit ID stage) reports STALE here live
     (stronger). PID *names* stay invisible live (footer ``victronenergy.com``
@@ -1406,9 +1430,9 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
        naming the spec, suite SKIPs, never fails).
     3. ID stage (when markers match): the live register/PID ID set (stdlib
        :func:`live_register_ids`: FlateDecode + ToUnicode table decode, no
-       ``pdftotext``) is compared against the snapshot ID set (same nob/
+       ``pdftotext``) is compared against the snapshot ID set (same exact-4/
        ``..``/bare-x/typo handling on both sides, verified exact
-       302/118/124/56/151 live==snapshot 2026-09-24). A table edit keeping
+       300/116/124/54/150 live==snapshot 2026-09-25). A table edit keeping
        Rev/date invisible to markers shows here as added/removed IDs ->
        STALE naming them. Unextractable (empty live set, download failure)
        -> UNKNOWN (loud skip, never fail and never pass on partial

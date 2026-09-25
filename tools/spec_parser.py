@@ -483,7 +483,15 @@ class BlueSolarHEXParser:
         unioning them."""
         lines = self.text.splitlines()
         for i, line in enumerate(lines):
-            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", line):
+            # Exact-4 bound ((?![0-9A-Fa-f]) on both endpoints): the HEX
+            # Get/Set framing carries the register ID as a 2-byte
+            # little-endian field (src/ve_direct/hex.py "<H"; BlueSolar-HEX
+            # §1 ":7F0ED0071"), so a 5-hex-digit endpoint is
+            # protocol-impossible and must not prefix-expand a range (a
+            # "0x12345..0x12346" line yields nothing instead of silently
+            # expanding 0x1234..0x1234). Zero-diff: no snapshot range
+            # endpoint carries 5+ hex digits (verified).
+            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", line):
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
                 # Only register-listing contexts (history/timer/cycle/vreg
                 # headers); never settings Range columns.
@@ -508,10 +516,15 @@ class BlueSolarHEXParser:
             # "60961..60999", "60961...60999") was missed by every parser and
             # scan while counts stayed green (all sides shared the 0x-only
             # range assumption — reproduced synthetically before the fix).
-            # Shape guards (explicit, justified): 3-6 digit groups (widened
-            # from 4-5: calendar years are exactly 4-digit so 3-/6-digit
-            # carry no year collision; probes "999 ..." / "123456 ..." now
-            # expand honestly), separators ".." / "..." / single "-"
+            # Shape guards (explicit, justified): 3-7 digit groups (widened
+            # from 4-5: calendar years are exactly 4-digit so 3-/6-/7-digit
+            # carry no year collision; probes "999 ..." / "123456 ..." /
+            # "1234567 ..." now expand honestly; 7-digit false-positive
+            # denylist: HEX-frame colon-led runs (":3020050", ":1000351")
+            # miss the line-leading ``^`` shape and carry no history word,
+            # Text-mode PCB part numbers ("9492437") live outside the HEX
+            # snapshots entirely — verified zero 7-digit hits on snapshots),
+            # separators ".." / "..." / single "-"
             # (mirroring the hex ".." plus the natural decimal "-" of the
             # probe; "--" never a range), ``(?<![\w\-])`` so signed Range
             # cells (BMV 0x1034 "-32768..32767") and hex tails ("0x1000" —
@@ -525,7 +538,7 @@ class BlueSolarHEXParser:
             # so nothing expands today. Decimal ranges are always history
             # records here (timer events are hex-documented Get/Set words,
             # never decimal).
-            for m in re.finditer(r"(?<![\w\-])(\d{3,6})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,6})(?!\w)", line):
+            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", line):
                 a, b = int(m.group(1)), int(m.group(2))
                 if not re.search(r"[Rr]egister|vreg|history|History|Timer|Cycle|0[xX]104F|0[xX]1050", line):
                     continue
@@ -574,15 +587,16 @@ class BlueSolarHEXParser:
             # guard (mirroring the hex multi-line branch, which has none —
             # the "..." start shape itself is the guard; the ``^`` anchor
             # already excludes signed cells like "-32768..."). Widened to
-            # 3-/6-digit (same year-collision-free justification as inline
-            # above; probes "999 ..." / "123456 ..." expand honestly).
+            # 3-/6-/7-digit (same year-collision-free justification as inline
+            # above; probes "999 ..." / "123456 ..." / "1234567 ..." expand
+            # honestly).
             # Zero-diff: no decimal "..." start line exists in any snapshot
-            # (verified, including 3-/6-digit).
-            dm = re.match(r"^\s*(\d{3,6})\s*\.\.\.\s*$", line)
+            # (verified, including 3-/6-/7-digit).
+            dm = re.match(r"^\s*(\d{3,7})\s*\.\.\.\s*$", line)
             if dm:
                 a = int(dm.group(1))
                 for j in range(i + 1, min(i + 4, len(lines))):
-                    m2 = re.match(r"^\s*(\d{3,6})\s*$", lines[j])
+                    m2 = re.match(r"^\s*(\d{3,7})\s*$", lines[j])
                     if m2:
                         b = int(m2.group(1))
                         for rid in _expand_id_range(a, b):
@@ -708,18 +722,23 @@ class BlueSolarHEXParser:
                 # "A&B" now parse honestly; zero-diff via rid-in-regs).
                 # Symbol-first ("60961 *Boost record") takes the same
                 # ``\S.*?`` widening as the hex branch above (same
-                # justification and zero-diff there). Widened to 3-/6-digit
+                # justification and zero-diff there). Widened to 3-/6-/7-digit
                 # (probes "999 Future history record" / "123456 Future
-                # record" missed everywhere while "60961" hit — reproduced
-                # before fix): calendar years are exactly 4-digit so 3-/6-
-                # digit carry no year collision; 0-255 (.e.g snapshot
+                # record" / "1234567 Future record" missed everywhere while
+                # "60961" hit — reproduced before fix): calendar years are
+                # exactly 4-digit so 3-/6-/7-digit carry no year collision;
+                # 7-digit false-positive denylist: HEX-frame colon-led runs
+                # (":3020050") miss the ``^``-anchored shape and Text-mode
+                # PCB part numbers live outside the HEX snapshots and outside
+                # this history region — verified zero 7-digit hits here.
+                # 0-255 (.e.g snapshot
                 # history-region "245 WAKE-UP" state rows) are CS/ERR/value
                 # domain, never decimal register IDs (verified: all snapshot
                 # 3-digit line-leading hits fall in 0-255), so 3-digit IDs
-                # <=255 skip here while 256-999 and all 6-digit parse
+                # <=255 skip here while 256-999 and all 6-/7-digit parse
                 # honestly. Zero-diff: history-region 3-digit hits are all
-                # <=255 (skipped) and no 6-digit line exists (verified).
-                dm = re.match(r"^\s*(\d{3,6})\s+(\S.*?)\s*$", line)
+                # <=255 (skipped) and no 6-/7-digit line exists (verified).
+                dm = re.match(r"^\s*(\d{3,7})\s+(\S.*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
@@ -746,11 +765,17 @@ class BlueSolarHEXParser:
     def _parse_detail_mentions(self, regs: Dict[int, ParsedRegister]) -> None:
         """Collect IDs referenced as ``(register 0xXXXX)`` detail headers so
         nothing described outside the 1.1 table is silently dropped."""
+        # Exact-4 bound on every ID (outer and inner): the HEX Get/Set
+        # framing carries the register ID as a 2-byte little-endian field
+        # (src/ve_direct/hex.py "<H"; BlueSolar-HEX §1 ":7F0ED0071"), so a
+        # 5-hex-digit mention is protocol-impossible and must not
+        # prefix-collect ``0x1234`` out of "register 0x12345". Zero-diff:
+        # no snapshot detail mention carries 5+ hex digits (verified).
         for m in re.finditer(
-            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{4}(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{4})*",
+            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f]))*",
             self.text,
         ):
-            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}", m.group(0))]
+            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])", m.group(0))]
             for rid in ids:
                 if rid in regs or rid in DOC_TYPO_REGISTER_IDS:
                     continue
@@ -874,7 +899,11 @@ class OrionXSHEXParser:
     def _parse_id_ranges(self, regs: Dict[int, ParsedRegister]) -> None:
         """Expand inline ``0x1070..0x1098`` cycle-history ranges."""
         for line in self.text.splitlines():
-            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", line):
+            # Exact-4 bound on both endpoints (same protocol justification
+            # as the BlueSolar branch: 2-byte LE ID field, so a 5-hex-digit
+            # endpoint is impossible and must not prefix-expand).
+            # Zero-diff: no snapshot range endpoint carries 5+ hex digits.
+            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", line):
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
                 if not re.search(r"[Rr]egister|history|History|Cycle", line):
                     continue
@@ -893,12 +922,12 @@ class OrionXSHEXParser:
                         )
             # Decimal range mirror (same context guard, same 64-register
             # cap; see the BlueSolar branch for the full shape-guard
-            # justification, widened to 3-/6-digit there). Probe "History
+            # justification, widened to 3-/6-/7-digit there). Probe "History
             # registers 60961-60999 table" was missed on all sides before
             # the fix. Zero-diff: no decimal range line with history context
             # exists in any snapshot (verified, incl. 3-digit "174..372"
             # Range cells which lack the context guard).
-            for m in re.finditer(r"(?<![\w\-])(\d{3,6})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,6})(?!\w)", line):
+            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", line):
                 a, b = int(m.group(1)), int(m.group(2))
                 if not re.search(r"[Rr]egister|history|History|Cycle", line):
                     continue
@@ -964,10 +993,11 @@ class OrionXSHEXParser:
                 # the hex branch above and the BlueSolar handler).
                 # Symbol-first takes the same ``\S.*?`` widening (same
                 # justification and zero-diff as the hex branch above).
-                # Widened to 3-/6-digit like the BlueSolar handler (same
-                # 0-255 state-domain skip; probes "999 ..."/"123456 ..."
-                # parse honestly, snapshot "245 WAKE-UP" rows skip).
-                dm = re.match(r"^\s*(\d{3,6})\s+(\S.*?)\s*$", line)
+                # Widened to 3-/6-/7-digit like the BlueSolar handler (same
+                # 0-255 state-domain skip; probes "999 ..."/"123456 ..."/
+                # "1234567 ..." parse honestly, snapshot "245 WAKE-UP" rows
+                # skip).
+                dm = re.match(r"^\s*(\d{3,7})\s+(\S.*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
@@ -1002,11 +1032,15 @@ class OrionXSHEXParser:
         if hist_start < 0:
             hist_start = self.text.find("Historical data")
         remote_start = self.text.find("Remote control")
+        # Exact-4 bound on every ID (outer and inner): same protocol
+        # justification as the BlueSolar detail handler above (2-byte LE ID
+        # field — a 5-hex-digit mention is impossible and must not
+        # prefix-collect). Zero-diff: no snapshot mention carries 5+ hex.
         for m in re.finditer(
-            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{4}(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{4})*",
+            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f]))*",
             self.text,
         ):
-            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}", m.group(0))]
+            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])", m.group(0))]
             # Inline ".." ranges inside mentions are expanded by
             # _parse_id_ranges; keep only single IDs here.
             if ".." in m.group(0) or "..." in m.group(0):
