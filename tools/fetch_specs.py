@@ -440,7 +440,11 @@ def register_id_set_from_text(text: str) -> set[int]:
     kills that range instead of prefix-expanding it). Bare-x rescue
     (``xEDE0`` typo, missing leading 0) on both; discard
     ``0xEFF0`` typo (means 0xEDF0, cf. spec_parser.DOC_TYPO_REGISTER_IDS)
-    on both. Never raises (empty input -> empty set; caller treats empty
+    on both. Split-ID rescues (prefix ``0x HHHH`` + mid-token ``0xED E0``,
+    exactly-4-hex total, dtype-near table-row guard mirroring the
+    snapshot-side _split_typed_row/scraper guards) on both: a live-added
+    split-printed register compares STALE naming the ID instead of staying
+    FRESH. Never raises (empty input -> empty set; caller treats empty
     live as unextractable, never stale).
     """
     try:
@@ -475,6 +479,33 @@ def register_id_set_from_text(text: str) -> set[int]:
         for m in re.finditer(r"(?<![0-9A-Za-z])x([0-9A-Fa-f]{4})\b", t, flags=re.IGNORECASE):
             try:
                 ids.add(int(m.group(1), 16))
+            except Exception:
+                continue
+        # Split-ID rescues (mirror snapshot-side _split_typed_row plus both
+        # test scrapers): prefix "0x HHHH" and mid-token "0xED E0",
+        # exactly-4-hex total, table-row guard mirroring the snapshot side
+        # (a dtype tail near the candidate — prose never carries one, so
+        # "(register 0xED E0)" stays out while "0xED E0 ... un16 V" and
+        # "0x EDF0 ... un16" rescue). Global (not line-anchored): stdlib
+        # live text joins layout columns (single-line), so line-leading
+        # would miss mid-text splits while the dtype window still proves a
+        # table row. Single literal space for the mid split (a column gap
+        # is 2+, so "0xED  E0" stays out like _split_typed_row).
+        # Zero-diff: no snapshot carries either form with a nearby dtype
+        # (verified), so no prose false positives.
+        _dtype_near = re.compile(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE)
+        for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t):
+            try:
+                if _dtype_near.search(t[m.end():m.end() + 120]):
+                    ids.add(int(m.group(1), 16))
+            except Exception:
+                continue
+        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])", t):
+            try:
+                if len(m.group(1)) + len(m.group(2)) != 4:
+                    continue
+                if _dtype_near.search(t[m.end():m.end() + 120]):
+                    ids.add(int(m.group(1) + m.group(2), 16))
             except Exception:
                 continue
         ids.discard(0xEFF0)
@@ -590,7 +621,7 @@ def live_register_ids(pdf_bytes: bytes) -> set[int]:
 
     Stdlib text (FlateDecode + regex, no ``pdftotext``) after language
     stripping plus 1-byte table-CMap union (BlueSolar tables), with the
-    same bound/``..``/bare-x/typo handling as :func:`register_id_set_from_text`
+    same bound/    ``..``/bare-x/typo handling as :func:`register_id_set_from_text`
     on both sides (exact-4 stdlib; CMap spaceless-join rejects only
     exactly-5 runs so glued real IDs still rescue — see
     :func:`_table_cmap_ids`; verified exact live==snapshot 2026-09-25:

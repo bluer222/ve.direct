@@ -1926,6 +1926,185 @@ class TestSpecParsers(unittest.TestCase):
                 assert vrow is not None
                 self.assertEqual(vrow[0], 0xEDE0)
 
+    def test_live_split_id_rescue(self):
+        """Live-side split-ID rescue (cycle-32 issue 1): the live matcher
+        missed split-ID print forms while snapshot _split_typed_row and both
+        test scrapers rescued them, so a live-added split-printed register
+        stayed FRESH on all live stages. Probes ``0xED E0`` (mid-token) and
+        ``0x EDF0`` (prefix) now resolve on the live side like the glued
+        control; prose without a dtype tail and double-space gaps stay out.
+        End-to-end: a live PDF gaining a split-printed ID reports STALE
+        naming it. Zero-diff: no snapshot carries either form with a nearby
+        dtype, and live==snapshot still holds on all 5 real PDFs."""
+        # Unit probes (live matcher directly).
+        self.assertEqual(
+            register_id_set_from_text("0xED E0 Battery 0.1 un16 V"), {0xEDE0}
+        )
+        self.assertEqual(
+            register_id_set_from_text("0x EDF0 Battery 0.1 un16 V"), {0xEDF0}
+        )
+        # Control: glued form resolves identically.
+        self.assertEqual(
+            register_id_set_from_text("0xEDF0 Battery 0.1 un16 V"), {0xEDF0}
+        )
+        # Guards: prose without a dtype tail stays out; a column gap (2+)
+        # is not a mid-token split.
+        self.assertEqual(
+            register_id_set_from_text("(register 0xED E0) prose mention"), set()
+        )
+        self.assertEqual(
+            register_id_set_from_text("(register 0x EDF0) prose mention"), set()
+        )
+        self.assertEqual(
+            register_id_set_from_text("0xED  E0    Split inside  0.1  un16  V"),
+            set(),
+        )
+        # Zero-diff pin: no snapshot carries either split form with a
+        # nearby dtype (so the rescue adds nothing today). Mirrors the
+        # live rescue guards exactly (exactly-4 total + dtype within 120;
+        # a bare "0xFF for un32 ..." is 2+1=3, not 4, so it stays out).
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                text = self.raw_texts[key]
+                hits = []
+                for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", text):
+                    if re.search(
+                        r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+                        text[m.end():m.end() + 120],
+                        re.IGNORECASE,
+                    ):
+                        hits.append(m.group(0))
+                for m in re.finditer(
+                    r"0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])", text
+                ):
+                    if len(m.group(1)) + len(m.group(2)) != 4:
+                        continue
+                    if re.search(
+                        r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+                        text[m.end():m.end() + 120],
+                        re.IGNORECASE,
+                    ):
+                        hits.append(m.group(0))
+                self.assertEqual(hits, [], f"{key} snapshot gained split-ID prose")
+        # End-to-end: live PDF gaining a split-printed ID (0x9999 only in
+        # split form, markers unchanged) reports STALE naming it.
+        # Self-contained (this class has no freshness PDF helpers): the
+        # crafted PDF embeds real snapshot markers plus the snapshot's own
+        # glued IDs and one split-only row, with newlines preserved so the
+        # dtype window proves a table row.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            for key in fetch_specs.OFFICIAL_SPECS:
+                text = (self.specs_dir / f"{key}.txt").read_text(errors="ignore")
+                (tmpdir / f"{key}.txt").write_text(text)
+            expected = {
+                key: snapshot_revision_info(
+                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                )
+                for key in fetch_specs.OFFICIAL_SPECS
+            }
+            snap_ids = {
+                key: register_id_set_from_text(
+                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                )
+                for key in fetch_specs.OFFICIAL_SPECS
+            }
+            self.assertNotIn(0x9999, snap_ids["BlueSolar-HEX-protocol"])
+
+            def _pdf_bytes(marker_text: str) -> bytes:
+                parts = []
+                for ch in marker_text:
+                    if ch in "()\\":
+                        parts.append(f"(\\{ch})")
+                    else:
+                        parts.append(f"({ch})")
+                content = ("BT [ " + "".join(f"{p}5 " for p in parts) + "] TJ ET").encode("latin-1")
+                comp = zlib.compress(content)
+                return (
+                    b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+                    b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+                    b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >> endobj\n"
+                    b"4 0 obj << /Length " + str(len(comp)).encode() + b" /Filter /FlateDecode >> stream\n"
+                    + comp + b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF"
+                )
+
+            def _ids_pdf(label, date, ids) -> bytes:
+                bits = [
+                    "Revision Log",
+                    "Document history",
+                    "Changes:",
+                    label or "",
+                    date.strftime("%d-%m-%Y"),
+                    date.isoformat(),
+                    date.strftime("%d %B %Y"),
+                ]
+                if label and "Initial version" in label:
+                    bits.append("Initial version")
+                bits.append(" ".join(f"0x{i:04X}" for i in sorted(ids)))
+                return _pdf_bytes("  ".join(b for b in bits if b))
+
+            pdfs = {}
+            for key, (label, date) in expected.items():
+                if key == "BlueSolar-HEX-protocol":
+                    bits = [
+                        "Revision Log",
+                        "Document history",
+                        "Changes:",
+                        label or "",
+                        date.strftime("%d-%m-%Y"),
+                        date.isoformat(),
+                        date.strftime("%d %B %Y"),
+                    ]
+                    if label and "Initial version" in label:
+                        bits.append("Initial version")
+                    bits.append(
+                        " ".join(f"0x{i:04X}" for i in sorted(snap_ids[key]))
+                    )
+                    bits.append("\n0x99 99 Future register 0.1 un16 V\n")
+                    pdfs[key] = _pdf_bytes("  ".join(b for b in bits if b))
+                else:
+                    pdfs[key] = _ids_pdf(label, date, snap_ids[key])
+            newer = {
+                key: datetime.datetime.combine(
+                    date + datetime.timedelta(days=10), datetime.time(12, 0),
+                    tzinfo=datetime.timezone.utc,
+                )
+                for key, (_label, date) in expected.items()
+            }
+
+            def _fake_header(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return newer[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            def _fake_download(url, timeout=15.0):
+                for key, info in fetch_specs.OFFICIAL_SPECS.items():
+                    if info["url"] == url:
+                        return pdfs[key]
+                raise AssertionError(f"unexpected url {url}")
+
+            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
+                    status, detail = snapshot_freshness_status(tmpdir)
+                    self.assertEqual(status, "stale", detail)
+                    self.assertIn("0x9999", detail)
+                    self.assertIn("added", detail)
+        # Zero-diff live==snapshot on all 5 real PDFs (network; skip offline).
+        specs_dir = Path(__file__).resolve().parent / "specs"
+        for key, info in fetch_specs.OFFICIAL_SPECS.items():
+            with self.subTest(live=key):
+                snap_text = (specs_dir / f"{key}.txt").read_text(errors="ignore")
+                want = register_id_set_from_text(snap_text)
+                try:
+                    pdf_bytes = download_pdf_bytes(info["url"], timeout=30.0)
+                except OSError as e:
+                    self.skipTest(f"live download unreachable, skipping: {e}")
+                got = live_register_ids(pdf_bytes)
+                if not got:
+                    self.skipTest(f"{key} live IDs unextractable, skipping")
+                self.assertEqual(got, want, f"{key} live==snapshot broke")
+
     def test_bluesolar_bare_x_rescue_symmetry(self):
         """BlueSolar bare-``x`` typo asymmetry: probe ``xEDE0 Battery low temp
         level 0.01 un16 V`` in BlueSolar §1.1 was missed by the BlueSolar
@@ -2339,6 +2518,44 @@ class TestSpecParsers(unittest.TestCase):
         factored = BMV7xxHEXParser("hdr\n0x0303     Foo               -         un32        0.01 Hz\nftr")
         self.assertEqual(factored.parse_registers()[0x0303].unit, "Hz")
         self.assertEqual(factored.unknown_units, [])
+
+    def test_bmv_short_layout_unit_qualifier_loud(self):
+        """BMV short-layout parenthesized Unit qualifier (cycle-32 issue 2):
+        probe ``0xED8E Power 1 un16 0.01 V (peak)`` yielded unit 'V' with
+        empty unknown_units/unknown_scales — byte-identical to the
+        qualifier-less control — because the unknown-units scan was guarded
+        by ``if unit is None``, so once 'V' was captured the ``(peak)``
+        token was never examined (BlueSolar/Orion section-table gates and
+        the BMV settings gate all record such qualifiers loudly; only this
+        path didn't). Trailing qualifier tokens are now examined even when
+        a unit was captured, routing the parenthesized remainder into the
+        loud gate while unit stays 'V' (schema side unchanged). Regression
+        with the probe + control. Zero-diff on snapshots."""
+        from spec_parser import BMV7xxHEXParser
+
+        # Snapshot stays exact (no unknowns on current docs).
+        self.assertEqual(self.specs["bmv"].unknown_units, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        # Probe: qualifier records loudly while unit stays 'V'.
+        parser = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 0.01 V (peak)\nftr")
+        probe = parser.parse_registers()[0xED8E]
+        self.assertEqual(probe.unit, "V")
+        self.assertAlmostEqual(probe.scale, 0.01)
+        self.assertEqual(probe.data_type, "un16")
+        self.assertEqual(parser.unknown_scales, [])
+        self.assertEqual(len(parser.unknown_units), 1)
+        self.assertEqual(parser.unknown_units[0][0], 0xED8E)
+        self.assertIn("(peak)", parser.unknown_units[0][1])
+        # Control: qualifier-less row stays silent and identical on the
+        # schema side (unit/scale/dtype equal, no records).
+        ctrl = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 0.01 V\nftr")
+        control = ctrl.parse_registers()[0xED8E]
+        self.assertEqual(control.unit, "V")
+        self.assertAlmostEqual(control.scale, 0.01)
+        self.assertEqual(control.data_type, "un16")
+        self.assertEqual(ctrl.unknown_units, [])
+        self.assertEqual(ctrl.unknown_scales, [])
+        self.assertEqual(probe.unit, control.unit)
 
     def test_bmv_dtype_anchor_structural_tail(self):
         """BMV anchor-first-wins truncated descriptions with dtype-like words:

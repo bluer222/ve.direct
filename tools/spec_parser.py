@@ -1487,6 +1487,43 @@ class BMV7xxHEXParser:
                         if _UNKNOWN_UNIT_CAND_RE.search(shape):
                             self.unknown_units.append((rid, cand))
                             break
+                else:
+                    # Trailing-qualifier loud gate (BlueSolar/Orion
+                    # section-table and BMV settings pattern): a
+                    # parenthesized qualifier after a captured unit ("0.01 V
+                    # (peak)") was silently lost — unit "V" with both gates
+                    # empty, byte-identical to the qualifier-less control —
+                    # because the scan above is guarded by `if unit is
+                    # None`. Trailing qualifier tokens are examined even
+                    # when a unit was captured; the parenthesized remainder
+                    # (from the first paren token onward, covering
+                    # multi-word "(peak load)") records loudly while unit
+                    # stays as today (schema side unchanged, gate is loud).
+                    # Honest scale cells ("(0.1)" parsed above) and
+                    # scale-gated unknowns ("(1x)" in unknown_scales) are
+                    # never qualifiers: skipped, never recorded here (pinned
+                    # by test_bmv_short_layout_parenthesized_scale).
+                    # Zero-diff: no snapshot short-layout rest carries
+                    # parens (verified), so no snapshot row records.
+                    for qi, p in enumerate(rest):
+                        if "(" not in p and ")" not in p:
+                            continue
+                        cand = p.strip()
+                        if (rid, cand) in self.unknown_scales:
+                            break
+                        tried = _strip_one_paren(cand)
+                        sm = re.match(
+                            r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$",
+                            tried,
+                        )
+                        if sm and not (sm.group(2) and re.fullmatch(r"\d+", sm.group(1))):
+                            continue  # honest factor (e.g. "(0.1)"), not a qualifier
+                        if cand in ("V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"):
+                            continue
+                        qual = " ".join(q.strip() for q in rest[qi:]).strip()
+                        if qual and (rid, qual) not in self.unknown_units:
+                            self.unknown_units.append((rid, qual))
+                        break
 
             if _WRITE_ONLY_RE.search(desc):
                 access = "WRITE_ONLY"
