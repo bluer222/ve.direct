@@ -556,6 +556,36 @@ def scrape_decimal_ids(text: str) -> set[int]:
     Verified: zero hits on BlueSolar/BMV/Phoenix snapshots (before/after);
     Orion yields exactly the real ``xEDE0`` typo via the bare-x half below
     (parsed honestly — agreement, not divergence).
+    Symbol-FIRST descriptions (``60961 *Boost record``: symbol, not letter,
+    first) were still missed on every side after that fix (letter-start
+    required — reproduced synthetically before this fix). All three
+    description starts below (line-leading typed, mid-line typed,
+    dtype-less ID-only) now take ``\\S`` (any non-space start, CS/ERR
+    structural-name precedent) with the same structural denylists, so a
+    symbol-first row scrapes honestly. Zero-diff: no snapshot line carries
+    a line-leading decimal ID at all (verified), and no snapshot mid-line
+    decimal carries a dtype tail, so the widened starts add no hits —
+    snapshot scans stay exactly EXPECTED_DECIMAL_SCAN_HITS.
+    Decimal RANGES mirror the hex ``..``/``...`` range expansion below
+    (same-shape guards, over-inclusive scraper side): a future decimal-only
+    range ("History registers 60961-60999 table", "60961..60999",
+    "60961...60999") was missed by every parser and scan while counts
+    stayed green (all sides shared the ``0x``-only range assumption —
+    reproduced synthetically before the fix). Inline decimal ranges expand
+    with the scraper's permissive 1024-span cap (no register-context guard,
+    like the hex scraper's guard-free inline expansion — over-inclusion is
+    the safe direction) while the parsers expand only history-context lines
+    up to 64 registers (same guards as their hex branches); the span/gap
+    deltas are the divergence axes (see the decimal-range test). Shape
+    guards (explicit, justified): 4-5 digit groups, separators ".." / "..."
+    / single "-" ("--" never a range), ``(?<![\\w\\-])`` so signed Range
+    cells (BMV 0x1034 "-32768..32767") and hex tails ("0x1000") never match,
+    ``(?!\\w)`` so trailing letters never match; the signed BMV cell is
+    doubly excluded (span 65535 > 1024). Multi-line decimal ``...`` starts
+    scan 8 lines ahead (mirroring the hex scraper's 8-vs-3 overscan while
+    the parsers scan 3). Verified zero-diff: no decimal range line exists
+    in any snapshot (the BMV signed cell excluded as above), so snapshot
+    scans stay exactly EXPECTED_DECIMAL_SCAN_HITS.
     The bare-x typo half (``(?<!\\w)[xX]HHHH``, missing leading 0),
     symmetric with the Orion/BlueSolar parser rescues and the hex
     scraper's bare-x rescue above (same doc-typo justification): the
@@ -573,8 +603,10 @@ def scrape_decimal_ids(text: str) -> set[int]:
         if "1.2 Asynchronous items" in line:
             in_history = False
         # Line-leading table-shaped decimal (original coverage).
+        # Description start is ``\S`` (any non-space): symbol-first rows
+        # ("60961 *Boost record") scrape honestly (see docstring).
         m = re.match(
-            r"^\s*(\d{4,5})\s+[A-Z].*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"^\s*(\d{4,5})\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         )
@@ -582,8 +614,9 @@ def scrape_decimal_ids(text: str) -> set[int]:
             ids.add(int(m.group(1)))
         # Mid-line widening (justified above): any 4-5 digit run with a dtype
         # tail on the same line. Stays exact (zero hits) on snapshots.
+        # Description start is ``\S`` (symbol-first, see docstring).
         for m_mid in re.finditer(
-            r"(?<!\w)(\d{4,5})\s+[A-Za-z].*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{4,5})\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         ):
@@ -591,7 +624,8 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # Dtype-less ID-only widening (justified above): line-leading
         # decimal + open-charset description, no dtype required. Year
         # denylist applies only outside history regions (see above).
-        m_tail = re.match(r"^\s*(\d{4,5})\s+([A-Za-z].*?)\s*$", line)
+        # Description start is ``\S`` (symbol-first, see docstring).
+        m_tail = re.match(r"^\s*(\d{4,5})\s+(\S.*?)\s*$", line)
         if m_tail:
             rid = int(m_tail.group(1))
             if 1900 <= rid <= 2100 and not in_history:
@@ -604,6 +638,31 @@ def scrape_decimal_ids(text: str) -> set[int]:
             ids.add(int(m3.group(1), 16))
         for m4 in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{4})\b", line):
             ids.add(int(m4.group(1), 16))
+        # Decimal range mirror of the hex scraper's guard-free inline
+        # expansion (same shape guards as the parser branches, scraper-side
+        # cap 1024 instead of the parsers' 64 — the span divergence axis;
+        # no register-context guard here, over-inclusion is the safe
+        # direction). Zero-diff: no snapshot decimal range (the BMV signed
+        # "-32768..32767" cell is excluded by the signed lookbehind and the
+        # span cap alike).
+        for m5 in re.finditer(r"(?<![\w\-])(\d{4,5})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{4,5})(?!\w)", line):
+            a, b = int(m5.group(1)), int(m5.group(2))
+            if 0 < b - a <= 1024:
+                ids.update(range(a, b + 1))
+    # Multi-line decimal "..." mirror of the hex scraper's 8-line overscan
+    # (parsers scan 3 — the gap divergence axis). Zero-diff: no snapshot
+    # decimal "..." start line.
+    _lines = text.splitlines()
+    for i, line in enumerate(_lines):
+        if re.match(r"^\s*\d{4,5}\s*\.\.\.\s*$", line):
+            a = int(re.match(r"^\s*(\d{4,5})", line).group(1))  # type: ignore[union-attr]
+            for nxt in _lines[i + 1 : i + 9]:
+                m6 = re.match(r"^\s*(\d{4,5})\s*$", nxt)
+                if m6:
+                    b = int(m6.group(1))
+                    if 0 < b - a <= 1024:
+                        ids.update(range(a, b + 1))
+                    break
     return ids
 
 
@@ -1338,6 +1397,187 @@ class TestSpecParsers(unittest.TestCase):
                     with self.subTest(hex_parser=cls.__name__):
                         probe_hex = cls(text_hex).parse_registers()[0x104F]
                         self.assertEqual(probe_hex.description, desc)
+
+    def test_decimal_id_range_expansion(self):
+        """Decimal ID ranges were missed on every side: probe ``History
+        registers 60961-60999 table`` yielded an empty parser, an empty hex
+        scrape, and an empty decimal scan — green while a future decimal
+        range is missed (all sides shared the ``0x``-only range assumption
+        — reproduced synthetically before the fix). Parsers (BlueSolar +
+        Orion history branches) now expand decimal ``-``/``..``/``...``
+        ranges with the same context guard and 64-register cap as their hex
+        branches, and the decimal scraper expands them with its permissive
+        1024-span cap (no context guard, like the hex scraper) plus an 8-line
+        multi-line overscan (parsers scan 3) — so the probe passes honestly
+        on every side while span/gap drift diverges loudly instead of
+        agreed-missing. Zero-diff: no decimal range line exists in any
+        snapshot (signed BMV Range cells and hex tails excluded by guards),
+        so snapshot scans stay exactly EXPECTED_DECIMAL_SCAN_HITS and counts
+        stay pinned elsewhere."""
+        from spec_parser import OrionXSHEXParser
+
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+        # Honest pass on the probe shapes (hyphen + dotdot + dotdotdot).
+        for shape in ("60961-60999", "60961..60999", "60961...60999"):
+            with self.subTest(shape=shape):
+                line = f"History registers {shape} table\n"
+                scraped = scrape_decimal_ids(line)
+                self.assertEqual(len(scraped), 39)
+                self.assertIn(60961, scraped)
+                self.assertIn(60999, scraped)
+                # Hex scraper misses by design (no ``0x`` prefix) — the
+                # decimal scan is the loud side for decimal ranges.
+                self.assertNotIn(60961, scrape_doc_ids(line))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(parser=cls.__name__):
+                        regs = cls(line).parse_registers()
+                        block = [r for r in regs if 60961 <= r <= 60999]
+                        self.assertEqual(len(block), 39)
+                        self.assertEqual(regs[60980].data_type, "struct")
+                        self.assertEqual(regs[60980].access, "R")
+                        self.assertIsNone(regs[60980].scale)
+        # Span divergence: a 300-register range is scraped (1024 cap) but
+        # unparsed (64 cap) — scraped-but-unparsed, failing loudly via
+        # reverse-coverage instead of agreed-missing.
+        wide = "History registers 60961-61261 table\n"
+        self.assertIn(61100, scrape_decimal_ids(wide))
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(span=cls.__name__):
+                self.assertNotIn(61100, cls(wide).parse_registers())
+        # Gap divergence: a multi-line decimal range with a 5-line gap is
+        # scraped (8-line overscan) but unparsed (3-line window).
+        gap = "\n".join(["60961 ...", *["some intervening layout line"] * 4, "60963"])
+        self.assertIn(60962, scrape_decimal_ids(gap))
+        self.assertNotIn(60962, BlueSolarHEXParser(gap).parse_registers())
+        # Controls: signed Range cells and dates never expand (shape
+        # guards); the scraper stays over-inclusive on purpose (no context
+        # guard, like the hex scraper), so prose ranges diverge loudly via
+        # reverse-coverage instead of agreed-missing.
+        self.assertEqual(
+            scrape_decimal_ids(" 0x1034     User Current Zero (read only)            -      Sn16       -32768..32767          0        1     ADC count\n"),
+            set(),
+        )
+        self.assertEqual(scrape_decimal_ids("15-11-2021 some change\n"), set())
+        self.assertEqual(
+            BlueSolarHEXParser("History registers 60961-61261 table\n").parse_registers().get(61100),
+            None,
+        )
+
+    def test_id_only_symbol_first_description_rescue(self):
+        """Symbol-as-FIRST-char in ID-only rows was missed on every side:
+        probe ``60961 *Boost record`` was missed by both history parsers
+        (letter-start required) and both scans (the hex scrape has no such
+        row by design; the decimal dtype-less scan required ``[A-Za-z]``
+        first) while EXPECTED_COUNTS, reverse-coverage, and the empty-pin
+        stayed green — reproduced synthetically before the fix (the earlier
+        symbol fix covered symbol-AFTER-letter only: ``Future:`` /
+        ``Future+`` / ``A&B``). Scraper + both parsers now take the
+        description as ``\\S.*?`` (any non-space start, CS/ERR
+        structural-name precedent) with the same structural denylists, so
+        the probes pass honestly with exact descriptions on all sides.
+        Zero-diff: no snapshot history-region ID-only line starts with a
+        symbol (verified) and no snapshot line carries a line-leading
+        decimal ID at all, so snapshot scans stay exactly
+        EXPECTED_DECIMAL_SCAN_HITS and counts stay pinned elsewhere."""
+        from spec_parser import OrionXSHEXParser
+
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+        for desc in ("*Boost record", "+Boost record", "#1 Boost record"):
+            with self.subTest(desc=desc):
+                line = f"60961      {desc}\n"
+                # Decimal scan catches the ID-only row (hex scrape misses by
+                # design: no ``0x`` prefix — the dtype-less scan is the loud
+                # side for decimal IDs, as with the plain/symbol probes).
+                self.assertEqual(scrape_decimal_ids(line), {60961})
+                self.assertNotIn(60961, scrape_doc_ids(line))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(parser=cls.__name__):
+                        text = (
+                            "Restore factory defaults\n"
+                            + line
+                            + "1.2 Asynchronous items\n"
+                        )
+                        probe = cls(text).parse_registers()[60961]
+                        self.assertEqual(probe.description, desc)
+                        self.assertIsNone(probe.scale)
+                        self.assertEqual(probe.access, "R")
+                # Hex ID-only branch carries the same widening (exact desc;
+                # hex scraper already caught it via the bare ID).
+                text_hex = (
+                    "Restore factory defaults\n"
+                    f"0x104F      {desc}\n"
+                    "1.2 Asynchronous items\n"
+                )
+                self.assertIn(0x104F, scrape_doc_ids(text_hex))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(hex_parser=cls.__name__):
+                        probe_hex = cls(text_hex).parse_registers()[0x104F]
+                        self.assertEqual(probe_hex.description, desc)
+        # Controls: range/table/prose shapes still skip the single-row
+        # ID-only path (range lines expand via the range path instead —
+        # covered above — never as one row).
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(skip=cls.__name__):
+                text = (
+                    "Restore factory defaults\n"
+                    "0x1050 ...\n"
+                    "1.2 Asynchronous items\n"
+                )
+                self.assertNotIn(0x1050, cls(text).parse_registers())
+
+    def test_bmv_settings_parenthesized_unit_loud(self):
+        """BMV settings-branch parenthesized units dropped silently: probe
+        ``0x0100 Product Foo 1 un16 0..1 (OFF, ON) 0 1 V (peak)`` yielded
+        unit None with empty unknown_units/unknown_scales, excused by
+        SCALE_NONE_ALLOW/UNIT_NONE_ALLOW for allowlisted 0x0100 — green
+        while the ``(peak)`` qualifier is missed (the short-layout branch
+        records unknown_units and the settings-Step branch strips paren
+        scales, but this settings-branch unit path did neither —
+        reproduced synthetically before the fix). Parenthesized Unit
+        remainders now record loudly via the unknown_units gate (even on
+        allowlisted IDs, following the unknown-scale gate pattern) while
+        unit stays None as today. Mechanism conventions checked first: the
+        comparison normalizer strips parenthetical suffixes, and the only
+        snapshot parenthesized settings-Unit cell is the 0xEEF9 version
+        format ``HEX (AA.BB)`` (a format notation, not a physical unit with
+        a qualifier) — denylisted exact so the gate stays zero-diff while a
+        future ``V (peak)``-style qualifier records loudly. Regression test
+        with the probe."""
+        from spec_parser import BMV7xxHEXParser
+
+        # Zero-diff: snapshot gates empty; the denylisted format cell parses
+        # as today (unit None, no record); ordinary settings units unchanged.
+        self.assertEqual(self.specs["bmv"].unknown_units, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        self.assertIsNone(self.bmv_regs[0xEEF9].unit)
+        self.assertEqual(self.bmv_regs[0x1000].unit, "Ah")
+        # Probe on allowlisted 0x0100: unit None (as today) but recorded
+        # loudly — both allowlists would otherwise excuse the drop.
+        parser = BMV7xxHEXParser("hdr\n0x0100 Product Foo 1 un16 0..1 (OFF, ON) 0 1 V (peak)\nftr")
+        probe = parser.parse_registers()[0x0100]
+        self.assertIsNone(probe.unit)
+        self.assertAlmostEqual(probe.scale, 1.0)
+        self.assertIn(0x0100, SCALE_NONE_ALLOW["bmv"])
+        self.assertIn(0x0100, UNIT_NONE_ALLOW["bmv"])
+        self.assertEqual(parser.unknown_units, [(0x0100, "V (peak)")])
+        self.assertEqual(parser.unknown_scales, [])
+        # Controls: plain and "-" units parse silently (no record); the
+        # denylisted version format stays silent too.
+        for unit_line, expected_unit in (
+            ("hdr\n0x0100 Product Foo 1 un16 0..1 (OFF, ON) 0 1 V\nftr", "V"),
+            ("hdr\n0x0100 Product Foo 1 un16 0..1 (OFF, ON) 0 1 -\nftr", None),
+            ("hdr\n0xEEF9 SW Version (read only) 61 Un16 0x0000..0xFFFF - - HEX (AA.BB)\nftr", None),
+        ):
+            with self.subTest(control=expected_unit):
+                ctrl = BMV7xxHEXParser(unit_line)
+                regs = ctrl.parse_registers()
+                rid = 0x0100 if "0x0100" in unit_line else 0xEEF9
+                self.assertEqual(regs[rid].unit, expected_unit)
+                self.assertEqual(ctrl.unknown_units, [])
 
     def test_uppercase_0X_id_rescue_divergence(self):
         """Proves uppercase-0X IDs are rescued (not missed by all three):

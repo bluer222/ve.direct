@@ -478,6 +478,42 @@ class BlueSolarHEXParser:
                             source="BlueSolar-HEX",
                             notes=f"range-expanded from 0x{a:04X}..0x{b:04X}; byte-field layout, no single wire type",
                         )
+            # Decimal range mirror of the hex inline branch above (same
+            # context guard, same 64-register _expand_id_range cap): a future
+            # decimal-only range ("History registers 60961-60999 table",
+            # "60961..60999", "60961...60999") was missed by every parser and
+            # scan while counts stayed green (all sides shared the 0x-only
+            # range assumption — reproduced synthetically before the fix).
+            # Shape guards (explicit, justified): 4-5 digit groups (dates use
+            # 2-digit groups; bare years carry no second group), separators
+            # ".." / "..." / single "-" (mirroring the hex ".." plus the
+            # natural decimal "-" of the probe; "--" never a range),
+            # ``(?<![\w\-])`` so signed Range cells (BMV 0x1034
+            # "-32768..32767") and hex tails ("0x1000" — "1000" is
+            # ``\w``-preceded) never match, ``(?!\w)`` so trailing letters
+            # never match. Context guard doubles as the Range-column
+            # exclusion (that BMV line carries no history/register word);
+            # the span cap is the third guard. Zero-diff: no decimal range
+            # line exists in any snapshot (verified), so nothing expands
+            # today. Decimal ranges are always history records here (timer
+            # events are hex-documented Get/Set words, never decimal).
+            for m in re.finditer(r"(?<![\w\-])(\d{4,5})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{4,5})(?!\w)", line):
+                a, b = int(m.group(1)), int(m.group(2))
+                if not re.search(r"[Rr]egister|vreg|history|History|Timer|Cycle|0[xX]104F|0[xX]1050", line):
+                    continue
+                for rid in _expand_id_range(a, b):
+                    if rid not in regs:
+                        regs[rid] = ParsedRegister(
+                            id=rid,
+                            name=f"HISTORY_{rid}",
+                            description=f"History record {rid} (range {a}..{b})",
+                            scale=None,
+                            data_type="struct",
+                            unit=None,
+                            access="R",
+                            source="BlueSolar-HEX",
+                            notes=f"range-expanded decimal {a}..{b}; byte-field layout, no single wire type",
+                        )
             m = re.match(r"^\s*0[xX]([0-9A-Fa-f]{4})\s*\.\.\.\s*$", line)
             if m:
                 a = int(m.group(1), 16)
@@ -501,6 +537,35 @@ class BlueSolarHEXParser:
                                     access="R/W" if kind == "Timer event" else "R",
                                     source="BlueSolar-HEX",
                                     notes=f"range-expanded multi-line 0x{a:04X}...0x{b:04X}; doc Type is a 32-bit word/bit-field layout" if kind == "Timer event" else f"range-expanded multi-line 0x{a:04X}...0x{b:04X}; byte-field layout, no single wire type",
+                                )
+                        break
+            # Decimal multi-line mirror ("60961 ..." + bare "60999" within 3
+            # lines, same tight window as the hex branch above — the decimal
+            # scraper over-scans 8 lines so gap drift diverges loudly there).
+            # No timer kind (decimal timers are not a doc shape); no context
+            # guard (mirroring the hex multi-line branch, which has none —
+            # the "..." start shape itself is the guard; the ``^`` anchor
+            # already excludes signed cells like "-32768..."). Zero-diff: no
+            # decimal "..." start line exists in any snapshot (verified).
+            dm = re.match(r"^\s*(\d{4,5})\s*\.\.\.\s*$", line)
+            if dm:
+                a = int(dm.group(1))
+                for j in range(i + 1, min(i + 4, len(lines))):
+                    m2 = re.match(r"^\s*(\d{4,5})\s*$", lines[j])
+                    if m2:
+                        b = int(m2.group(1))
+                        for rid in _expand_id_range(a, b):
+                            if rid not in regs:
+                                regs[rid] = ParsedRegister(
+                                    id=rid,
+                                    name=f"HISTORY_{rid}",
+                                    description=f"History record {rid} (range {a}...{b})",
+                                    scale=None,
+                                    data_type="struct",
+                                    unit=None,
+                                    access="R",
+                                    source="BlueSolar-HEX",
+                                    notes=f"range-expanded multi-line decimal {a}...{b}; byte-field layout, no single wire type",
                                 )
                         break
 
@@ -568,7 +633,21 @@ class BlueSolarHEXParser:
             # word is shared-blind; zero-diff: the only newly matching
             # snapshot history-region lines are already-parsed typed rows
             # (comma/percent/degree cells), skipped via rid-in-regs below.
-            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Za-z].*?)\s*$", line)
+            # Symbol-first descriptions ("*Boost record": symbol, not letter,
+            # first) were still missed on every side after that fix
+            # (letter-start required — reproduced synthetically before this
+            # fix). Both branches below now take the description as
+            # ``\\S.*?`` (any non-space start, CS/ERR structural-name
+            # precedent): a symbol-first row parses honestly with its exact
+            # description. Denylists stay structural (the ... / .. / | / =
+            # skips above exclude range/table/prose shapes; the device-word
+            # guard below excludes product prose; DOC_TYPO/rid-in-regs
+            # below exclude known IDs), so no content word is shared-blind.
+            # Zero-diff: no snapshot history-region ID-only line starts
+            # with a symbol (verified — every such line starts with a
+            # letter or is a "..." range), so only letter-start rows match
+            # today and all are already parsed (rid-in-regs skips them).
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+(\S.*?)\s*$", line)
             dm = None
             if m:
                 rid = int(m.group(1).replace(" ", ""), 16)
@@ -596,7 +675,10 @@ class BlueSolarHEXParser:
                 # justification as the hex branch above: probes "60961
                 # Future: history record" / "Future+history" / "Future#1" /
                 # "A&B" now parse honestly; zero-diff via rid-in-regs).
-                dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z].*?)\s*$", line)
+                # Symbol-first ("60961 *Boost record") takes the same
+                # ``\S.*?`` widening as the hex branch above (same
+                # justification and zero-diff there).
+                dm = re.match(r"^\s*(\d{4,5})\s+(\S.*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
@@ -754,6 +836,28 @@ class OrionXSHEXParser:
                             source="Orion-XS-HEX",
                             notes=f"range-expanded from 0x{a:04X}..0x{b:04X}; byte-field layout, no single wire type",
                         )
+            # Decimal range mirror (same context guard, same 64-register
+            # cap; see the BlueSolar branch for the full shape-guard
+            # justification). Probe "History registers 60961-60999 table"
+            # was missed on all sides before the fix. Zero-diff: no decimal
+            # range line exists in any snapshot (verified).
+            for m in re.finditer(r"(?<![\w\-])(\d{4,5})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{4,5})(?!\w)", line):
+                a, b = int(m.group(1)), int(m.group(2))
+                if not re.search(r"[Rr]egister|history|History|Cycle", line):
+                    continue
+                for rid in _expand_id_range(a, b):
+                    if rid not in regs:
+                        regs[rid] = ParsedRegister(
+                            id=rid,
+                            name=f"CYCLE_HISTORY_{rid - a}",
+                            description=f"Cycle history {rid} (range {a}..{b})",
+                            scale=None,
+                            data_type="struct",
+                            unit=None,
+                            access="R",
+                            source="Orion-XS-HEX",
+                            notes=f"range-expanded decimal {a}..{b}; byte-field layout, no single wire type",
+                        )
 
     def _history_region(self) -> Tuple[int, int]:
         start = self.text.find("Restore factory defaults")
@@ -783,7 +887,11 @@ class OrionXSHEXParser:
             # handler: symbol probes "60961 Future: history record" /
             # "Future+history" / "Future#1" / "A&B" now parse honestly;
             # zero-diff via rid-in-regs below).
-            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+([A-Za-z].*?)\s*$", line)
+            # Symbol-first ("*Boost record") takes the same ``\S.*?``
+            # widening as the BlueSolar handler (same justification and
+            # zero-diff there: no snapshot history-region ID-only line
+            # starts with a symbol).
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+(\S.*?)\s*$", line)
             dm = None
             if m:
                 rid = int(m.group(1).replace(" ", ""), 16)
@@ -797,7 +905,9 @@ class OrionXSHEXParser:
                 # Zero-diff: no snapshot history-region line matches.
                 # Open description charset (same "[A-Za-z].*?" widening as
                 # the hex branch above and the BlueSolar handler).
-                dm = re.match(r"^\s*(\d{4,5})\s+([A-Za-z].*?)\s*$", line)
+                # Symbol-first takes the same ``\S.*?`` widening (same
+                # justification and zero-diff as the hex branch above).
+                dm = re.match(r"^\s*(\d{4,5})\s+(\S.*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
@@ -1097,7 +1207,29 @@ class BMV7xxHEXParser:
                     self.unknown_scales.append((rid, step))
                 if len(rest) > col + 2:
                     u = " ".join(rest[col + 2:]).strip()
-                    if u == "-" or "(" in u:
+                    if u == "-" or u == "":
+                        unit = None
+                    elif "(" in u:
+                        # Loud unknown-unit gate (short-layout unknown_units
+                        # and Step unknown_scales pattern): a parenthesized
+                        # Unit remainder ("V (peak)") was dropped to None
+                        # silently with both gates empty while
+                        # SCALE_NONE_ALLOW/UNIT_NONE_ALLOW excused the
+                        # allowlisted ID — reproduced synthetically before
+                        # the fix. The parenthesized content is recorded
+                        # loudly even on allowlisted IDs (allowlists excuse
+                        # missing doc data, never dropped unknown tokens);
+                        # unit stays None (as today) so the schema side is
+                        # unchanged and the gate is the loud mechanism.
+                        # Denylist (explicit, justified): "HEX (AA.BB)" is
+                        # the doc's hex-version format notation on the
+                        # SW-version row (0xEEF9, Step "-"), not a physical
+                        # unit with a qualifier — verified the ONLY
+                        # parenthesized settings-Unit cell in any snapshot,
+                        # so the gate stays zero-diff while a future "V
+                        # (peak)"-style qualifier records loudly.
+                        if u != "HEX (AA.BB)":
+                            self.unknown_units.append((rid, u))
                         unit = None
                     else:
                         unit = u or None
