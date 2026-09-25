@@ -17,6 +17,7 @@ instead of merely asserting what the parser already found.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import re
 import shutil
 import sys
@@ -453,17 +454,29 @@ def scrape_doc_capability_bits(text: str, marker: str, window: int) -> dict[int,
     fixed 1500/1800-char window, so a ``+``/``:`` name or a bit past the
     window is missed by both while hardcoded EXPECTED_CAPS stays green. This
     scraper differentiates on BOTH axes (the fix pattern that works):
-    (1) open name ``(.+?)`` with only the ``(0=no ...)`` suffix stripped and
-    the "Bit"/"register" header guard kept — a future ``+``/``:`` name is
-    still scraped here and fails loudly; (2) wider/different window: scans
-    ``max(window*3, 5000)`` chars (not the parser's verbatim window) and
-    requires the ``(0=no`` marker that every capability row carries (verified:
-    all 25 BS + 29 Orion snapshot rows have it, later register/mode tables
-    never do). The suffix requirement is what keeps the wider scan exact
-    (zero diff) on current snapshots — without it the wider window overwrites
-    bit 0 with later "0 or 4 Charger off" mode lines. Verified exact on both
-    snapshot capability tables; the window-divergence test proves the wider
-    scan catches a bit past the parser window."""
+    (1) open name ``(.+?)`` with only the ``(0=no ...)`` suffix stripped — a
+    future ``+``/``:`` name is still scraped here and fails loudly; (2)
+    wider/different window: scans ``max(window*3, 5000)`` chars (not the
+    parser's verbatim window) and requires the ``(0=no`` marker that every
+    capability row carries (verified: all 25 BS + 29 Orion snapshot rows
+    have it, later register/mode tables never do). The suffix requirement is
+    what keeps the wider scan exact (zero diff) on current snapshots —
+    without it the wider window overwrites bit 0 with later "0 or 4 Charger
+    off" mode lines. Furniture (explicit, justified): this scraper shares
+    NONE of the parser's furniture guards — in particular NOT the
+    ``"Bit"``/``"register"`` substring guard (a future "Orbit Bit mode 22"
+    / "Orbit register mode 22" row was missed by BOTH sides while
+    EXPECTED_CAPS stayed green — reproduced synthetically before the fix;
+    see test_capability_furniture_divergence). The header/furniture lines
+    the guard nominally excluded ("Bit       Description", the
+    "Capabilities (register 0x0140)" marker line) carry no ``(0=no`` marker
+    and miss the structural shape without any content guard (verified:
+    zero matching furniture lines on either snapshot), so the ``(0=no``
+    marker requirement is the differently-justified guard that keeps the
+    scan exact while a colliding row diverges loudly (scraped-but-unparsed)
+    instead of agreed-missing. Verified exact on both snapshot capability
+    tables; the window-divergence test proves the wider scan catches a bit
+    past the parser window."""
     pos = text.find(marker)
     # Wider/differently (justified above): parser window is shared ground
     # truth that hides the same blind spot; scraper over-scans so a
@@ -474,11 +487,11 @@ def scrape_doc_capability_bits(text: str, marker: str, window: int) -> dict[int,
     for line in section.splitlines():
         # Require the "(0=no" capability marker to stay exact on the wider
         # window (later tables lack it); open vocabulary for the name itself.
+        # No "Bit"/"register" substring guard by design (see docstring):
+        # the marker requirement already excludes furniture structurally.
         m = re.match(r"^\s*(\d{1,2})\s+(.+?)\s*\(0=no.*$", line)
         if m:
-            name = m.group(2).strip()
-            if "Bit" not in name and "register" not in name:
-                caps[int(m.group(1))] = name
+            caps[int(m.group(1))] = m.group(2).strip()
     return caps
 
 
@@ -1048,6 +1061,40 @@ EXPECTED_CAPS_ORION = {
     **EXPECTED_CAPS_BS,
     28: "Hibernate mode", 29: "AC power apparent power",
     30: "PSU function", 31: "Needs battery to shutdown",
+}
+
+
+def _normalize_hex_description(desc: str) -> str:
+    """Collapse whitespace for description change-detection (layout noise
+    such as column-gap reflow must not false-alarm the hash pin)."""
+    return re.sub(r"\s+", " ", desc.strip())
+
+
+def _hex_description_hash(reg_dict) -> str:
+    """SHA-256 over ``RID:normalized-description`` lines sorted by ID."""
+    body = "\n".join(
+        f"{rid:04X}:{_normalize_hex_description(reg.description)}"
+        for rid, reg in sorted(reg_dict.items())
+    )
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+# Pinned per-doc HEX description hashes (change-detection, NOT full
+# description maps): descriptions are wire-irrelevant prose (no product code
+# consumes them) and a prior cycle explicitly scoped out full HEX description
+# maps as disproportionate, so each doc pins ONE hash generated from current
+# parser output (206/109/110/48 ``RID:description`` lines, whitespace-
+# normalized so layout reflow never false-alarms). Any single reword (e.g.
+# BlueSolar 0xEDF0 "Battery maximum current" -> "Battery peak current")
+# changes the hash and fails loudly for human triage; presence/emptiness is
+# asserted separately in test_hex_descriptions_present. Bounded maintenance:
+# on an intentional doc reword, verify the diff and re-pin the one hash
+# (recompute via _hex_description_hash on the updated snapshot).
+EXPECTED_HEX_DESCRIPTION_HASHES = {
+    "bluesolar": "a84cc37e46ecba2d96b409a16b7a20f28de849906acb33ca9bb837cb60776063",
+    "orion": "7b662e73e994462c606d5721c8cf13635f1a27f0298d12ec7dab527606e15d9f",
+    "bmv": "e9a95e032573393823ccfbf547d86df2a2cb50137c91ba17c7de667956900c1c",
+    "phoenix": "8fab0cbb2076e41487480833fb6b29d3a0cc4c56da785ced3564408bd5efbe2a",
 }
 
 
@@ -1982,6 +2029,78 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(_normalize_unit_for_comparison("V"), "V")
         self.assertIn(("bluesolar", 0xEDEA), UNIT_VALUE_EXCEPTIONS)
         self.assertIn(("phoenix", 0xEB10), UNIT_VALUE_EXCEPTIONS)
+
+    def test_hex_descriptions_present(self):
+        """Every parsed HEX description is present and non-empty (catches
+        drops/empties): probe rewordings keep schema asserts green because
+        descriptions were asserted nowhere — a dropped/emptied description
+        must now fail here instead of skipping. Descriptions are
+        wire-irrelevant prose (no product code consumes them), so this
+        presence gate plus the hash-pinned change detection below is the
+        proportionate scope (no 400-literal full description maps)."""
+        for key, reg_dict in (
+            ("bluesolar", self.bs_regs),
+            ("orion", self.or_regs),
+            ("bmv", self.bmv_regs),
+            ("phoenix", self.ph_regs),
+        ):
+            with self.subTest(spec=key):
+                empties = [
+                    f"0x{rid:04X}"
+                    for rid, reg in reg_dict.items()
+                    if not reg.description or not reg.description.strip()
+                ]
+                self.assertEqual(empties, [])
+
+    def test_hex_description_change_detection(self):
+        """Hash-pinned per-doc description change detection (bounded
+        maintenance: one hash per doc, see EXPECTED_HEX_DESCRIPTION_HASHES):
+        any single reword fails loudly for human triage. Regression probe:
+        BlueSolar 0xEDF0 "Battery maximum current" -> "Battery peak current"
+        keeps every schema assert green (scale/dtype/unit/access unchanged)
+        but changes the hash (must fail pre-triage). Whitespace/layout noise
+        never false-alarms (normalization collapses it; proved by the
+        double-space control below and zero-diff on all four snapshots)."""
+        reg_dicts = {
+            "bluesolar": self.bs_regs,
+            "orion": self.or_regs,
+            "bmv": self.bmv_regs,
+            "phoenix": self.ph_regs,
+        }
+        # Zero-diff: pinned hashes match current parser output on all four
+        # snapshots (proves no false alarm on today's docs).
+        for key, reg_dict in reg_dicts.items():
+            with self.subTest(spec=key):
+                self.assertEqual(_hex_description_hash(reg_dict), EXPECTED_HEX_DESCRIPTION_HASHES[key])
+        # Regression probe (must fail the suite pre-triage): reword keeps
+        # every schema assert green but trips the hash.
+        base = self.raw_texts["bluesolar"]
+        probe_text = base.replace("Battery maximum current", "Battery peak current", 1)
+        self.assertNotEqual(probe_text, base)
+        probe_regs = BlueSolarHEXParser(probe_text).parse_registers()
+        probe = probe_regs[0xEDF0]
+        self.assertEqual(probe.description, "Battery peak current")
+        # Schema asserts stay green on the probe (the reported gap).
+        self.assertAlmostEqual(probe.scale, self.bs_regs[0xEDF0].scale)
+        self.assertEqual(probe.data_type, self.bs_regs[0xEDF0].data_type)
+        self.assertEqual(probe.unit, self.bs_regs[0xEDF0].unit)
+        self.assertEqual(probe.access, self.bs_regs[0xEDF0].access)
+        # ... but the change-detection hash trips loudly.
+        self.assertNotEqual(
+            _hex_description_hash(probe_regs), EXPECTED_HEX_DESCRIPTION_HASHES["bluesolar"]
+        )
+        # No false alarm on whitespace/layout noise: doubled spaces
+        # normalize back to the pinned hash (copies only — the shared
+        # setUpClass regs are never mutated).
+        import dataclasses
+
+        noisy = {
+            rid: dataclasses.replace(reg, description=reg.description.replace(" ", "  "))
+            for rid, reg in self.bs_regs.items()
+        }
+        self.assertEqual(
+            _hex_description_hash(noisy), EXPECTED_HEX_DESCRIPTION_HASHES["bluesolar"]
+        )
 
     def test_bmv_unknown_units_loud_on_allowlisted_ids(self):
         """BMV bare-unit drop hid behind allowlists: probe ``0x0303 Foo -
@@ -3602,6 +3721,68 @@ class TestSpecParsers(unittest.TestCase):
             30,
             BlueSolarHEXParser(text2).parse_capabilities(),
         )
+
+    def test_capability_furniture_divergence(self):
+        """Proves the capability scraper no longer shares the parser's
+        "Bit"/"register" substring furniture guard: synthetic colliding rows
+        ("22 Orbit Bit mode (0=no, 1=yes)" vs the "Bit" guard, "22 Orbit
+        register mode (0=no, 1=yes)" vs the "register" guard) were missed by
+        BOTH sides while hardcoded EXPECTED_CAPS_BS stayed green
+        (reproduced synthetically before the fix: both sides filtered the
+        name verbatim while counts stayed 25). The scraper now keeps every
+        ``(0=no``-marked row with no content guard (the marker requirement
+        already excludes the "Bit Description" header and the marker line
+        structurally — verified: neither matches the shape on either
+        snapshot), so it recovers the colliding rows exact while the parser
+        keeps its guards and still drops them — scraped-but-unparsed,
+        failing loudly via set-equality instead of agreed-missing (the
+        ERR-furniture-divergence precedent: scraper exact-line/structural,
+        parser patterned). Parser keeps its guards (no change in
+        tools/spec_parser.py). Controls: the snapshot-wide scan stays
+        exactly the 25 BS / 29 Orion bits on both sides, and the colliding
+        rows sit inside the parser's own 1500-char window (guard, not
+        window, is what hides them there)."""
+        marker = "Capabilities (register 0x0140)"
+        base = self.raw_texts["bluesolar"]
+        anchor = "21        Plugin display support (0=no, 1=yes)"
+        self.assertIn(anchor, base)
+        for name in ("Orbit Bit mode", "Orbit register mode"):
+            with self.subTest(name=name):
+                text2 = (
+                    base[: base.find(anchor) + len(anchor)]
+                    + f"\n 22        {name} (0=no, 1=yes)"
+                    + base[base.find(anchor) + len(anchor):]
+                )
+                # Scraper recovers exact (was missed before the fix).
+                self.assertEqual(
+                    scrape_doc_capability_bits(text2, marker, 1500)[22], name
+                )
+                # Parser keeps its substring guard and still drops it.
+                self.assertNotIn(
+                    22, BlueSolarHEXParser(text2).parse_capabilities()
+                )
+        # Controls: snapshot-wide scans stay exactly the doc maps on both
+        # sides (zero-diff 25/29 exact); the probe sits inside the parser
+        # window (guard, not bound, hides it there).
+        self.assertEqual(
+            scrape_doc_capability_bits(base, marker, 1500), EXPECTED_CAPS_BS
+        )
+        self.assertEqual(
+            self.specs["bluesolar"].parse_capabilities(), EXPECTED_CAPS_BS
+        )
+        self.assertEqual(
+            scrape_doc_capability_bits(
+                self.raw_texts["orion"], "Capabilities1 (register 0x0140)", 1800
+            ),
+            EXPECTED_CAPS_ORION,
+        )
+        pos = base.find(marker)
+        anchor_pos = base.find(anchor)
+        self.assertLess(anchor_pos - pos, 1500)
+        # Furniture the guard nominally excluded misses structurally (no
+        # "(0=no" marker), so no content guard is load-bearing on snapshots.
+        for furniture in (" Bit       Description", marker):
+            self.assertNotRegex(furniture, r"\(0=no")
 
     def test_phoenix_ble_header_typo(self):
         """The §2.2.5 'Capabilities BLE (register 0x0160)' heading is a doc
