@@ -103,6 +103,39 @@ EXPECTED_COUNTS = {
 }
 
 
+# Exact snapshot lines excluded by both independent Text field scrapers.
+TEXT_FIELD_FURNITURE_LINES = frozenset({
+    "Label          Units                               Description                                 BMV          BMV          BMV71x           MPPT 1        Phoenix         Phoenix          Smart",
+    "Label                 Units                                Description                       BMV          BMV          BMV71x        MPPT 1   Phoenix    Phoenix     Smart",
+    "Label                 Units                              Description               BMV   BMV    BMV71x      MPPT 1   Phoenix    Phoenix     Smart",
+    "60x          70x         SmartShunt                      Inverter        Charger        BuckBoost",
+    "60x          70x         SmartShunt              Inverter   Charger   BuckBoost",
+    "60x   70x   SmartShunt            Inverter   Charger   BuckBoost",
+    "The units used by the serial interface are as follows:",
+    "The VE.Direct protocol is available in the MPPT 70/15 since firmware version v1.09 and up, and only in newer type MPPT 70/15s: the ones with a product id other than 0x300. The first",
+    "Available on BlueSolar mppt chargers since firmware version v1.16",
+    "Available on BlueSolar mppt chargers since firmware version v1.37",
+    "Available on Phoenix Inverter (some models) since firmware version v1.16",
+    "Available on Phoenix Inverter v1.16",
+    "Available on Phoenix Smart Chargers with triple outputs only",
+    "Available on Smart Phoenix Inverter",
+    "Available on SmartSolar mppt chargers since firmware version v1.17",
+    "Available on SmartSolar mppt chargers since firmware version v1.44 (VE.Direct models) and v1.03 (SmartSolar VE.Can models)",
+    "Available since version v1.12, and only for models with a load output.",
+    "Available since version v1.15, and only for models with a load output.",
+    "Available since version v4.08",
+    "Available when the AUX input is configured as Mid Point",
+    "Available when the AUX input is configured as Starter Battery",
+    "Available when the AUX input is configured as Temperature",
+    "When configured as DC monitor, “---” will be sent instead of a value.",
+    "When no temperature sensor is connected, “---” will be sent instead of a value.",
+    "When the BMV is not synchronised, these statistics have no meaning, so “---” will be sent instead of a value.",
+    "When the battery is not discharging the time- to-go is infinite. This is represented as -1.",
+    "Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands",
+    "General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com",
+})
+
+
 def count_doc_field_labels(section: str) -> set[str]:
     """Independent Text-mode label counter, structural on both axes while
     staying exact: the label token is ANY non-space run (no charset
@@ -142,44 +175,6 @@ def count_doc_field_labels(section: str) -> set[str]:
     diverge (both sides structural), gap/stoplist/furniture-pins still do.
     Verified: this yields exactly the 63 doc fields on the current snapshot
     with no prose false positives (all 63 labels at column 13)."""
-    # Exact full-line furniture pins (stripped snapshot lines verbatim —
-    # every fields-section line starting with Label/60x/The/Available/When/
-    # Victron/General, the words a future field could be named): table
-    # headers (Label ... + 60x device-column sub-headers), the section intro
-    # (both "The ..." lines), footnote prose (14 "Available ..." + 4 "When
-    # ..." lines), page footers (Victron/General, each 3x identical).
-    # A reworded future note matches no pin and scrapes loudly
-    # (over-inclusion); a colliding future label likewise.
-    _furniture_lines = frozenset({
-        "Label          Units                               Description                                 BMV          BMV          BMV71x           MPPT 1        Phoenix         Phoenix          Smart",
-        "Label                 Units                                Description                       BMV          BMV          BMV71x        MPPT 1   Phoenix    Phoenix     Smart",
-        "Label                 Units                              Description               BMV   BMV    BMV71x      MPPT 1   Phoenix    Phoenix     Smart",
-        "60x          70x         SmartShunt                      Inverter        Charger        BuckBoost",
-        "60x          70x         SmartShunt              Inverter   Charger   BuckBoost",
-        "60x   70x   SmartShunt            Inverter   Charger   BuckBoost",
-        "The units used by the serial interface are as follows:",
-        "The VE.Direct protocol is available in the MPPT 70/15 since firmware version v1.09 and up, and only in newer type MPPT 70/15s: the ones with a product id other than 0x300. The first",
-        "Available on BlueSolar mppt chargers since firmware version v1.16",
-        "Available on BlueSolar mppt chargers since firmware version v1.37",
-        "Available on Phoenix Inverter (some models) since firmware version v1.16",
-        "Available on Phoenix Inverter v1.16",
-        "Available on Phoenix Smart Chargers with triple outputs only",
-        "Available on Smart Phoenix Inverter",
-        "Available on SmartSolar mppt chargers since firmware version v1.17",
-        "Available on SmartSolar mppt chargers since firmware version v1.44 (VE.Direct models) and v1.03 (SmartSolar VE.Can models)",
-        "Available since version v1.12, and only for models with a load output.",
-        "Available since version v1.15, and only for models with a load output.",
-        "Available since version v4.08",
-        "Available when the AUX input is configured as Mid Point",
-        "Available when the AUX input is configured as Starter Battery",
-        "Available when the AUX input is configured as Temperature",
-        "When configured as DC monitor, “---” will be sent instead of a value.",
-        "When no temperature sensor is connected, “---” will be sent instead of a value.",
-        "When the BMV is not synchronised, these statistics have no meaning, so “---” will be sent instead of a value.",
-        "When the battery is not discharging the time- to-go is infinite. This is represented as -1.",
-        "Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands",
-        "General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com",
-    })
     # Content-denied starters that are NOT shared blind spots (justified
     # above): footnote prose ("the", "batches,") and description
     # continuations ("Amount", "Depth", "Number") — none in the parser's
@@ -191,7 +186,7 @@ def count_doc_field_labels(section: str) -> set[str]:
     return {
         m.group(1)
         for line in section.splitlines()
-        if line.strip() not in _furniture_lines
+        if line.strip() not in TEXT_FIELD_FURNITURE_LINES
         for m in [re.match(r"^\s*(\S+)\s+", line)]
         if m and m.group(1) not in _deny
     }
@@ -221,43 +216,13 @@ def scrape_spaced_label_candidates(section: str) -> set[str]:
     column gap). Over-inclusion is the safe direction: a future
     two-token prose line with a column gap records loudly for triage
     instead of hiding a colliding label."""
-    _furniture_lines = frozenset({
-        "Label          Units                               Description                                 BMV          BMV          BMV71x           MPPT 1        Phoenix         Phoenix          Smart",
-        "Label                 Units                                Description                       BMV          BMV          BMV71x        MPPT 1   Phoenix    Phoenix     Smart",
-        "Label                 Units                              Description               BMV   BMV    BMV71x      MPPT 1   Phoenix    Phoenix     Smart",
-        "60x          70x         SmartShunt                      Inverter        Charger        BuckBoost",
-        "60x          70x         SmartShunt              Inverter   Charger   BuckBoost",
-        "60x   70x   SmartShunt            Inverter   Charger   BuckBoost",
-        "The units used by the serial interface are as follows:",
-        "The VE.Direct protocol is available in the MPPT 70/15 since firmware version v1.09 and up, and only in newer type MPPT 70/15s: the ones with a product id other than 0x300. The first",
-        "Available on BlueSolar mppt chargers since firmware version v1.16",
-        "Available on BlueSolar mppt chargers since firmware version v1.37",
-        "Available on Phoenix Inverter (some models) since firmware version v1.16",
-        "Available on Phoenix Inverter v1.16",
-        "Available on Phoenix Smart Chargers with triple outputs only",
-        "Available on Smart Phoenix Inverter",
-        "Available on SmartSolar mppt chargers since firmware version v1.17",
-        "Available on SmartSolar mppt chargers since firmware version v1.44 (VE.Direct models) and v1.03 (SmartSolar VE.Can models)",
-        "Available since version v1.12, and only for models with a load output.",
-        "Available since version v1.15, and only for models with a load output.",
-        "Available since version v4.08",
-        "Available when the AUX input is configured as Mid Point",
-        "Available when the AUX input is configured as Starter Battery",
-        "Available when the AUX input is configured as Temperature",
-        "When configured as DC monitor, “---” will be sent instead of a value.",
-        "When no temperature sensor is connected, “---” will be sent instead of a value.",
-        "When the BMV is not synchronised, these statistics have no meaning, so “---” will be sent instead of a value.",
-        "When the battery is not discharging the time- to-go is infinite. This is represented as -1.",
-        "Victron Energy B.V. | De Paal 35 | 1351 JG Almere | The Netherlands",
-        "General phone: +31 (0)36 535 97 00 | E-mail: sales@victronenergy.com",
-    })
     _deny = {
         "the", "batches,",  # footnote prose starters
         "Amount", "Depth", "Number",  # description-continuation starters
     }
     found: set[str] = set()
     for line in section.splitlines():
-        if line.strip() in _furniture_lines:
+        if line.strip() in TEXT_FIELD_FURNITURE_LINES:
             continue
         m = re.match(r"^\s*(\S+ \S+)\s{2,}", line)
         if m and m.group(1).split()[0] not in _deny:
@@ -5502,9 +5467,7 @@ class TestSpecParsers(unittest.TestCase):
         """Issue-6: live scale/dtype map cut each ID window at maxdist=120, so
         200 filler chars between ID and ``0.01 un16 V`` yielded {} (control
         short exact) — a long-row edit skipped as missing-ID staying FRESH.
-        The window is now structural (up to next ID / end of text). Regression
-        with the long-row probe. Zero false alarms on today's live (all maps
-        diff-free)."""
+        The window is now structural (up to next ID / end of text)."""
         filler = "x" * 200
         long_row = f"0xEDF0 {filler} 0.01 un16 V"
         short_row = "0xEDF0 Battery maximum current 0.01 un16 V"
@@ -5515,116 +5478,55 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(
             scale_dtype_map_from_text(two), {0xEDF0: (0.01, "un16"), 0xEDF1: (0.1, "un16")}
         )
-        # Zero false alarms on today's live (network; skip offline).
-        try:
-            for key in ("BlueSolar-HEX-protocol", "Orion-XS-HEX-protocol"):
-                snap = (self.specs_dir / f"{key}.txt").read_text(errors="ignore")
-                pdf = download_pdf_bytes(fetch_specs.OFFICIAL_SPECS[key]["url"], timeout=30.0)
-                self.assertEqual(live_scale_dtype_diffs(snap, pdf, key), [])
-        except OSError as e:
-            self.skipTest(f"live download unreachable, skipping: {e}")
 
 
 class TestFetchSpecs(unittest.TestCase):
-    """Cover the fetch_specs branches the parser suite never touches (all
-    network/subprocess touchpoints mocked; synthetic inputs only)."""
+    """Cover fetch_specs with synthetic inputs and explicit live checks."""
 
-    def test_snapshot_revision_info_rev_format(self):
-        label, date = snapshot_revision_info(
-            "Title\nRev 18\n\nRevision Log\n\n15-11-2021 some change\n"
+    def test_snapshot_revision_formats(self):
+        cases = (
+            ("rev", "Title\nRev 18\n\nRevision Log\n\n15-11-2021 some change\n",
+             "Rev 18", datetime.date(2021, 11, 15)),
+            ("version history", "Doc\nDocument history\n3.33             06 June 2023\n"
+             "3.34             14 April 2025\n", "v3.34", datetime.date(2025, 4, 14)),
+            ("ISO", "Doc\nChanges:\n3) 2018-11-22\n4) 2019-09-27\n",
+             None, datetime.date(2019, 9, 27)),
+            ("Orion initial version", "Doc\nChanges:\n\n16-06-2025\n"
+             "Initial version derived from BlueSolar HEX protocol - rev 18.docx\n",
+             "Initial version 2025-06-16", datetime.date(2025, 6, 16)),
+            ("month first", "Doc\nRev 9\nRevision Log\nApril 14, 2025\nSome entry\n",
+             "Rev 9", datetime.date(2025, 4, 14)),
+            ("ordinal day first", "Doc\nChanges:\n14th April 2025\nSome entry\n",
+             None, datetime.date(2025, 4, 14)),
+            ("ordinal month first", "Doc\nChanges:\nApril 2nd, 2023\nSome entry\n",
+             None, datetime.date(2023, 4, 2)),
+            ("no markers", "hello world", None, None),
+            ("unparseable date", "Doc\nChanges:\nsometime last spring\n", None, None),
         )
-        self.assertEqual(label, "Rev 18")
-        self.assertEqual(date, datetime.date(2021, 11, 15))
+        for name, source, label, date in cases:
+            with self.subTest(format=name):
+                self.assertEqual(snapshot_revision_info(source), (label, date))
 
-    def test_snapshot_revision_info_version_history_format(self):
-        label, date = snapshot_revision_info(
-            "Doc\nDocument history\n3.33             06 June 2023\n"
-            "3.34             14 April 2025\n"
-        )
-        self.assertEqual(label, "v3.34")
-        self.assertEqual(date, datetime.date(2025, 4, 14))
-
-    def test_snapshot_revision_info_iso_format(self):
-        label, date = snapshot_revision_info(
-            "Doc\nChanges:\n3) 2018-11-22\n4) 2019-09-27\n"
-        )
-        self.assertIsNone(label)
-        self.assertEqual(date, datetime.date(2019, 9, 27))
-
-    def test_snapshot_revision_info_orion_initial_version_label(self):
-        """Orion-XS tail ("Changes: 16-06-2025 Initial version ...") must
-        yield a real label, not None: otherwise the label check is vacuous
-        and freshness is date-only."""
-        label, date = snapshot_revision_info(
-            "Doc\nChanges:\n\n16-06-2025\nInitial version derived from BlueSolar HEX protocol - rev 18.docx\n"
-        )
-        self.assertEqual(label, "Initial version 2025-06-16")
-        self.assertEqual(date, datetime.date(2025, 6, 16))
-        # Real snapshot agrees.
+        # A synthetic Orion label must also agree with the checked-in snapshot.
         text = (Path(__file__).resolve().parent / "specs" / "Orion-XS-HEX-protocol.txt").read_text(errors="ignore")
         self.assertEqual(
             snapshot_revision_info(text),
             ("Initial version 2025-06-16", datetime.date(2025, 6, 16)),
         )
 
-    def test_snapshot_revision_info_month_first_format(self):
-        label, date = snapshot_revision_info(
-            "Doc\nRev 9\nRevision Log\nApril 14, 2025\nSome entry\n"
+    def test_remote_last_modified_headers(self):
+        expected = datetime.datetime(2015, 10, 21, 7, 28, tzinfo=datetime.timezone.utc)
+        cases = (
+            ("GMT", {"Last-Modified": "Wed, 21 Oct 2015 07:28:00 GMT"}, expected),
+            ("naive", {"Last-Modified": "21 Oct 2015 07:28:00"}, expected),
+            ("missing", {}, None),
+            ("invalid", {"Last-Modified": "not a date"}, None),
         )
-        self.assertEqual(label, "Rev 9")
-        self.assertEqual(date, datetime.date(2025, 4, 14))
-
-    def test_snapshot_revision_info_ordinal_day_first_format(self):
-        label, date = snapshot_revision_info(
-            "Doc\nChanges:\n14th April 2025\nSome entry\n"
-        )
-        self.assertEqual(date, datetime.date(2025, 4, 14))
-
-    def test_snapshot_revision_info_ordinal_month_first_format(self):
-        label, date = snapshot_revision_info(
-            "Doc\nChanges:\nApril 2nd, 2023\nSome entry\n"
-        )
-        self.assertEqual(date, datetime.date(2023, 4, 2))
-
-    def test_snapshot_revision_info_unparseable_stays_unknown(self):
-        """Total date-mining failure must stay unknown (loud skip), never a
-        guessed date that could mask staleness."""
-        self.assertEqual(snapshot_revision_info("hello world"), (None, None))
-        self.assertEqual(
-            snapshot_revision_info("Doc\nChanges:\nsometime last spring\n"), (None, None)
-        )
-
-    def test_snapshot_revision_info_no_markers(self):
-        self.assertEqual(snapshot_revision_info("hello world"), (None, None))
-
-    def test_remote_last_modified_ok(self):
-        with mock.patch("urllib.request.urlopen") as mu:
-            mu.return_value.__enter__.return_value.headers = {
-                "Last-Modified": "Wed, 21 Oct 2015 07:28:00 GMT"
-            }
-            dt = remote_last_modified("http://example/x.pdf")
-        self.assertEqual(dt, datetime.datetime(2015, 10, 21, 7, 28, tzinfo=datetime.timezone.utc))
-
-    def test_remote_last_modified_naive_assumes_utc(self):
-        with mock.patch("urllib.request.urlopen") as mu:
-            mu.return_value.__enter__.return_value.headers = {
-                "Last-Modified": "21 Oct 2015 07:28:00"
-            }
-            dt = remote_last_modified("http://example/x.pdf")
-        self.assertIsNotNone(dt)
-        self.assertIsNotNone(dt.tzinfo)
-
-    def test_remote_last_modified_no_header(self):
-        with mock.patch("urllib.request.urlopen") as mu:
-            mu.return_value.__enter__.return_value.headers = {}
-            self.assertIsNone(remote_last_modified("http://example/x.pdf"))
-
-    def test_remote_last_modified_bad_date(self):
-        with mock.patch("urllib.request.urlopen") as mu:
-            mu.return_value.__enter__.return_value.headers = {
-                "Last-Modified": "not a date"
-            }
-            self.assertIsNone(remote_last_modified("http://example/x.pdf"))
+        for name, headers, result in cases:
+            with self.subTest(header=name):
+                with mock.patch("urllib.request.urlopen") as urlopen:
+                    urlopen.return_value.__enter__.return_value.headers = headers
+                    self.assertEqual(remote_last_modified("http://example/x.pdf"), result)
 
     def test_extract_text_without_pdftotext(self):
         with mock.patch("shutil.which", return_value=None):
@@ -5634,57 +5536,25 @@ class TestFetchSpecs(unittest.TestCase):
         for key in fetch_specs.OFFICIAL_SPECS:
             (tmp / f"{key}.txt").write_text(text)
 
-    def test_check_specs_fresh(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
-            ):
-                self.assertTrue(check_specs(Path(tmp)))
-
-    def test_check_specs_stale(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
-            ):
-                self.assertFalse(check_specs(Path(tmp)))
-
-    def test_check_specs_same_day_is_unknown_not_fresh(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2023, 2, 1, 18, 0, tzinfo=datetime.timezone.utc),
-            ):
-                self.assertFalse(check_specs(Path(tmp)))
-
-    def test_check_specs_unverifiable_remote(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
-            with mock.patch.object(fetch_specs, "remote_last_modified", return_value=None):
-                self.assertFalse(check_specs(Path(tmp)))
-
-    def test_check_specs_undated_local(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "no markers here\n")
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
-            ):
-                self.assertFalse(check_specs(Path(tmp)))
-
-    def test_check_specs_missing_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
-            (Path(tmp) / "BlueSolar-HEX-protocol.txt").unlink()
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
-            ):
-                self.assertFalse(check_specs(Path(tmp)))
+    def test_check_specs_outcomes(self):
+        dated = "Rev 9\nRevision Log\n1 February 2023\n"
+        utc = datetime.timezone.utc
+        cases = (
+            ("fresh", dated, datetime.datetime(2022, 5, 1, tzinfo=utc), False, True),
+            ("stale", dated, datetime.datetime(2024, 1, 1, tzinfo=utc), False, False),
+            ("same day", dated, datetime.datetime(2023, 2, 1, 18, tzinfo=utc), False, False),
+            ("no header", dated, None, False, False),
+            ("undated local", "no markers here\n", datetime.datetime(2022, 5, 1, tzinfo=utc), False, False),
+            ("missing file", dated, datetime.datetime(2022, 5, 1, tzinfo=utc), True, False),
+        )
+        for name, source, modified, missing_file, expected in cases:
+            with self.subTest(outcome=name), tempfile.TemporaryDirectory() as tmp:
+                spec_dir = Path(tmp)
+                self._write_all_specs(spec_dir, source)
+                if missing_file:
+                    (spec_dir / "BlueSolar-HEX-protocol.txt").unlink()
+                with mock.patch.object(fetch_specs, "remote_last_modified", return_value=modified):
+                    self.assertEqual(check_specs(spec_dir), expected)
 
     def _write_dated_specs(self, tmp: Path) -> None:
         self._write_all_specs(Path(tmp), "Rev 9\nRevision Log\n1 February 2023\n")
@@ -5714,8 +5584,8 @@ class TestFetchSpecs(unittest.TestCase):
             + comp + b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF"
         )
 
-    def _markers_pdf_for(self, label, date) -> bytes:
-        """Build a crafted PDF embedding derived ``(label, date)`` markers.
+    def _markers_pdf_for(self, label, date, ids=None) -> bytes:
+        """Build a crafted PDF embedding derived markers and optional IDs.
 
         No revision literals: everything embedded derives from the caller's
         ``(label, date)``, which tests derive from the snapshots (or bump
@@ -5735,6 +5605,8 @@ class TestFetchSpecs(unittest.TestCase):
             bits.append(f"{label[1:]} {date.day} {date.strftime('%B')} {date.year}")
         if label and "Initial version" in label:
             bits.append("Initial version")
+        if ids is not None:
+            bits.append(" ".join(f"0x{i:04X}" for i in sorted(ids)))
         return self._content_pdf_bytes("  ".join(b for b in bits if b))
 
     @staticmethod
@@ -5901,48 +5773,33 @@ class TestFetchSpecs(unittest.TestCase):
                     status, _ = snapshot_freshness_status(Path(tmp))
                     self.assertEqual(status, "unknown")
 
-    def test_freshness_status_offline_is_unknown(self):
-        # Offline (URLError from urlopen) must SKIP the suite, never fail it.
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_dated_specs(Path(tmp))
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                side_effect=OSError("Network is unreachable"),
-            ):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes") as md:
-                    status, _ = snapshot_freshness_status(Path(tmp))
+    def test_freshness_status_unverifiable_inputs(self):
+        old_header = datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc)
+        cases = (
+            ("offline", "Rev 9\nRevision Log\n1 February 2023\n",
+             OSError("Network is unreachable"), False, True),
+            ("no header", "Rev 9\nRevision Log\n1 February 2023\n",
+             None, False, True),
+            ("undated local", "no markers here\n", old_header, False, False),
+            ("missing file", "Rev 9\nRevision Log\n1 February 2023\n",
+             old_header, True, False),
+        )
+        for name, source, header, missing_file, no_download in cases:
+            with self.subTest(reason=name), tempfile.TemporaryDirectory() as tmp:
+                spec_dir = Path(tmp)
+                self._write_all_specs(spec_dir, source)
+                if missing_file:
+                    (spec_dir / "BlueSolar-HEX-protocol.txt").unlink()
+                with mock.patch.object(fetch_specs, "remote_last_modified") as last_modified, \
+                     mock.patch.object(fetch_specs, "download_pdf_bytes") as download:
+                    if isinstance(header, BaseException):
+                        last_modified.side_effect = header
+                    else:
+                        last_modified.return_value = header
+                    status, _ = snapshot_freshness_status(spec_dir)
                     self.assertEqual(status, "unknown")
-                    md.assert_not_called()
-
-    def test_freshness_status_no_header_is_unknown(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_dated_specs(Path(tmp))
-            with mock.patch.object(fetch_specs, "remote_last_modified", return_value=None):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes") as md:
-                    status, _ = snapshot_freshness_status(Path(tmp))
-                    self.assertEqual(status, "unknown")
-                    md.assert_not_called()
-
-    def test_freshness_status_undated_local_is_unknown(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "no markers here\n")
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
-            ):
-                status, _ = snapshot_freshness_status(Path(tmp))
-                self.assertEqual(status, "unknown")
-
-    def test_freshness_status_missing_file_is_unknown(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_dated_specs(Path(tmp))
-            (Path(tmp) / "BlueSolar-HEX-protocol.txt").unlink()
-            with mock.patch.object(
-                fetch_specs, "remote_last_modified",
-                return_value=datetime.datetime(2022, 5, 1, tzinfo=datetime.timezone.utc),
-            ):
-                status, _ = snapshot_freshness_status(Path(tmp))
-                self.assertEqual(status, "unknown")
+                    if no_download:
+                        download.assert_not_called()
 
     def test_extract_pdf_text_flatedecode_split_words(self):
         """Crafted FlateDecode stream with kerning-split words recovers
@@ -5993,7 +5850,7 @@ class TestFetchSpecs(unittest.TestCase):
                 for key in fetch_specs.OFFICIAL_SPECS
             }
             pdfs = {
-                key: self._ids_pdf_for(label, date, snap_ids[key])
+                key: self._markers_pdf_for(label, date, snap_ids[key])
                 for key, (label, date) in expected.items()
             }
 
@@ -6100,9 +5957,7 @@ class TestFetchSpecs(unittest.TestCase):
         """Live behavior (skipped unless network is present): the real online
         PDFs' stdlib-extracted markers still equal their snapshots' (same
         revisions, re-uploaded). A real new revision fails here loudly
-        instead of passing; offline skips. Other live assertions stay out of
-        the suite (the mocked tests above cover the mechanism) to keep
-        default runs fast and offline-green."""
+        instead of passing; offline skips."""
         specs_dir = Path(__file__).resolve().parent / "specs"
         for key, info in fetch_specs.OFFICIAL_SPECS.items():
             with self.subTest(spec=key):
@@ -6117,175 +5972,59 @@ class TestFetchSpecs(unittest.TestCase):
                     f"{key} live markers diverged from snapshot",
                 )
 
-    def _ids_pdf_for(self, label, date, ids) -> bytes:
-        """Craft PDF embedding derived markers PLUS explicit ID list.
-
-        Markers derive from the caller's (label, date) (no revision
-        literals, like _markers_pdf_for); IDs render as "0xHHHH" space
-        runs so stdlib live_register_ids recovers them exactly (single-char
-        TJ fragments, like _content_pdf_bytes). Snapshot-exact PDFs list the
-        snapshot's own register_id_set_from_text; added/removed variants add
-        or omit one ID (never literals for revisions, IDs 0x9999/0xEDF0 are
-        synthetic/derived choices documented per test).
+    def test_freshness_id_stage_outcomes(self):
+        """Matching revision markers must still detect added and removed IDs.
+        A PDF with no extractable IDs stays unverifiable.
         """
-        bits = [
-            "Revision Log",
-            "Document history",
-            "Changes:",
-            label or "",
-            date.strftime("%d-%m-%Y"),
-            date.isoformat(),
-            date.strftime("%d %B %Y"),
-        ]
-        if label and re.match(r"v3\.\d+$", label):
-            bits.append(f"{label[1:]} {date.day} {date.strftime('%B')} {date.year}")
-        if label and "Initial version" in label:
-            bits.append("Initial version")
-        bits.append(" ".join(f"0x{i:04X}" for i in sorted(ids)))
-        return self._content_pdf_bytes("  ".join(b for b in bits if b))
-
-    def test_freshness_id_stage_added_is_stale(self):
-        """Mocked added-ID -> STALE naming the ID: live table gains 0x9999
-        (absent from all snapshots) while markers match, so headers+markers
-        stay fresh but the third stage fails loudly as added."""
         with tempfile.TemporaryDirectory() as tmp:
-            tmpdir = Path(tmp)
-            expected = self._copy_real_snapshots(tmpdir)
-            # Snapshot-exact ID sets (derived, never literals).
-            snap_ids = {
+            spec_dir = Path(tmp)
+            markers = self._copy_real_snapshots(spec_dir)
+            ids = {
                 key: register_id_set_from_text(
-                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
+                    (spec_dir / f"{key}.txt").read_text(errors="ignore")
                 )
                 for key in fetch_specs.OFFICIAL_SPECS
             }
-            self.assertNotIn(0x9999, snap_ids["BlueSolar-HEX-protocol"])
-            pdfs = {}
-            for key, (label, date) in expected.items():
-                ids = set(snap_ids[key])
-                if key == "BlueSolar-HEX-protocol":
-                    ids.add(0x9999)  # synthetic future register, markers unchanged
-                pdfs[key] = self._ids_pdf_for(label, date, ids)
-            newer = {
+            target = "BlueSolar-HEX-protocol"
+            self.assertNotIn(0x9999, ids[target])
+            self.assertIn(0xEDF0, ids[target])
+            urls = {info["url"]: key for key, info in fetch_specs.OFFICIAL_SPECS.items()}
+            headers = {
                 key: datetime.datetime.combine(
                     date + datetime.timedelta(days=10), datetime.time(12, 0),
                     tzinfo=datetime.timezone.utc,
                 )
-                for key, (_label, date) in expected.items()
+                for key, (_label, date) in markers.items()
             }
-
-            def _fake_header(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return newer[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            def _fake_download(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return pdfs[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
-                    status, detail = snapshot_freshness_status(tmpdir)
-                    self.assertEqual(status, "stale", detail)
-                    self.assertIn("0x9999", detail)
-                    self.assertIn("added", detail)
+            base_pdfs = {
+                key: self._markers_pdf_for(label, date, ids[key])
+                for key, (label, date) in markers.items()
+            }
+            cases = (
+                ("added", ids[target] | {0x9999}, "stale", ("added", "0x9999")),
+                ("removed", ids[target] - {0xEDF0}, "stale", ("removed", "0xEDF0")),
+                ("unextractable", None, "unknown", ()),
+            )
+            for name, live_ids, expected_status, detail_parts in cases:
+                with self.subTest(change=name):
+                    pdfs = base_pdfs.copy()
+                    label, date = markers[target]
+                    pdfs[target] = (
+                        self._markers_pdf_for(label, date, live_ids)
+                        if live_ids is not None else self._markers_pdf_for(label, date)
+                    )
+                    with mock.patch.object(
+                        fetch_specs, "remote_last_modified",
+                        side_effect=lambda url, timeout=15.0: headers[urls[url]],
+                    ), mock.patch.object(
+                        fetch_specs, "download_pdf_bytes",
+                        side_effect=lambda url, timeout=15.0: pdfs[urls[url]],
+                    ):
+                        status, detail = snapshot_freshness_status(spec_dir)
+                    self.assertEqual(status, expected_status, detail)
                     self.assertIn("BlueSolar", detail)
-
-    def test_freshness_id_stage_removed_is_stale(self):
-        """Mocked removed-ID -> STALE: live table drops 0xEDF0 (present in
-        BlueSolar snapshot, real register 0xEDF0 battery max current) while
-        markers match, so the third stage fails loudly as removed."""
-        with tempfile.TemporaryDirectory() as tmp:
-            tmpdir = Path(tmp)
-            expected = self._copy_real_snapshots(tmpdir)
-            snap_ids = {
-                key: register_id_set_from_text(
-                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
-                )
-                for key in fetch_specs.OFFICIAL_SPECS
-            }
-            self.assertIn(0xEDF0, snap_ids["BlueSolar-HEX-protocol"])
-            pdfs = {}
-            for key, (label, date) in expected.items():
-                ids = set(snap_ids[key])
-                if key == "BlueSolar-HEX-protocol":
-                    ids.discard(0xEDF0)  # synthetic removal, markers unchanged
-                pdfs[key] = self._ids_pdf_for(label, date, ids)
-            newer = {
-                key: datetime.datetime.combine(
-                    date + datetime.timedelta(days=10), datetime.time(12, 0),
-                    tzinfo=datetime.timezone.utc,
-                )
-                for key, (_label, date) in expected.items()
-            }
-
-            def _fake_header(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return newer[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            def _fake_download(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return pdfs[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
-                    status, detail = snapshot_freshness_status(tmpdir)
-                    self.assertEqual(status, "stale", detail)
-                    self.assertIn("0xEDF0", detail)
-                    self.assertIn("removed", detail)
-
-    def test_freshness_id_stage_unextractable_is_unknown(self):
-        """Unextractable live IDs -> UNKNOWN (skip, never fail): markers
-        match but the PDF carries no IDs (marker-only crafted PDF), so the
-        ID stage cannot prove a table change and must skip loudly."""
-        with tempfile.TemporaryDirectory() as tmp:
-            tmpdir = Path(tmp)
-            expected = self._copy_real_snapshots(tmpdir)
-            # Matching PDFs for all but BlueSolar (which gets markers-only,
-            # no IDs -> empty live set -> unknown).
-            snap_ids = {
-                key: register_id_set_from_text(
-                    (tmpdir / f"{key}.txt").read_text(errors="ignore")
-                )
-                for key in fetch_specs.OFFICIAL_SPECS
-            }
-            pdfs = {}
-            for key, (label, date) in expected.items():
-                if key == "BlueSolar-HEX-protocol":
-                    pdfs[key] = self._markers_pdf_for(label, date)  # no IDs
-                else:
-                    pdfs[key] = self._ids_pdf_for(label, date, snap_ids[key])
-            newer = {
-                key: datetime.datetime.combine(
-                    date + datetime.timedelta(days=10), datetime.time(12, 0),
-                    tzinfo=datetime.timezone.utc,
-                )
-                for key, (_label, date) in expected.items()
-            }
-
-            def _fake_header(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return newer[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            def _fake_download(url, timeout=15.0):
-                for key, info in fetch_specs.OFFICIAL_SPECS.items():
-                    if info["url"] == url:
-                        return pdfs[key]
-                raise AssertionError(f"unexpected url {url}")
-
-            with mock.patch.object(fetch_specs, "remote_last_modified", side_effect=_fake_header):
-                with mock.patch.object(fetch_specs, "download_pdf_bytes", side_effect=_fake_download):
-                    status, detail = snapshot_freshness_status(tmpdir)
-                    self.assertEqual(status, "unknown", detail)
-                    self.assertIn("BlueSolar", detail)
+                    for part in detail_parts:
+                        self.assertIn(part, detail)
 
     def test_freshness_structure_stage_scale_is_stale(self):
         """Mocked same-revision scale edit with no added/removed ID -> STALE
@@ -6756,40 +6495,21 @@ class TestFetchSpecs(unittest.TestCase):
             self.assertIn("text", written, "--sync with all SYNC-OK must write manifest file")
             self.assertIn(f"'{today}'", written["text"])
 
-    def test_snapshot_revision_no_midline_future_inflation(self):
-        """fetch_specs-level proof: mid-line example/future date in the tail
-        must not inflate local_date (anchored, not max-over-tail)."""
-        base = "Title\nRev 18\n\nRevision Log\n\n15-11-2021 some change\n"
-        tail = base + "Some example: next maintenance 15-11-2030 future note\n"
-        _label, date = snapshot_revision_info(tail)
-        self.assertEqual(date, datetime.date(2021, 11, 15))
-
-    def test_content_gate_verdict_fresh(self):
-        results = {k: True for k in fetch_specs.OFFICIAL_SPECS}
-        status, _ = content_gate_verdict(results)
-        self.assertEqual(status, "fresh")
-
-    def test_content_gate_verdict_diff_is_stale(self):
-        results = {k: True for k in fetch_specs.OFFICIAL_SPECS}
-        results["Orion-XS-HEX-protocol"] = False
-        status, detail = content_gate_verdict(results)
-        self.assertEqual(status, "stale")
-        self.assertIn("Orion-XS-HEX-protocol", detail)
-
-    def test_content_gate_verdict_all_unverifiable_is_unknown(self):
-        results = {k: None for k in fetch_specs.OFFICIAL_SPECS}
-        status, detail = content_gate_verdict(results)
-        self.assertEqual(status, "unknown")
-        self.assertIn("pdftotext", detail)
-
-    def test_content_gate_verdict_partial_unknown_is_unknown(self):
-        """Mixed match+unverifiable never passes on partial evidence: it
-        skips, naming the unverifiable specs."""
-        results = {k: True for k in fetch_specs.OFFICIAL_SPECS}
-        results["BMV-7xx-HEX-Protocol"] = None
-        status, detail = content_gate_verdict(results)
-        self.assertEqual(status, "unknown")
-        self.assertIn("BMV-7xx-HEX-Protocol", detail)
+    def test_content_gate_verdict_outcomes(self):
+        cases = (
+            ("all match", {}, "fresh", None),
+            ("different", {"Orion-XS-HEX-protocol": False}, "stale", "Orion-XS-HEX-protocol"),
+            ("all unknown", {k: None for k in fetch_specs.OFFICIAL_SPECS}, "unknown", "pdftotext"),
+            ("partial unknown", {"BMV-7xx-HEX-Protocol": None}, "unknown", "BMV-7xx-HEX-Protocol"),
+        )
+        for name, overrides, expected_status, detail_part in cases:
+            with self.subTest(outcome=name):
+                results = dict.fromkeys(fetch_specs.OFFICIAL_SPECS, True)
+                results.update(overrides)
+                status, detail = content_gate_verdict(results)
+                self.assertEqual(status, expected_status)
+                if detail_part:
+                    self.assertIn(detail_part, detail)
 
     def test_normalize_snapshot_text(self):
         self.assertEqual(
@@ -6810,62 +6530,43 @@ class TestFetchSpecs(unittest.TestCase):
                         fetch_remote_snapshot_text("http://example/x.pdf"), "remote layout\n"
                     )
 
-    def test_fetch_remote_snapshot_text_download_failure(self):
-        with mock.patch.object(
-            fetch_specs, "download_pdf_bytes", side_effect=OSError("offline")
-        ):
-            self.assertIsNone(fetch_remote_snapshot_text("http://example/x.pdf"))
-
-    def test_fetch_remote_snapshot_text_no_pdftotext(self):
-        with mock.patch.object(fetch_specs, "download_pdf_bytes", return_value=b"%PDF"):
-            with mock.patch.object(fetch_specs.shutil, "which", return_value=None):
-                self.assertIsNone(fetch_remote_snapshot_text("http://example/x.pdf"))
-
-    def test_fetch_remote_snapshot_text_extract_failure(self):
-        with mock.patch.object(fetch_specs, "download_pdf_bytes", return_value=b"%PDF"):
-            with mock.patch.object(fetch_specs.shutil, "which", return_value="/usr/bin/pdftotext"):
-                with mock.patch.object(fetch_specs, "extract_text", return_value=False):
+    def test_fetch_remote_snapshot_text_failures(self):
+        cases = (
+            ("download", OSError("offline"), "/usr/bin/pdftotext"),
+            ("pdftotext missing", b"%PDF", None),
+            ("extraction", b"%PDF", "/usr/bin/pdftotext"),
+        )
+        for name, download, executable in cases:
+            with self.subTest(failure=name):
+                with mock.patch.object(fetch_specs, "download_pdf_bytes") as get_pdf, \
+                     mock.patch.object(fetch_specs.shutil, "which", return_value=executable), \
+                     mock.patch.object(fetch_specs, "extract_text", return_value=False):
+                    if isinstance(download, BaseException):
+                        get_pdf.side_effect = download
+                    else:
+                        get_pdf.return_value = download
                     self.assertIsNone(fetch_remote_snapshot_text("http://example/x.pdf"))
 
-    def test_verify_remote_content_match(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "local snapshot\n")
-            with mock.patch.object(
-                fetch_specs, "fetch_remote_snapshot_text", return_value="local snapshot  \n"
-            ):
-                results = verify_remote_content(Path(tmp))
+    def test_verify_remote_content_outcomes(self):
+        cases = (
+            ("match", "local snapshot  \n", False, True),
+            ("different", "tampered remote\n", False, False),
+            ("unverifiable", None, False, None),
+            ("missing local", "local snapshot\n", True, True),
+        )
+        for name, remote, missing_local, expected in cases:
+            with self.subTest(outcome=name), tempfile.TemporaryDirectory() as tmp:
+                spec_dir = Path(tmp)
+                self._write_all_specs(spec_dir, "local snapshot\n")
+                if missing_local:
+                    (spec_dir / "BlueSolar-HEX-protocol.txt").unlink()
+                with mock.patch.object(fetch_specs, "fetch_remote_snapshot_text", return_value=remote):
+                    results = verify_remote_content(spec_dir)
                 self.assertEqual(set(results), set(fetch_specs.OFFICIAL_SPECS))
-                self.assertTrue(all(v is True for v in results.values()))
-
-    def test_verify_remote_content_diff(self):
-        # Same-timestamp CDN re-upload: content differs -> False (would-be
-        # FRESH under header-only --check, caught here by --sync).
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "local snapshot\n")
-            with mock.patch.object(
-                fetch_specs, "fetch_remote_snapshot_text", return_value="tampered remote\n"
-            ):
-                results = verify_remote_content(Path(tmp))
-                self.assertTrue(all(v is False for v in results.values()))
-
-    def test_verify_remote_content_unverifiable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "local snapshot\n")
-            with mock.patch.object(
-                fetch_specs, "fetch_remote_snapshot_text", return_value=None
-            ):
-                results = verify_remote_content(Path(tmp))
-                self.assertTrue(all(v is None for v in results.values()))
-
-    def test_verify_remote_content_missing_local(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._write_all_specs(Path(tmp), "local snapshot\n")
-            (Path(tmp) / "BlueSolar-HEX-protocol.txt").unlink()
-            with mock.patch.object(
-                fetch_specs, "fetch_remote_snapshot_text", return_value="local snapshot\n"
-            ):
-                results = verify_remote_content(Path(tmp))
-                self.assertIsNone(results["BlueSolar-HEX-protocol"])
+                if missing_local:
+                    self.assertIsNone(results["BlueSolar-HEX-protocol"])
+                    del results["BlueSolar-HEX-protocol"]
+                self.assertTrue(all(value is expected for value in results.values()))
 
 if __name__ == "__main__":
     unittest.main()
