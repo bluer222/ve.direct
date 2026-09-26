@@ -266,7 +266,7 @@ def scrape_doc_ids(text: str) -> set[int]:
     # digits each rejoining to exactly 4 with a single space. Verified
     # zero-diff: no snapshot line matches, so no prose false positives.
     for _line in text.splitlines():
-        _mm = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})\b", _line)
+        _mm = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s([0-9A-Fa-f]{1,3})\b", _line)
         if (
             _mm
             and len(_mm.group(1)) + len(_mm.group(2)) == 4
@@ -328,8 +328,14 @@ def scrape_doc_cs_codes(section: str) -> dict[int, str]:
     the device header and "ERR" bound carry none, the section intro carries
     none), so the guard-free scan stays exactly the 15 states while a
     colliding row diverges. Gap independence is preserved (scraper
-    ``\\s+`` vs parser bullet-tail): a bullet-less row still diverges (see
-    test_cs_counter_bullet_gap_divergence). Codes accept open digit runs
+    ``[\\s=:]`` vs parser bullet-tail): a bullet-less row still diverges (see
+    test_cs_counter_bullet_gap_divergence). Code separator accepts ``=``/``:``
+    as well as whitespace (``[\\s=:]``): probe ``Off=0 •`` / ``Off:0 •``
+    (control ``Bulk 3 •``) was missed by parser, scraper, and tolerant (all
+    required ``\\s+`` before the code) while 15-count/set-equality stayed
+    green — reproduced synthetically before the fix. ``:`` checked too.
+    Zero-diff: no snapshot CS-section line carries ``=``/``:`` before its
+    code (verified), so current 15 scrape identically. Codes accept open digit runs
     (``\\d+``): a future 5-digit state (e.g. "MegaBoost 12345") is scraped
     here while the parser keeps its pinned 1-4 bound (5-digit collides with
     decimal register IDs like 60961 on the parser's precise side) —
@@ -343,7 +349,7 @@ def scrape_doc_cs_codes(section: str) -> dict[int, str]:
     coverage)."""
     found: dict[int, str] = {}
     for line in section.splitlines():
-        m = re.match(r"^\s*(.+?)\s+(\d+)\b", line)
+        m = re.match(r"^\s*(.+?)[\s=:]+(\d+)\b", line)
         if m:
             code = int(m.group(2))
             if 1900 <= code <= 2100:
@@ -389,8 +395,14 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     parser bound is still scraped here (bound-divergence test).
     Zero-diff: all 20 snapshot ERR names start with a letter and carry no
     trailing prose (verified). Gap independence is preserved (scraper
-    ``\\s+`` vs parser ``\\s{2,}``): a single-space row still diverges (see
-    test_error_counter_single_space_divergence). Codes accept open digit
+    ``[\\s=:]`` vs parser ``(?:\\s{2,}|\\s*[:=]\\s*)``): a single-space row still
+    diverges (see test_error_counter_single_space_divergence) — the parser keeps
+    ``\\s{2,}`` for spaces while both accept ``=``/``:`` (probe
+    ``Future fault=99`` / ``Future fault:99`` missed by parser ``\\s{2,}`` +
+    scraper ``\\s+`` while 20-count stayed green — reproduced synthetically
+    before the fix; ``:`` checked too). Zero-diff: no snapshot ERR-section line
+    carries ``=``/``:`` before its code (verified), so current 20 scrape
+    identically. Codes accept open digit
     runs (``\\d+``, same guards as the CS scraper above: years 1900-2100
     and "0x" ID rows skipped, never real ERR codes — maxima 119): a future
     5-digit fault is scraped here while the parser keeps its pinned 1-4
@@ -414,7 +426,7 @@ def scrape_doc_error_codes(section: str) -> dict[int, str]:
     for line in section.splitlines():
         if line.strip() in _furniture_lines:
             continue
-        m = re.match(r"^\s*(.+?)\s+(\d+)\b.*$", line)
+        m = re.match(r"^\s*(.+?)[\s=:]+(\d+)\b.*$", line)
         if m:
             code = int(m.group(2))
             if 1900 <= code <= 2100:
@@ -626,8 +638,20 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # Line-leading table-shaped decimal (original coverage).
         # Description start is ``\S`` (any non-space): symbol-first rows
         # ("60961 *Boost record") scrape honestly (see docstring).
+        # Decimal separator accepts ``,``/``:``/``;`` as well as whitespace
+        # (``[\s,;:]``): probes ``60961, Future history record`` /
+        # ``60961: Future history record`` / ``60961; Future`` were missed by
+        # decimal scan, hex scrape, and both history parsers (all required
+        # ``\s+`` after digits) while counts stayed green — reproduced
+        # synthetically before the fix. ``;`` checked too (same honest pass);
+        # ``-`` NOT accepted (pinned): hyphen is the decimal-range separator,
+        # so ``60961- Future`` stays range-ambiguous/missed on all sides by
+        # design. Zero-diff: no snapshot line carries ``,``/``:``/``;`` after
+        # its decimal ID (verified), so snapshot scans stay exactly
+        # EXPECTED_DECIMAL_SCAN_HITS. Year guard (``2021, ...`` prose must not
+        # trip) preserved below via the region-scoped 1900-2100 skip.
         m = re.match(
-            r"^\s*(\d{4,5})\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"^\s*(\d{4,5})[\s,;:]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         )
@@ -637,7 +661,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # tail on the same line. Stays exact (zero hits) on snapshots.
         # Description start is ``\S`` (symbol-first, see docstring).
         for m_mid in re.finditer(
-            r"(?<!\w)(\d{4,5})\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{4,5})[\s,;:]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         ):
@@ -646,7 +670,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # decimal + open-charset description, no dtype required. Year
         # denylist applies only outside history regions (see above).
         # Description start is ``\S`` (symbol-first, see docstring).
-        m_tail = re.match(r"^\s*(\d{4,5})\s+(\S.*?)\s*$", line)
+        m_tail = re.match(r"^\s*(\d{4,5})[\s,;:]+(\S.*?)\s*$", line)
         if m_tail:
             rid = int(m_tail.group(1))
             if 1900 <= rid <= 2100 and not in_history:
@@ -661,7 +685,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # "1234567 ..." parse honestly; 6-/7-digit no extra guard (years are
         # exactly 4-digit; HEX-frame colon-led runs miss the ``^`` shape;
         # no snapshot hits, verified).
-        for _pat in (r"^\s*(\d{3})(?!\d)\s+(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)\s+(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)\s+(\S.*?)\s*$"):
+        for _pat in (r"^\s*(\d{3})(?!\d)[\s,;:]+(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)[\s,;:]+(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)[\s,;:]+(\S.*?)\s*$"):
             m36 = re.match(_pat, line)
             if m36:
                 _rid36 = int(m36.group(1))
@@ -672,17 +696,17 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # zero-diff: no snapshot hits). Exact lengths with (?!\d) so
         # "60961" never partially matches as "609".
         for _tpat, _flags in (
-            (r"^\s*(\d{3})(?!\d)\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
-            (r"^\s*(\d{6})(?!\d)\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
-            (r"^\s*(\d{7})(?!\d)\s+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{3})(?!\d)[\s,;:]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{6})(?!\d)[\s,;:]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{7})(?!\d)[\s,;:]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
         ):
             _tm = re.match(_tpat, line, _flags)
             if _tm:
                 ids.add(int(_tm.group(1)))
         for _mpat in (
-            r"(?<!\w)(\d{3})(?!\d)\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-            r"(?<!\w)(\d{6})(?!\d)\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-            r"(?<!\w)(\d{7})(?!\d)\s+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{3})(?!\d)[\s,;:]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{6})(?!\d)[\s,;:]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{7})(?!\d)[\s,;:]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
         ):
             for m_mid36 in re.finditer(_mpat, line, re.IGNORECASE):
                 ids.add(int(m_mid36.group(1)))
@@ -696,7 +720,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # runs of 1-3 hex digits each rejoining to exactly 4 with a single
         # space. Verified zero-diff: no snapshot line matches, so snapshot
         # scans stay exactly EXPECTED_DECIMAL_SCAN_HITS.
-        _mid = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})\b", line)
+        _mid = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s([0-9A-Fa-f]{1,3})\b", line)
         if (
             _mid
             and len(_mid.group(1)) + len(_mid.group(2)) == 4
@@ -777,11 +801,20 @@ def independent_revision_info(text: str):
     snapshots."""
     import datetime as _dt
 
+    # Independent label shapes (same four probes as snapshot_revision_info
+    # above, verified zero-diff the same way — no REV/Rev./Revision label and
+    # no trailing parenthetical in snapshots today). Deliberately NOT sharing
+    # one regex with snapshot_revision_info (different method: line-walk with
+    # re.match on stripped lines vs search-on-text, different alternation
+    # order REV/Rev/Revision vs Revision/Rev/REV) so a shared pattern typo
+    # cannot stay green on both sides; both normalize to ``Rev N`` like live.
     label = None
-    m = re.search(r"(?m)^\s*Rev\s+(\d+)\s*$", text)
-    if m:
-        label = f"Rev {m.group(1)}"
-    else:
+    for _ln in text.splitlines():
+        _lm = re.match(r"\s*(?:REV|Rev|Revision)\s*\.?\s+(\d+)\s*(?:\(.*\))?\s*$", _ln.strip())
+        if _lm:
+            label = f"Rev {_lm.group(1)}"
+            break
+    if label is None:
         vers = re.findall(r"(?m)^\s*(3\.\d+)\s+\d{1,2}\s+\w+\s+\d{4}", text)
         if vers:
             label = f"v{vers[-1]}"
@@ -792,6 +825,17 @@ def independent_revision_info(text: str):
         "January", "February", "March", "April", "May", "June", "July",
         "August", "September", "October", "November", "December",
     )
+    # Abbreviated months mirror snapshot_revision_info (same zero-diff:
+    # no snapshot abbreviated entry today) but via line-walk with re.match on
+    # stripped lines (vs snapshot findall-on-tail) and different alternation
+    # order, so a shared pattern typo cannot stay green on both sides.
+    _abbr = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6, "Jul": 7, "Aug": 8, "Sep": 9, "Sept": 9, "Oct": 10, "Nov": 11, "Dec": 12}
+    def _mnum(_m):
+        _s = _m.rstrip(".")
+        if _s in months:
+            return months.index(_s) + 1
+        return _abbr.get(_s)
+    _mpat = r"(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|Jul\.?|Aug\.?|Sept?\.?|Oct\.?|Nov\.?|Dec\.?)"
     dates: set = set()
     for line in tail_lines:
         s = line.strip()
@@ -811,14 +855,68 @@ def independent_revision_info(text: str):
             except ValueError:
                 pass
             continue
-        # Text-mode version+date row ("3.34 14 April 2025", leading spaces).
+        # Slash-separated entry headers (both orders, same anchoring as - above;
+        # no snapshot /-entry with 4-digit year today — BlueSolar 10/15/20A is
+        # 2-digit + trailing A and mid-line — so zero-diff).
+        m1s = re.match(r"^(?:\d+\)\s*)?(\d{1,2})/(\d{1,2})/(\d{4})(?:\s.*)?$", s)
+        if m1s:
+            try:
+                dates.add(_dt.date(int(m1s.group(3)), int(m1s.group(2)), int(m1s.group(1))))
+            except ValueError:
+                pass
+            continue
+        m2s = re.match(r"^(?:\d+\)\s*)?(\d{4})/(\d{1,2})/(\d{1,2})(?:\s.*)?$", s)
+        if m2s:
+            try:
+                dates.add(_dt.date(int(m2s.group(1)), int(m2s.group(2)), int(m2s.group(3))))
+            except ValueError:
+                pass
+            continue
+        # Text-mode version+date row ("3.34 14 April 2025" / abbreviated "3.34 15 Nov 2022").
         m3 = re.match(
-            r"^(3\.\d+)\s+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+            r"^(3\.\d+)\s+(\d{1,2})\s+(" + _mpat + r")\s+(\d{4})",
             s,
         )
         if m3:
             try:
-                dates.add(_dt.date(int(m3.group(4)), months.index(m3.group(3)) + 1, int(m3.group(2))))
+                _n = _mnum(m3.group(3))
+                if _n is not None:
+                    dates.add(_dt.date(int(m3.group(4)), _n, int(m3.group(2))))
+            except ValueError:
+                pass
+            continue
+        # Bare day-first ("15 November 2022" / probe "15 Nov 2022 rev19") anchored;
+        # absent before (snapshot had it, this side missed full bare too) — now honest
+        # via line-walk (vs snapshot findall) so probes parse on both sides.
+        m4 = re.match(r"^(?:\d+\)\s*)?(\d{1,2})\s+(" + _mpat + r")\s+(\d{4})(?:\s.*)?$", s)
+        if m4:
+            try:
+                _n4 = _mnum(m4.group(2))
+                if _n4 is not None:
+                    dates.add(_dt.date(int(m4.group(3)), _n4, int(m4.group(1))))
+            except ValueError:
+                pass
+            continue
+        # Month-first ("April 14, 2025" / abbreviated "Nov 15, 2022") anchored;
+        # absent before on this side (snapshot had full month-first, this side missed
+        # even full) — now honest via line-walk so abbreviated probes parse everywhere.
+        m5 = re.match(r"^(?:\d+\)\s*)?(?:3\.\d+\s+)?(" + _mpat + r")\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})(?:\s.*)?$", s)
+        if m5:
+            try:
+                _n5 = _mnum(m5.group(1))
+                if _n5 is not None:
+                    dates.add(_dt.date(int(m5.group(3)), _n5, int(m5.group(2))))
+            except ValueError:
+                pass
+            continue
+        # Ordinal day-first ("14th April 2025" / "15th Nov 2022") anchored; same
+        # independence justification as above.
+        m6 = re.match(r"^(?:\d+\)\s*)?(\d{1,2})(?:st|nd|rd|th)\s+(" + _mpat + r"),?\s+(\d{4})(?:\s.*)?$", s)
+        if m6:
+            try:
+                _n6 = _mnum(m6.group(2))
+                if _n6 is not None:
+                    dates.add(_dt.date(int(m6.group(3)), _n6, int(m6.group(1))))
             except ValueError:
                 pass
             continue
@@ -1756,7 +1854,7 @@ class TestSpecParsers(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(register_id_set_from_text(source), expected)
         split_ids = re.compile(
-            r"0[xX](?:\s+[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,3} [0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])"
+            r"0[xX](?:\s+[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,3}\s[0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])"
         )
         dtype = re.compile(r"\b(?:un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.I)
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
@@ -4886,7 +4984,7 @@ class TestSpecParsers(unittest.TestCase):
         ID-mismatch skip → FRESH). The tolerant/live guard is dropped after
         verifying no snapshot or live CS-section text contains a 1900-2100
         non-code number (snapshot Text CS zero 4-digit; live Text CS zero
-        4-digit; other specs no CS marker — verified 2026-09-25). Year-shaped
+        4-digit; other specs no CS marker — verified 2026-09-26). Year-shaped
         candidates now compare loudly. Divergence: snapshot+row as live must
         NOT be fresh. Zero false alarms on today's live (15==15)."""
         # The live Text CS equality formerly repeated in
@@ -5613,7 +5711,7 @@ class TestFetchSpecs(unittest.TestCase):
         compares attributes (see scale/description tests above). Verified
         live 2026-09-24: BlueSolar 112 vs 206, Orion 29 vs 109, BMV/Phoenix/
         Text 0 vs snapshots, caps {} vs 25, while tolerant IDs match
-        300/116/124/54/150 exact. Extended pin: a real-live attribute-only
+        300/116/124/55/153 exact. Extended pin: a real-live attribute-only
         edit with collapsed text — e.g. BlueSolar 0xEDF0 scale 0.1→5.1 with
         no added/removed ID — stays FRESH here (only --sync+pdftotext would
         catch it, which clean envs skip). That exact case is now caught live
@@ -5837,8 +5935,8 @@ class TestFetchSpecs(unittest.TestCase):
     def test_content_gate_live_online_ids_match(self):
         """Live behavior (skipped unless network is present): the real online
         PDFs' stdlib-extracted register/PID ID sets still equal their
-        snapshots' (same revisions, re-uploaded; verified 300/116/124/54/150
-        exact 2026-09-25). A table edit keeping Rev/date invisible to markers
+        snapshots' (same revisions, re-uploaded; verified 300/116/124/55/153
+        exact 2026-09-26). A table edit keeping Rev/date invisible to markers
         fails here loudly as added/removed instead of passing; offline skips.
         Zero-diff live: headers are newer today yet markers+IDs match, so the
         gate stays FRESH (not unknown/stale)."""
@@ -6015,6 +6113,164 @@ class TestFetchSpecs(unittest.TestCase):
                     self.assertIsNone(results["BlueSolar-HEX-protocol"])
                     del results["BlueSolar-HEX-protocol"]
                 self.assertTrue(all(value is expected for value in results.values()))
+
+
+class TestCycle34SeparatorVariants(unittest.TestCase):
+    """Cycle-34 tooling fixes: separator/spelling variants never probed before."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.specs_dir = Path(__file__).resolve().parent / "specs"
+        cls.raw_texts = {
+            "bluesolar": (cls.specs_dir / "BlueSolar-HEX-protocol.txt").read_text(errors="ignore"),
+            "orion": (cls.specs_dir / "Orion-XS-HEX-protocol.txt").read_text(errors="ignore"),
+            "bmv": (cls.specs_dir / "BMV-7xx-HEX-Protocol.txt").read_text(errors="ignore"),
+            "phoenix": (cls.specs_dir / "VE.Direct-HEX-Protocol-Phoenix-Inverter.txt").read_text(errors="ignore"),
+            "text": (cls.specs_dir / "VE.Direct-Protocol-3.34.txt").read_text(errors="ignore"),
+        }
+
+    def test_cs_equals_colon_separator_honest(self):
+        from fetch_specs import tolerant_cs_states
+        for sep in ("=", ":"):
+            with self.subTest(sep=sep):
+                sec = (
+                    "The state of operation. See the table below\n"
+                    f"                        Off{sep}0     \u2022\n"
+                    "                        Bulk 3     \u2022\n"
+                )
+                self.assertEqual(VEDirectTextParser(sec).parse_cs_states(), {0: "Off", 3: "Bulk"})
+                self.assertEqual(scrape_doc_cs_codes(sec), {0: "Off", 3: "Bulk"})
+                probe = sec + "                       The error code dummy\n"
+                self.assertEqual(tolerant_cs_states(probe), {0: "Off", 3: "Bulk"})
+        text = self.raw_texts["text"]
+        pos = text.find("The state of operation. See the table below")
+        tail = text[pos:]
+        m_wide = re.search(r"The error code of the device", tail)
+        sec_snap = tail[: m_wide.start()]
+        self.assertEqual([l for l in sec_snap.splitlines() if re.search(r"[=:]\s*\d", l)], [])
+        self.assertEqual(scrape_doc_cs_codes(sec_snap), EXPECTED_CS)
+        self.assertEqual(VEDirectTextParser(text).parse_cs_states(), EXPECTED_CS)
+        self.assertEqual(tolerant_cs_states(text), EXPECTED_CS)
+
+    def test_err_equals_colon_separator_honest(self):
+        for sep in ("=", ":"):
+            with self.subTest(sep=sep):
+                sec = (
+                    "The error code of the device (relevant when the device is in the fault state)\n"
+                    "                        No error                                                            0\n"
+                    f"                        Future fault{sep}99\n"
+                )
+                self.assertEqual(VEDirectTextParser(sec).parse_errors(), {0: "No error", 99: "Future fault"})
+                self.assertEqual(scrape_doc_error_codes(sec), {0: "No error", 99: "Future fault"})
+        text = self.raw_texts["text"]
+        pos = text.find("The error code of the device (relevant when the device is in the fault state)")
+        tail = text[pos:]
+        sec_snap = tail[: tail.find("Historical data")]
+        self.assertEqual(VEDirectTextParser(text).parse_errors(), EXPECTED_ERRORS)
+        self.assertEqual(scrape_doc_error_codes(sec_snap), EXPECTED_ERRORS)
+        single = (
+            "The error code of the device (relevant when the device is in the fault state)\n"
+            "                        No error                                                            0\n"
+            "                        Single spaced 1\n"
+        )
+        self.assertIn(1, scrape_doc_error_codes(single))
+        self.assertNotIn(1, VEDirectTextParser(single).parse_errors())
+
+    def test_decimal_comma_colon_semicolon_honest(self):
+        from spec_parser import OrionXSHEXParser
+        for sep in (",", ":", ";"):
+            with self.subTest(sep=sep):
+                line = f"60961{sep} Future history record\n"
+                hist = f"Restore factory defaults\n{line}1.2 Asynchronous items\n"
+                self.assertIn(60961, scrape_decimal_ids(hist))
+                self.assertNotIn(60961, scrape_doc_ids(line))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    regs = cls(hist).parse_registers()
+                    self.assertIn(60961, regs)
+                    self.assertEqual(regs[60961].description, "Future history record")
+                self.assertIn(60961, scrape_decimal_ids(f"60961{sep} Future typed 0.1 un16 V\n"))
+        self.assertEqual(scrape_decimal_ids("60961- Future history record\n"), set())
+        self.assertNotIn(60961, BlueSolarHEXParser("Restore factory defaults\n60961- Future history record\n1.2 Asynchronous items\n").parse_registers())
+        self.assertEqual(scrape_decimal_ids("2021, some prose note\n"), set())
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+
+    def test_tab_split_hex_id_honest(self):
+        from spec_parser import _split_typed_row
+        probe = "0xED\tE0    Split inside  0.1  un16  V\n"
+        row = _split_typed_row(probe)
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row[0], 0xEDE0)
+        self.assertIn(0xEDE0, scrape_doc_ids(probe))
+        self.assertIn(0xEDE0, scrape_decimal_ids(probe))
+        self.assertEqual(register_id_set_from_text(probe), {0xEDE0})
+        dbl = "0xED  E0    Split inside  0.1  un16  V\n"
+        self.assertIsNone(_split_typed_row(dbl))
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertNotIn("\t", self.raw_texts[key])
+
+    def test_revision_label_shapes_honest(self):
+        for lbl in ("REV 19", "Rev. 19", "Revision 19", "Rev 19 (draft)"):
+            with self.subTest(label=lbl):
+                txt = f"Title\n{lbl}\n\nRevision Log\n\n15-11-2021 some change\n"
+                self.assertEqual(snapshot_revision_info(txt)[0], "Rev 19")
+                self.assertEqual(independent_revision_info(txt)[0], "Rev 19")
+                self.assertEqual(snapshot_revision_info(txt)[1], datetime.date(2021, 11, 15))
+                self.assertEqual(independent_revision_info(txt)[1], datetime.date(2021, 11, 15))
+        for key in fetch_specs.OFFICIAL_SPECS:
+            with self.subTest(spec=key):
+                tt = (self.specs_dir / f"{key}.txt").read_text(errors="ignore")
+                self.assertEqual(snapshot_revision_info(tt), independent_revision_info(tt))
+
+    def test_revision_dates_abbrev_slash_honest(self):
+        cases = (
+            ("15 Nov 2022 rev19", datetime.date(2022, 11, 15)),
+            ("15 Nov. 2022 rev19", datetime.date(2022, 11, 15)),
+            ("Nov 15, 2022 rev19", datetime.date(2022, 11, 15)),
+            ("2022/11/15 rev19", datetime.date(2022, 11, 15)),
+            ("15/11/2022 rev19", datetime.date(2022, 11, 15)),
+        )
+        for entry, expected in cases:
+            with self.subTest(entry=entry):
+                txt = f"Title\nRev 19\n\nRevision Log\n\n{entry}\n"
+                self.assertEqual(snapshot_revision_info(txt)[1], expected)
+                self.assertEqual(independent_revision_info(txt)[1], expected)
+        for key in fetch_specs.OFFICIAL_SPECS:
+            with self.subTest(spec=key):
+                tt = (self.specs_dir / f"{key}.txt").read_text(errors="ignore")
+                self.assertEqual(snapshot_revision_info(tt), independent_revision_info(tt))
+        tail = "Title\nRev 18\n\nRevision Log\n\n15-11-2021 some change\nSome example: next maintenance 15-11-2030 future note\n"
+        self.assertEqual(snapshot_revision_info(tail)[1], datetime.date(2021, 11, 15))
+        self.assertEqual(independent_revision_info(tail)[1], datetime.date(2021, 11, 15))
+
+    def test_pid_renamed_markers_stale(self):
+        from fetch_specs import tolerant_pid_ids
+        probe = "Header\nProduct IDs:\nBMV-700  0x203\nNew Model  0x999\nEnd of list.\n"
+        self.assertIn(0x999, tolerant_pid_ids(probe))
+        self.assertIn(0x999, register_id_set_from_text(probe))
+        snap_text = self.raw_texts["text"]
+        self.assertEqual(len(tolerant_pid_ids(snap_text)), 153)
+        self.assertEqual(len(register_id_set_from_text(snap_text)), 153)
+        single = "The product id:\nFoo Model  0x12345\nThese models are phased out.\n"
+        self.assertNotIn(0x1234, tolerant_pid_ids(single))
+        self.assertEqual(register_id_set_from_text(single), set())
+        try:
+            for key in fetch_specs.OFFICIAL_SPECS:
+                with self.subTest(spec=key):
+                    pdf = download_pdf_bytes(fetch_specs.OFFICIAL_SPECS[key]["url"], timeout=30.0)
+                    live_ids = live_register_ids(pdf)
+                    snap_ids = register_id_set_from_text((self.specs_dir / f"{key}.txt").read_text(errors="ignore"))
+                    self.assertEqual(live_ids, snap_ids)
+                    if key == "VE.Direct-Protocol-3.34":
+                        from fetch_specs import live_text_for_structures
+                        live_text = live_text_for_structures(pdf)
+                        self.assertEqual(tolerant_pid_ids(live_text), tolerant_pid_ids(snap_text))
+        except OSError as e:
+            self.skipTest(f"live download unreachable, skipping: {e}")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -133,7 +133,24 @@ def snapshot_revision_info(text: str):
     mtime is always newer than the remote document, so mtimes prove nothing.
     """
     label = None
-    m = re.search(r"(?m)^\s*Rev\s+(\d+)\s*$", text)
+    # Snapshot label shapes (verified against real marker text first):
+    # snapshots carry ``Rev 18`` / ``Rev 7`` / ``Rev 5`` only (BlueSolar,
+    # BMV, Phoenix cover lines; Orion uses ``Initial version``; Text uses
+    # ``v3.34``) — no ``REV`` / ``Rev.`` / ``Revision`` label and no trailing
+    # parenthetical occurs today, so widening is zero-diff (current labels
+    # still parse identically to ``Rev N``). Accepted shapes mirror what the
+    # live extractor already tolerates (``Rev``/``REV`` case variants,
+    # optional dot for ``Rev.``, long ``Revision``, optional trailing
+    # ``(draft)``-style parenthetical ignored via the trailing group):
+    # probes ``REV 19`` / ``Rev. 19`` / ``Revision 19`` / ``Rev 19 (draft)``
+    # (+ Revision Log + dated entry) yielded (None, date) here while live
+    # matched REV case-insensitively; None acts as wildcard in freshness
+    # (ID-check instead of STALE), so a renamed-label revision stayed FRESH
+    # — reproduced synthetically before the fix. Normalizes to ``Rev N``
+    # like the live side. Kept independent from independent_revision_info
+    # below (search-on-text vs line-walk, different alternation order) so a
+    # shared pattern typo cannot stay green on both sides.
+    m = re.search(r"(?m)^\s*(?:Revision|Rev|REV)\s*\.?\s+(\d+)\s*(?:\(.*\))?\s*$", text)
     if m:
         label = f"Rev {m.group(1)}"
     else:
@@ -153,6 +170,23 @@ def snapshot_revision_info(text: str):
         "January", "February", "March", "April", "May", "June", "July",
         "August", "September", "October", "November", "December",
     )
+    # Abbreviated months (Jan..Dec with/without dots, Sept variant for
+    # September): no snapshot revision entry uses them today (verified zero
+    # abbreviated hits in any snapshot tail), so widening is zero-diff while
+    # probes ``15 Nov 2022 rev19`` / ``15 Nov. 2022`` parse honestly instead
+    # of (label, None) → UNKNOWN-skip. Mapping strips dots, case-sensitive
+    # capitalized like the full names (snapshots capitalize months).
+    _abbr_map = {
+        "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+        "Jul": 7, "Aug": 8, "Sep": 9, "Sept": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+    }
+
+    def _mon_num(mon: str):
+        m = mon.rstrip(".")
+        if m in months:
+            return months.index(m) + 1
+        return _abbr_map.get(m)
+
     dates = []
     # Anchored to revision-entry lines (not max over any date in the tail):
     # an example/future date in prose ("next maintenance 15-11-2030") must not
@@ -171,43 +205,80 @@ def snapshot_revision_info(text: str):
             dates.append(datetime.date(int(y), int(mo), int(d)))
         except ValueError:
             continue
+    # Slash-separated dates (both orders present in the wild with ``-``:
+    # DD-MM-YYYY and YYYY-MM-DD occur in snapshots, so ``/`` accepts both
+    # DD/MM/YYYY and YYYY/MM/DD). No snapshot revision entry uses ``/`` with
+    # a 4-digit year today (verified: BlueSolar ``10/15/20A`` is MM/DD/2-digit
+    # + trailing ``A``, not a 4-digit-year entry, and it is mid-line so the
+    # line-start anchor excludes it anyway), so zero-diff while probes
+    # ``2022/11/15 rev19`` / ``15/11/2022`` parse honestly. Anchored like the
+    # ``-`` branches above (max-date lessons apply: prose dates never inflate).
+    for d, mo, y in re.findall(r"(?m)^\s*(?:\d+\)\s*)?(\d{1,2})/(\d{1,2})/(\d{4})", tail):
+        try:
+            dates.append(datetime.date(int(y), int(mo), int(d)))
+        except ValueError:
+            continue
+    for y, mo, d in re.findall(r"(?m)^\s*(?:\d+\)\s*)?(\d{4})/(\d{1,2})/(\d{1,2})", tail):
+        try:
+            dates.append(datetime.date(int(y), int(mo), int(d)))
+        except ValueError:
+            continue
     for ver, d, mon, y in re.findall(
-        r"(?m)^\s*(3\.\d+)\s+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+        r"(?m)^\s*(3\.\d+)\s+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|Jul\.?|Aug\.?|Sept?\.?|Oct\.?|Nov\.?|Dec\.?)\s+(\d{4})",
         tail,
     ):
         try:
-            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+            mno = _mon_num(mon)
+            if mno is None:
+                continue
+            dates.append(datetime.date(int(y), mno, int(d)))
         except ValueError:
             continue
-    # Month-first drift ("April 14, 2025") with optional ordinal/comma, anchored.
+    # Month-first drift ("April 14, 2025" / abbreviated "Nov 15, 2022") with
+    # optional ordinal/comma, anchored. Abbreviated months (see _abbr_map
+    # above) parse honestly here too; zero-diff (no snapshot abbreviated
+    # month-first entry today).
     for mon, d, y in re.findall(
-        r"(?m)^\s*(?:\d+\)\s*)?(?:3\.\d+\s+)?(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"(?m)^\s*(?:\d+\)\s*)?(?:3\.\d+\s+)?(January|February|March|April|May|June|July|August|September|October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|Jul\.?|Aug\.?|Sept?\.?|Oct\.?|Nov\.?|Dec\.?)"
         r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})",
         tail,
     ):
         try:
-            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+            mno = _mon_num(mon)
+            if mno is None:
+                continue
+            dates.append(datetime.date(int(y), mno, int(d)))
         except ValueError:
             continue
-    # Ordinal day-first drift ("14th April 2025") with optional comma, anchored.
+    # Ordinal day-first drift ("14th April 2025" / "15th Nov 2022") with
+    # optional comma, anchored. Abbreviated months parse honestly; zero-diff.
     for d, mon, y in re.findall(
         r"(?m)^\s*(?:\d+\)\s*)?(\d{1,2})(?:st|nd|rd|th)\s+"
-        r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"(January|February|March|April|May|June|July|August|September|October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|Jul\.?|Aug\.?|Sept?\.?|Oct\.?|Nov\.?|Dec\.?)"
         r",?\s+(\d{4})",
         tail,
     ):
         try:
-            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+            mno = _mon_num(mon)
+            if mno is None:
+                continue
+            dates.append(datetime.date(int(y), mno, int(d)))
         except ValueError:
             continue
-    # Bare day-first ("14 April 2025") anchored (covers Text-mode rows already
-    # counted above; deduplicated so max is unaffected).
+    # Bare day-first ("14 April 2025" / probe "15 Nov 2022 rev19") anchored
+    # (covers Text-mode rows already counted above; deduplicated so max is
+    # unaffected). Abbreviated months parse honestly here (the probe shape);
+    # zero-diff (no snapshot abbreviated bare entry today; current full-month
+    # dates parse identically via _mon_num).
     for d, mon, y in re.findall(
-        r"(?m)^\s*(?:\d+\)\s*)?(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+        r"(?m)^\s*(?:\d+\)\s*)?(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|Jul\.?|Aug\.?|Sept?\.?|Oct\.?|Nov\.?|Dec\.?)\s+(\d{4})",
         tail,
     ):
         try:
-            dt = datetime.date(int(y), months.index(mon) + 1, int(d))
+            mno = _mon_num(mon)
+            if mno is None:
+                continue
+            dt = datetime.date(int(y), mno, int(d))
             if dt not in dates:
                 dates.append(dt)
         except ValueError:
@@ -315,7 +386,13 @@ def extract_pdf_revision_info(pdf_bytes: bytes):
     if not text:
         return None, None
     label = None
-    revs = re.findall(r"(?:Rev|REV)\s+(\d+)", text)
+    # Live label shapes mirror the snapshot widening above (REV/Rev./Revision,
+    # optional dot; trailing parenthetical ignored automatically since findall
+    # captures only digits, unanchored so ``Rev 19 (draft)`` matches ``Rev 19``).
+    # Zero-diff: real PDFs carry ``Rev N`` covers only (verified live==snapshot
+    # on all 5 today), so the wider shape changes nothing there while a future
+    # renamed-label revision parses instead of wildcarding to ID-check.
+    revs = re.findall(r"(?:Revision|Rev|REV)\s*\.?\s+(\d+)", text)
     if revs:
         try:
             label = f"Rev {max(int(x) for x in revs)}"
@@ -337,10 +414,22 @@ def extract_pdf_revision_info(pdf_bytes: bytes):
     cands = [text.find(s) for s in ("Revision Log", "Document history", "Changes:", "Changes")]
     cands = [c for c in cands if c >= 0]
     tail = text[min(cands):] if cands else text
+    # Live dates mirror the snapshot widening (abbreviated months + slash
+    # orders) but unanchored by necessity (joined stream text carries no
+    # reliable line breaks — the deliberate difference from the snapshot parsers).
+    # Zero-diff: real PDFs carry full-month - dates only (verified
+    # live==snapshot today), so the wider shapes change nothing there.
     months = (
         "January", "February", "March", "April", "May", "June", "July",
         "August", "September", "October", "November", "December",
     )
+    _labbr = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6, "Jul": 7, "Aug": 8, "Sep": 9, "Sept": 9, "Oct": 10, "Nov": 11, "Dec": 12}
+    def _lmon(_m):
+        _s = _m.rstrip(".")
+        if _s in months:
+            return months.index(_s) + 1
+        return _labbr.get(_s)
+    _lmpat = r"(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|Jul\.?|Aug\.?|Sept?\.?|Oct\.?|Nov\.?|Dec\.?)"
     dates = []
     for d, mo, y in re.findall(r"(\d{1,2})-(\d{1,2})-(\d{4})", tail):
         try:
@@ -352,39 +441,61 @@ def extract_pdf_revision_info(pdf_bytes: bytes):
             dates.append(datetime.date(int(y), int(mo), int(d)))
         except ValueError:
             continue
+    for d, mo, y in re.findall(r"(\d{1,2})/(\d{1,2})/(\d{4})", tail):
+        try:
+            dates.append(datetime.date(int(y), int(mo), int(d)))
+        except ValueError:
+            continue
+    for y, mo, d in re.findall(r"(\d{4})/(\d{1,2})/(\d{1,2})", tail):
+        try:
+            dates.append(datetime.date(int(y), int(mo), int(d)))
+        except ValueError:
+            continue
     for _ver, d, mon, y in re.findall(
-        r"(3\.\d+)\s+(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+        r"(3\.\d+)\s+(\d{1,2})\s+(" + _lmpat + r")\s+(\d{4})",
         tail,
     ):
         try:
-            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+            _n = _lmon(mon)
+            if _n is None:
+                continue
+            dates.append(datetime.date(int(y), _n, int(d)))
         except ValueError:
             continue
     for mon, d, y in re.findall(
-        r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"(" + _lmpat + r")"
         r"\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})",
         tail,
     ):
         try:
-            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+            _n = _lmon(mon)
+            if _n is None:
+                continue
+            dates.append(datetime.date(int(y), _n, int(d)))
         except ValueError:
             continue
     for d, mon, y in re.findall(
         r"(\d{1,2})(?:st|nd|rd|th)\s+"
-        r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"(" + _lmpat + r")"
         r",?\s+(\d{4})",
         tail,
     ):
         try:
-            dates.append(datetime.date(int(y), months.index(mon) + 1, int(d)))
+            _n = _lmon(mon)
+            if _n is None:
+                continue
+            dates.append(datetime.date(int(y), _n, int(d)))
         except ValueError:
             continue
     for d, mon, y in re.findall(
-        r"(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
+        r"(\d{1,2})\s+(" + _lmpat + r")\s+(\d{4})",
         tail,
     ):
         try:
-            dt = datetime.date(int(y), months.index(mon) + 1, int(d))
+            _n = _lmon(mon)
+            if _n is None:
+                continue
+            dt = datetime.date(int(y), _n, int(d))
             if dt not in dates:
                 dates.append(dt)
         except ValueError:
@@ -414,7 +525,7 @@ def _strip_language_tags(text: str) -> str:
 
 
 def register_id_set_from_text(text: str) -> set[int]:
-    """Collect register/PID IDs from text (stdlib Paranoia, exact-4).
+    """Collect register/PID IDs from text (stdlib Paranoia, exact-3/4).
 
     Matches ``0[xX](HHHH)`` with an exact-4 bound (``(?![0-9A-Fa-f])``: a
     fifth hex digit kills the match, so a protocol-impossible ``0x12345``
@@ -452,6 +563,22 @@ def register_id_set_from_text(text: str) -> set[int]:
             return set()
         t = _strip_language_tags(text)
         ids: set[int] = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t)}
+        # 3-digit PIDs (0x203/0x204/0x205 BMV-700 family, 0x300): PIDs are
+        # 16-bit product identifiers (2-byte LE, max 0xFFFF, max observed
+        # 0xA3F1 — see tolerant_pid_ids), so 3-digit (0x000-0xFFF) is in-range
+        # and valid, while 5-hex stays protocol-impossible (pinned, exact bound
+        # above). The exact-3 bound (``(?![0-9A-Fa-f])`` plus the 4-digit shape
+        # naturally excludes prefixes: ``0xEDF0`` carries a 4th hex so the
+        # 3-digit ``EDF`` + ``0`` fails the lookahead, never double-fires).
+        # Zero-diff live==snapshot verified on all 5 real PDFs after the change:
+        # BlueSolar 3-digit (0x200 via 0x0200, 0x300 via 0x0300) already covered
+        # via leading-zero 4-digit so no new IDs; Orion/BMV no 3-digit hex;
+        # Phoenix +0x300 and Text +0x203/204/205 on BOTH sides equally (live
+        # PDFs carry the same 3-digit rows), so agreement holds (verified).
+        # A synthetic 3-digit PID under renamed markers (``0x999``) now compares
+        # STALE via this global stage too (in addition to the tolerant variant
+        # above), instead of 150==150 fresh.
+        ids |= {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{3})(?![0-9A-Fa-f])", t)}
         for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t):
             try:
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
@@ -489,10 +616,13 @@ def register_id_set_from_text(text: str) -> set[int]:
         # "0x EDF0 ... un16" rescue). Global (not line-anchored): stdlib
         # live text joins layout columns (single-line), so line-leading
         # would miss mid-text splits while the dtype window still proves a
-        # table row. Single literal space for the mid split (a column gap
-        # is 2+, so "0xED  E0" stays out like _split_typed_row).
+        # table row. Single ``\s`` for the mid split (space or tab; a column
+        # gap is 2+, so "0xED  E0" stays out like _split_typed_row; probe
+        # ``0xED\tE0`` was missed on all four sides by a literal single
+        # space — reproduced synthetically before the fix).
         # Zero-diff: no snapshot carries either form with a nearby dtype
-        # (verified), so no prose false positives.
+        # (verified, including tab-split — zero ``\t`` in ID context), so
+        # no prose false positives.
         _dtype_near = re.compile(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE)
         for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t):
             try:
@@ -500,7 +630,7 @@ def register_id_set_from_text(text: str) -> set[int]:
                     ids.add(int(m.group(1), 16))
             except Exception:
                 continue
-        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])", t):
+        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{1,3})\s([0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])", t):
             try:
                 if len(m.group(1)) + len(m.group(2)) != 4:
                     continue
@@ -624,8 +754,8 @@ def live_register_ids(pdf_bytes: bytes) -> set[int]:
     same bound/    ``..``/bare-x/typo handling as :func:`register_id_set_from_text`
     on both sides (exact-4 stdlib; CMap spaceless-join rejects only
     exactly-5 runs so glued real IDs still rescue — see
-    :func:`_table_cmap_ids`; verified exact live==snapshot 2026-09-25:
-    300/116/124/54/150). Empty set means unextractable (caller -> unknown,
+    :func:`_table_cmap_ids`; verified exact live==snapshot 2026-09-26:
+    300/116/124/55/153). Empty set means unextractable (caller -> unknown,
     never stale): a marker-only PDF ("hello world") must skip, not fail as
     removed-everything. Never raises.
     """
@@ -947,7 +1077,7 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
     scraper catch it, parser misses it, diverging loudly instead of
     agreed-missing (see the 5-digit divergence/pin test). Year-shaped codes
     1900-2100 are NOT skipped here by design (no year guard in CS sections):
-    verified 2026-09-25 that no snapshot or live CS-section text contains a
+    verified 2026-09-26 that no snapshot or live CS-section text contains a
     1900-2100 non-code 4-digit number (snapshot Text CS section zero 4-digit;
     live Text CS section zero 4-digit via stdlib extraction; other four specs
     carry no CS marker at all), so the bullet-tail shape alone stays exactly
@@ -969,7 +1099,16 @@ def tolerant_cs_states(text: str) -> dict[int, str]:
         m_end = tail.find("The error code")
         sec = tail[:m_end] if m_end > 0 else tail[:5000]
         found: dict[int, str] = {}
-        for m in re.finditer(r"(?<!\()((?:\([^\d\s)\x95•\n]|[^\s()\x95•])[^\x95•\n]*?)\s+(\d+)\s*[\x95•]", sec):
+        # Code separator accepts ``=``/``:`` as well as whitespace
+        # (``[\s=:]``): probe ``Off=0 •`` / ``Off:0 •`` (control
+        # ``Bulk 3 •``) was missed by parser, scraper, and this tolerant
+        # extractor (all required ``\s+`` before the code) while
+        # 15-count/set-equality stayed green — reproduced synthetically
+        # before the fix. ``:`` checked too (same miss, same honest
+        # pass). Zero-diff: no snapshot or live CS-section text carries
+        # ``=``/``:`` before its code (verified 15==15), so current 15
+        # parse identically on both layouts.
+        for m in re.finditer(r"(?<!\()((?:\([^\d\s)\x95•\n]|[^\s()\x95•])[^\x95•\n]*?)[\s=:]+(\d+)\s*[\x95•]", sec):
             name = m.group(1).strip()
             # Live first chunk merges the section preamble and device header
             # ("... possible values. MPPT Inverter Charger Off"): strip
@@ -1028,15 +1167,39 @@ def tolerant_pid_ids(text: str) -> set[int]:
     merges into page-break names 0xA072/0xA24A, verified) — only IDs compare
     tolerantly; names compare only layout-preserving (mocked) via snapshot
     parsers. Never raises.
+    Section location is resilient to marker rewording (verified what the
+    snapshots actually use first: ``The product id:`` ..
+    ``These models are phased out.`` occur verbatim in the Text snapshot;
+    no ``Product IDs:`` / ``End of list.`` there): the primary pair is tried
+    first (snapshots + live today, 153 exact, zero-diff), falling back to the
+    documented variant pair ``Product IDs:`` .. ``End of list.`` (probe
+    rewording). A synthetic 3-digit PID under renamed markers
+    (``Product IDs:`` / ``End of list.`` + ``0x999``) was missed everywhere
+    before the fix — tolerant set() (exact-marker dependency, skips as
+    missing-section fresh) and global-4-digit 150==150 fresh (3-digit
+    invisible) while parser/scraper missed via exact markers too —
+    reproduced synthetically. Now the variant scopes honestly so the added
+    PID reports STALE naming it. Arbitrary rewordings beyond these two pairs
+    still skip (missing-section fresh, never stale) — over-narrow is safe
+    (fails open to unknown/skip, never false-STALE).
     """
     try:
         if not text:
             return set()
-        p0 = text.find("The product id:")
-        p1 = text.find("These models are phased out.")
-        if p0 < 0 or p1 <= p0:
+        # Primary (snapshots + live today) first for zero-diff; variant second.
+        pairs = (
+            ("The product id:", "These models are phased out."),
+            ("Product IDs:", "End of list."),
+        )
+        sec = None
+        for _s0, _s1 in pairs:
+            _p0 = text.find(_s0)
+            _p1 = text.find(_s1)
+            if _p0 >= 0 and _p1 > _p0:
+                sec = text[_p0:_p1]
+                break
+        if sec is None:
             return set()
-        sec = text[p0:p1]
         return {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", sec)}
     except Exception:
         return set()
@@ -1470,7 +1633,7 @@ def snapshot_freshness_status(specs_dir: Path, timeout: float = 15.0):
        :func:`live_register_ids`: FlateDecode + ToUnicode table decode, no
        ``pdftotext``) is compared against the snapshot ID set (same exact-4/
        ``..``/bare-x/typo handling on both sides, verified exact
-       300/116/124/54/150 live==snapshot 2026-09-25). A table edit keeping
+       300/116/124/55/153 live==snapshot 2026-09-26). A table edit keeping
        Rev/date invisible to markers shows here as added/removed IDs ->
        STALE naming them. Unextractable (empty live set, download failure)
        -> UNKNOWN (loud skip, never fail and never pass on partial

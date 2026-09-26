@@ -177,17 +177,23 @@ _HEX4_RE = re.compile(r"^[0-9A-Fa-f]{4}$")
 #: everywhere while counts stay green. Rescued at the token level wherever
 #: a table row is split (see _split_typed_row and the BMV/Phoenix
 #: token-merge below) plus the line-level pre-filters and both test-side
-#: scrapers. Shape guards (explicit, justified): exactly one single space
-#: between the runs (a column gap is 2+, enforced on the raw line since
-#: token-split collapses gaps), runs of 1-3 hex digits each rejoining to
+#: scrapers. Shape guards (explicit, justified): exactly one single
+#: whitespace char between the runs (``\s``: space or tab, a column gap is
+#: 2+ so ``0xED  E0`` still misses — enforced on the raw line since
+#: token-split collapses gaps; probe ``0xED\tE0`` was missed by
+#: _split_typed_row, hex scrape, decimal scrape, and live
+#: register_id_set_from_text (all required a literal single space) while
+#: counts stayed green — reproduced synthetically before the fix; tab
+#: included via ``\s``), runs of 1-3 hex digits each rejoining to
 #: exactly 4, line-leading table-row shape, and the scale/dtype anchors
 #: below as the table-row guard (prose never carries a dtype tail).
 #: Verified zero-diff: no "0xHH HHHH" mid-split occurrence in any current
-#: snapshot, so no prose false positives; a future split row is now
+#: snapshot (and no tab-split IDs — verified zero ``\t`` in ID context),
+#: so no prose false positives; a future split row is now
 #: rescued instead of missed by all sides.
 _MID_SPLIT_HEAD_RE = re.compile(r"^0[xX][0-9A-Fa-f]{1,3}$")
 _MID_SPLIT_TAIL_RE = re.compile(r"^[0-9A-Fa-f]{1,3}$")
-_MID_SPLIT_LINE_RE = re.compile(r"0[xX][0-9A-Fa-f]{1,3} [0-9A-Fa-f]{1,3}\b")
+_MID_SPLIT_LINE_RE = re.compile(r"0[xX][0-9A-Fa-f]{1,3}\s[0-9A-Fa-f]{1,3}\b")
 
 
 def _normalize_dtype(raw: str) -> Tuple[str, str]:
@@ -271,10 +277,11 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
         and _MID_SPLIT_LINE_RE.search(line)
     ):
         # Layout glitch splitting the hex run itself ("0xED E0" for
-        # 0xEDE0): two tokens rejoining to exactly 4 hex digits. The
-        # single literal space in _MID_SPLIT_LINE_RE is the shape (a
-        # column gap is 2+; token-split collapses gaps, so the raw-line
-        # check keeps the rescue to true mid-token splits). The
+        # 0xEDE0, tab ``0xED\tE0`` same): two tokens rejoining to exactly
+        # 4 hex digits. The single ``\s`` in _MID_SPLIT_LINE_RE is the shape
+        # (space or tab; a column gap is 2+, so ``0xED  E0`` still misses;
+        # token-split collapses gaps, so the raw-line check keeps the rescue
+        # to true mid-token splits). The
         # scale/dtype anchors below are the table-row guard: prose never
         # reaches here with a dtype tail. Typo-flagged like the prefix
         # rescues; the remainder starts at tokens[2:].
@@ -779,7 +786,22 @@ class BlueSolarHEXParser:
                 # <=255 skip here while 256-999 and all 6-/7-digit parse
                 # honestly. Zero-diff: history-region 3-digit hits are all
                 # <=255 (skipped) and no 6-/7-digit line exists (verified).
-                dm = re.match(r"^\s*(\d{3,7})\s+(\S.*?)\s*$", line)
+                # Decimal separator accepts ``,``/``:``/``;`` as well as
+                # whitespace (``[\s,;:]``): probes ``60961, Future history
+                # record`` / ``60961: Future history record`` / ``60961;
+                # Future`` were missed by decimal scan, hex scrape, and both
+                # history parsers (all required ``\s+`` after digits) while
+                # counts stayed green — reproduced synthetically before the
+                # fix. ``;`` checked too (same miss, same honest pass).
+                # ``-`` NOT accepted (pinned): hyphen is the decimal-range
+                # separator (``60961-60999``), so ``60961- Future`` would be
+                # range-ambiguous; a hyphen-spelled ID row stays missed on
+                # all sides by design. Zero-diff: no snapshot history-region
+                # line carries ``,``/``:``/``;`` after its decimal ID
+                # (verified), so current rows parse identically. Year guard
+                # below (``rid <= 255`` + region scoping) still excludes
+                # ``2021, ...`` prose outside regions (verified).
+                dm = re.match(r"^\s*(\d{3,7})[\s,;:]+(\S.*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
@@ -1037,8 +1059,12 @@ class OrionXSHEXParser:
                 # Widened to 3-/6-/7-digit like the BlueSolar handler (same
                 # 0-255 state-domain skip; probes "999 ..."/"123456 ..."/
                 # "1234567 ..." parse honestly, snapshot "245 WAKE-UP" rows
-                # skip).
-                dm = re.match(r"^\s*(\d{3,7})\s+(\S.*?)\s*$", line)
+                # skip). Decimal separator accepts ``,``/``:``/``;`` as well
+                # as whitespace (same justification/pin as the BlueSolar
+                # handler above: ``,``/``:``/``;`` honest pass, ``-``
+                # range-ambiguous pinned missed; zero-diff no snapshot
+                # history-region ``,``/``:``/``;`` after decimal ID).
+                dm = re.match(r"^\s*(\d{3,7})[\s,;:]+(\S.*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
@@ -2137,7 +2163,15 @@ class VEDirectTextParser:
             # pinned by full coverage). The live tolerant extractor
             # (tools/fetch_specs.py:889) accepts the same ``\d{1,4}``
             # since round 16, so 4-digit states agree on both sides.
-            m = re.match(r"^\s*(.+?)\s+(\d{1,4})\s+(?:•|\d)", line)
+            # Code separator accepts ``=``/``:`` as well as whitespace
+            # (``[\s=:]``): probe ``Off=0 •`` / ``Off:0 •`` was missed by
+            # parser, scraper, and tolerant (all required ``\s+`` before
+            # the code) while 15-count/set-equality stayed green —
+            # reproduced synthetically before the fix. ``:`` checked too
+            # (same miss, same honest pass). Zero-diff: no snapshot
+            # CS-section line carries ``=``/``:`` before its code
+            # (verified), so current 15 parse identically.
+            m = re.match(r"^\s*(.+?)[\s=:]+(\d{1,4})\s+(?:•|\d)", line)
             if m:
                 name = m.group(1).strip()
                 if "Bit" in name or "register" in name:
@@ -2182,9 +2216,19 @@ class VEDirectTextParser:
             # to 4 digits (``\d{1,4}``, justification as in parse_cs_states
             # above); zero-diff: no snapshot ERR code exceeds 3 digits (20
             # exact, pinned by full coverage).
+            # Code separator accepts ``=``/``:`` as well as the 2+-space
+            # column gap (``(?:\s{2,}|\s*[:=]\s*)``): probe
+            # ``Future fault=99`` / ``Future fault:99`` was missed by
+            # parser (``\s{2,}``) + scraper (``\s+``) while 20-count stayed
+            # green — reproduced synthetically before the fix. ``:``
+            # checked too (same miss, same honest pass). Single-space
+            # prose still misses here (``\s{2,}`` kept for spaces), so the
+            # single-space divergence axis is preserved. Zero-diff: no
+            # snapshot ERR-section line carries ``=``/``:`` before its
+            # code (verified), so current 20 parse identically.
             if any(rx.match(line) for rx in _ERR_FURNITURE_RES):
                 continue
-            m = re.match(r"^\s*(.+?)\s{2,}(\d{1,4})\b.*$", line)
+            m = re.match(r"^\s*(.+?)(?:\s{2,}|\s*[:=]\s*)(\d{1,4})\b.*$", line)
             if m:
                 desc = m.group(1).strip()
                 code = int(m.group(2))
