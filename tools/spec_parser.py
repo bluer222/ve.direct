@@ -1266,10 +1266,6 @@ class BMV7xxHEXParser:
             if tokens[1] == "=":
                 # Product-ID prose ("0xA381 = BMV712"), not a table row.
                 continue
-                continue
-            if tokens[1] == "=":
-                # Product-ID prose ("0xA381 = BMV712"), not a table row.
-                continue
             # Prose guards case-insensitive for the ID (0X rescue, zero-diff:
             # snapshots carry only lowercase 0xA381, so no new exclusions).
             if any(skip in line or skip.replace("0x", "0X") in line for skip in ["talking to", "BMV712 = 0xA381", "0xA381 = BMV712"]):
@@ -2089,8 +2085,16 @@ class VEDirectTextParser:
             # Name class includes '*', '.', '|', '+' so phased-out ("70|15*"),
             # dotted ("VE.Can"), and suffixed ("(1+1)") models all match.
             # PID prefix case-insensitive like register IDs (0X rescue,
-            # zero-diff: no 0X PIDs in snapshots).
-            m = re.search(r"^\s*([A-Za-z0-9\s|/\-().*+]+?)\s{2,}(0[xX][0-9A-Fa-f]{3,4})(\*)?", line)
+            # zero-diff: no 0X PIDs in snapshots). Exact 3/4-hex bound
+            # ((?![0-9A-Fa-f]) after the run): PIDs are 16-bit product
+            # identifiers (2-byte LE product-id reply unpacked as "<H" in
+            # src/ve_direct/device.py:491,494; vreg 0x0100 product id is
+            # un16 per the BlueSolar revision log; max PID_MAP key 0xA3F1),
+            # so a 5-hex-digit row is protocol-impossible and must not
+            # prefix-catch 0x1234 out of "0x12345" (live false-alarm
+            # precedent, cf. register-ID exact-4 bound). Zero-diff: no
+            # snapshot PID row carries 5+ hex digits (verified).
+            m = re.search(r"^\s*([A-Za-z0-9\s|/\-().*+]+?)\s{2,}(0[xX][0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])(\*)?", line)
             if m:
                 name_raw = m.group(1).strip()
                 # Prose cross-references ("From 0xA10B to ...") are not models.

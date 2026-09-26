@@ -477,12 +477,19 @@ def scrape_doc_pid_set(text: str) -> set[int]:
     """Independent PID set: every EOL-anchored ``0xHHH[H][*]`` row of the
     product-ID table. Count comparison (153 == 153) stays green under a
     compensating miss+spurious pair; set-equality against the parser (the
-    fields check already does this — same pattern) does not."""
+    fields check already does this — same pattern) does not. Exact 3/4-hex
+    bound (``(?![0-9A-Fa-f])``): PIDs are 16-bit product identifiers (2-byte
+    LE product-id reply unpacked as "<H" in src/ve_direct/device.py:491,494;
+    vreg 0x0100 product id is un16 per the BlueSolar revision log; max
+    PID_MAP key 0xA3F1), so a 5-hex-digit row is protocol-impossible and
+    must not prefix-catch (the EOL anchor already misses it; the bound
+    makes the impossibility explicit, cf. the register-ID exact-4 bound).
+    Zero-diff: no snapshot PID row carries 5+ hex digits (verified)."""
     p0 = text.find("The product id:")
     p1 = text.find("These models are phased out.")
     found: set[int] = set()
     for line in text[p0:p1].splitlines():
-        m = re.search(r"0x([0-9A-Fa-f]{3,4})\*?\s*$", line)
+        m = re.search(r"0x([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\*?\s*$", line)
         if m:
             found.add(int(m.group(1), 16))
     return found
@@ -4687,6 +4694,59 @@ class TestSpecParsers(unittest.TestCase):
         self.assertIn(0xEDF0, scrape_doc_ids(ctrl))
         self.assertEqual(register_id_set_from_text(ctrl), {0xEDF0})
         self.assertIn(0xEDF0, scale_dtype_map_from_text(ctrl))
+
+    def test_pid_16bit_bound_pinned(self):
+        """5-hex-digit PIDs are protocol-impossible: pinned miss, no false-alarm.
+
+        Protocol bound (both justifications asserted, not just commented):
+        PIDs are 16-bit product identifiers — the product-id reply is a
+        2-byte LE field unpacked as "<H" (src/ve_direct/device.py:491,494;
+        vreg 0x0100 product id is un16 per the BlueSolar revision log; max
+        PID_MAP key 0xA3F1 <= 0xFFFF) — so ``struct.pack("<H", 0x12345)``
+        raises: un-addressable, like the register-ID "<H" framing pinned at
+        test_hex_register_id_16bit_bound_pinned. Snapshot sides therefore
+        miss a ``0x12345`` PID row by construction (parser/scraper exact
+        3/4-hex bound), pinned here as knowingly-uncovered; the live
+        tolerant matcher used to prefix-catch ``0x1234`` out of it (STALE
+        false alarm on impossible input, reproduced before fix) and now
+        respects the same bound. Zero-diff: snapshot 153/pins unchanged
+        (covered by test_text_protocol_spec et al.).
+        """
+        import struct
+
+        from fetch_specs import tolerant_pid_ids
+
+        # Bound evidence: 0x12345 is not packable as a LE u16 product id;
+        # every real PID packs (max observed 0xA3F1).
+        self.assertEqual(max(T.PID_MAP), 0xA3F1)
+        self.assertLessEqual(max(T.PID_MAP), 0xFFFF)
+        with self.assertRaises(struct.error):
+            struct.pack("<H", 0x12345)
+        self.assertEqual(struct.pack("<H", 0xFFFF), b"\xff\xff")
+        self.assertEqual(struct.pack("<H", 0xA3F1), struct.pack("<H", T.PID_MAP and 0xA3F1))
+        # Combined probe (task wording): true 0x12345 missed everywhere
+        # while the 0x1234 control keeps counts/set-equality/names green.
+        probe = "The product id:\nFoo Model  0x12345\nFoo2 Model  0x1234\nThese models are phased out.\n"
+        self.assertNotIn(0x12345, VEDirectTextParser(probe).parse_pids())
+        self.assertNotIn(0x12345, scrape_doc_pid_set(probe))
+        self.assertNotIn(0x12345, tolerant_pid_ids(probe))
+        self.assertIn(0x1234, VEDirectTextParser(probe).parse_pids())
+        self.assertIn(0x1234, scrape_doc_pid_set(probe))
+        self.assertIn(0x1234, tolerant_pid_ids(probe))
+        # Single 5-digit row: impossible shape yields nothing (no 0x1234
+        # prefix-catch on any side — parser + tolerant false-alarmed before
+        # the exact-bound fix, scraper already missed via its EOL anchor).
+        single = "The product id:\nFoo Model  0x12345\nThese models are phased out.\n"
+        self.assertNotIn(0x1234, VEDirectTextParser(single).parse_pids())
+        self.assertNotIn(0x12345, VEDirectTextParser(single).parse_pids())
+        self.assertEqual(scrape_doc_pid_set(single), set())
+        self.assertEqual(tolerant_pid_ids(single), set())
+        # Controls: real 3-digit and 4-digit PIDs still match on every side.
+        ctrl = "The product id:\nBMV-700  0x203\nFoo Model  0x1234\nThese models are phased out.\n"
+        self.assertIn(0x203, VEDirectTextParser(ctrl).parse_pids())
+        self.assertIn(0x1234, VEDirectTextParser(ctrl).parse_pids())
+        self.assertEqual(scrape_doc_pid_set(ctrl), {0x203, 0x1234})
+        self.assertEqual(tolerant_pid_ids(ctrl), {0x203, 0x1234})
 
     def test_capability_bit_un32_bound_pinned(self):
         """Capability bits >=100 are protocol-impossible: pinned miss.

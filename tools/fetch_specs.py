@@ -1012,9 +1012,16 @@ def tolerant_pid_ids(text: str) -> set[int]:
     the whole PID section to a single line with single spaces (``BMV-700
     0x203 BMV-702 0x204 ...``). Line-anchored snapshot parsers fail live
     (0 vs 153). Scoping to ``The product id:`` .. ``These models are phased
-    out.`` plus ``0[xX](HHH[H])`` globally (PID scope carries no 5+ digit
-    runs, verified, so no bound needed here; the register-ID stage pins
-    exact-4 separately) yields exactly the 153 IDs on both (verified live==snapshot
+    out.`` plus ``0[xX](HHH[H])`` globally with an exact 3/4-hex bound
+    (``(?![0-9A-Fa-f])``: a fifth hex digit kills the match, so a
+    protocol-impossible ``0x12345`` yields nothing instead of
+    prefix-catching ``0x1234`` as a STALE false alarm — the register-ID
+    prefix-catch precedent). The bound is protocol-justified, not
+    arbitrary: PIDs are 16-bit product identifiers (2-byte LE product-id
+    reply unpacked as ``"<H"`` in src/ve_direct/device.py:491,494; vreg
+    0x0100 product id is un16 per the BlueSolar revision log; max PID_MAP
+    key 0xA3F1), so no 5-hex-digit PID can ever address a product.
+    Yields exactly the 153 IDs on both (verified live==snapshot
     2026-09-24, including 3-digit). A 3-digit PID added/removed with same
     revision (invisible to the 4-digit ID stage) reports STALE here live
     (stronger). PID *names* stay invisible live (footer ``victronenergy.com``
@@ -1030,7 +1037,7 @@ def tolerant_pid_ids(text: str) -> set[int]:
         if p0 < 0 or p1 <= p0:
             return set()
         sec = text[p0:p1]
-        return {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{3,4})", sec)}
+        return {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", sec)}
     except Exception:
         return set()
 
