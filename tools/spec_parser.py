@@ -786,22 +786,29 @@ class BlueSolarHEXParser:
                 # <=255 skip here while 256-999 and all 6-/7-digit parse
                 # honestly. Zero-diff: history-region 3-digit hits are all
                 # <=255 (skipped) and no 6-/7-digit line exists (verified).
-                # Decimal separator accepts ``,``/``:``/``;`` as well as
-                # whitespace (``[\s,;:]``): probes ``60961, Future history
+                # Decimal separator accepts ``,``/``:``/``;``/``=`` as well as
+                # whitespace (``[\s,;:=]``): probes ``60961, Future history
                 # record`` / ``60961: Future history record`` / ``60961;
                 # Future`` were missed by decimal scan, hex scrape, and both
                 # history parsers (all required ``\s+`` after digits) while
                 # counts stayed green — reproduced synthetically before the
-                # fix. ``;`` checked too (same miss, same honest pass).
-                # ``-`` NOT accepted (pinned): hyphen is the decimal-range
-                # separator (``60961-60999``), so ``60961- Future`` would be
+                # fix. ``;`` checked too (same honest pass).
+                # Spaceless ``=`` (probe ``60961=Future history record``)
+                # was missed by both parsers AND both scans (``[\s,;:]``
+                # excludes ``=`` — reproduced before fix); the separator now
+                # includes ``=`` so the scans catch it while the ``"=" in
+                # line`` skip above keeps the parsers missing (divergence,
+                # same as the spaced ``60961 = Future`` control — loud, not
+                # agreed-missing). Zero-diff: no snapshot history-region
+                # line carries ``,``/``:``/``;``/``=`` after its decimal ID
+                # (verified), so current rows parse identically. ``-`` NOT
+                # accepted (pinned): hyphen is the decimal-range separator
+                # (``60961-60999``), so ``60961- Future`` would be
                 # range-ambiguous; a hyphen-spelled ID row stays missed on
-                # all sides by design. Zero-diff: no snapshot history-region
-                # line carries ``,``/``:``/``;`` after its decimal ID
-                # (verified), so current rows parse identically. Year guard
+                # all sides by design. Year guard
                 # below (``rid <= 255`` + region scoping) still excludes
                 # ``2021, ...`` prose outside regions (verified).
-                dm = re.match(r"^\s*(\d{3,7})[\s,;:]+(\S.*?)\s*$", line)
+                dm = re.match(r"^\s*(\d{3,7})[\s,;:=]+(\S.*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
@@ -1059,12 +1066,14 @@ class OrionXSHEXParser:
                 # Widened to 3-/6-/7-digit like the BlueSolar handler (same
                 # 0-255 state-domain skip; probes "999 ..."/"123456 ..."/
                 # "1234567 ..." parse honestly, snapshot "245 WAKE-UP" rows
-                # skip). Decimal separator accepts ``,``/``:``/``;`` as well
-                # as whitespace (same justification/pin as the BlueSolar
-                # handler above: ``,``/``:``/``;`` honest pass, ``-``
-                # range-ambiguous pinned missed; zero-diff no snapshot
-                # history-region ``,``/``:``/``;`` after decimal ID).
-                dm = re.match(r"^\s*(\d{3,7})[\s,;:]+(\S.*?)\s*$", line)
+                # skip). Decimal separator accepts ``,``/``:``/``;``/``=`` as
+                # well as whitespace (same justification/pin as the BlueSolar
+                # handler above: ``,``/``:``/``;`` honest pass, spaceless
+                # ``=`` diverges via the ``"=" in line`` skip like the spaced
+                # control, ``-`` range-ambiguous pinned missed; zero-diff no
+                # snapshot history-region ``,``/``:``/``;``/``=`` after
+                # decimal ID).
+                dm = re.match(r"^\s*(\d{3,7})[\s,;:=]+(\S.*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
@@ -1591,6 +1600,16 @@ class PhoenixInverterHEXParser:
         #: parses or carries no digit; prose lines never reach the gate —
         #: their tokens[0] is not an ID).
         self.unknown_scales: List[Tuple[int, str]] = []
+        #: ``(rid, remainder)`` rows whose Unit column carries trailing
+        #: qualifier tokens past the unit (e.g. future "V (peak)", "V peak",
+        #: "V foo bar"): the unit parses as today while the trailing tokens
+        #: record loudly here even on allowlisted IDs (BlueSolar/Orion
+        #: section-table and BMV trailing-qualifier pattern — allowlists
+        #: excuse missing data, never dropped qualifiers). Footnote-only
+        #: tails ("1)") are furniture, never qualifiers. Empty for the
+        #: current snapshot (verified: every 7-token row trails only "N)",
+        #: no parens in the Unit cell); the suite asserts it stays empty.
+        self.unknown_units: List[Tuple[int, str]] = []
 
     @classmethod
     def from_file(cls, path: Path) -> PhoenixInverterHEXParser:
@@ -1600,6 +1619,7 @@ class PhoenixInverterHEXParser:
         regs: Dict[int, ParsedRegister] = {}
         self.unknown_accesses = []
         self.unknown_scales = []
+        self.unknown_units = []
         for line in self.text.splitlines():
             # Token-split (not 2+-whitespace split): rows such as 0xEB99 use
             # single spaces between columns. Register names contain no spaces.
@@ -1704,6 +1724,30 @@ class PhoenixInverterHEXParser:
                     unit = re.sub(r"\s*\d+\)", "", p5).strip()
                     if unit in ("-", ""):
                         unit = None
+                # Loud unknown-unit gate (BlueSolar/Orion section-table and
+                # BMV trailing-qualifier pattern): probe "0x0230 ...
+                # VE_REG_AC_OUT_VOLTAGE_SETPOINT R/W un16 0.01 V (peak)"
+                # yielded unit "V" with no gate at all (this class defined
+                # only unknown_accesses/unknown_scales) — byte-identical on
+                # every asserted axis to the "V" control while the qualifier
+                # was silently lost (reproduced before fix). Trailing
+                # Unit-column tokens past the unit (tokens[6:], e.g. "(peak)"
+                # / "peak" / "foo bar") record loudly here even on
+                # allowlisted IDs (allowlists excuse missing data, never
+                # dropped qualifiers) while unit stays as today (schema side
+                # unchanged, gate is loud). Footnote-only tails ("1)") are
+                # furniture — every snapshot 7-token row trails only "N)"
+                # (verified) — and never record; a paren-bearing Unit cell
+                # itself ("V(peak)" glued, no trailing) records too
+                # (siblings gate on "(" in the remainder). Zero-diff: no
+                # snapshot row carries non-footnote trailing tokens or
+                # parens in the Unit cell (verified).
+                trailing = tokens[6:]
+                extra = [t for t in trailing if not re.fullmatch(r"\d+\)", t.strip())]
+                if extra:
+                    self.unknown_units.append((rid, " ".join(t.strip() for t in trailing).strip()))
+                elif unit is not None and "(" in unit:
+                    self.unknown_units.append((rid, unit))
 
             regs[rid] = ParsedRegister(
                 id=rid,

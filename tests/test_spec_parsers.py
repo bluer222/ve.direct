@@ -638,20 +638,32 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # Line-leading table-shaped decimal (original coverage).
         # Description start is ``\S`` (any non-space): symbol-first rows
         # ("60961 *Boost record") scrape honestly (see docstring).
-        # Decimal separator accepts ``,``/``:``/``;`` as well as whitespace
-        # (``[\s,;:]``): probes ``60961, Future history record`` /
+        # Decimal separator accepts ``,``/``:``/``;``/``=`` as well as
+        # whitespace (``[\s,;:=]``): probes ``60961, Future history record`` /
         # ``60961: Future history record`` / ``60961; Future`` were missed by
         # decimal scan, hex scrape, and both history parsers (all required
         # ``\s+`` after digits) while counts stayed green — reproduced
-        # synthetically before the fix. ``;`` checked too (same honest pass);
-        # ``-`` NOT accepted (pinned): hyphen is the decimal-range separator,
-        # so ``60961- Future`` stays range-ambiguous/missed on all sides by
-        # design. Zero-diff: no snapshot line carries ``,``/``:``/``;`` after
-        # its decimal ID (verified), so snapshot scans stay exactly
-        # EXPECTED_DECIMAL_SCAN_HITS. Year guard (``2021, ...`` prose must not
-        # trip) preserved below via the region-scoped 1900-2100 skip.
+        # synthetically before the fix. ``;`` checked too (same honest pass).
+        # Spaceless ``=`` (probe ``60961=Future history record``) was missed
+        # by both parsers AND both scans (``[\s,;:]`` excludes ``=`` —
+        # reproduced before fix); the separator now includes ``=`` so this
+        # scan catches it while the parsers' ``"=" in line`` skip keeps them
+        # missing (divergence, same as the spaced ``60961 = Future`` control
+        # — loud, not agreed-missing; see test_decimal_equals_divergence).
+        # ``x=y`` prose never matches (line-leading decimal required) and
+        # ``==`` trips nothing on snapshots (sole ``==`` line is the Orion
+        # ``LL == 0xFF`` note, no line-leading decimal); product-ID prose
+        # ``0xA381 = BMV712`` / ``BMV712 = 0xA381`` stays excluded (hex-led /
+        # letter-led, never line-leading decimal — verified zero new snapshot
+        # hits). ``-`` NOT accepted (pinned): hyphen is the decimal-range
+        # separator, so ``60961- Future`` stays range-ambiguous/missed on all
+        # sides by design. Zero-diff: no snapshot line carries
+        # ``,``/``:``/``;``/``=`` after its decimal ID (verified), so snapshot
+        # scans stay exactly EXPECTED_DECIMAL_SCAN_HITS. Year guard
+        # (``2021, ...`` prose must not trip) preserved below via the
+        # region-scoped 1900-2100 skip.
         m = re.match(
-            r"^\s*(\d{4,5})[\s,;:]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"^\s*(\d{4,5})[\s,;:=]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         )
@@ -661,7 +673,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # tail on the same line. Stays exact (zero hits) on snapshots.
         # Description start is ``\S`` (symbol-first, see docstring).
         for m_mid in re.finditer(
-            r"(?<!\w)(\d{4,5})[\s,;:]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{4,5})[\s,;:=]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         ):
@@ -670,7 +682,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # decimal + open-charset description, no dtype required. Year
         # denylist applies only outside history regions (see above).
         # Description start is ``\S`` (symbol-first, see docstring).
-        m_tail = re.match(r"^\s*(\d{4,5})[\s,;:]+(\S.*?)\s*$", line)
+        m_tail = re.match(r"^\s*(\d{4,5})[\s,;:=]+(\S.*?)\s*$", line)
         if m_tail:
             rid = int(m_tail.group(1))
             if 1900 <= rid <= 2100 and not in_history:
@@ -685,7 +697,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # "1234567 ..." parse honestly; 6-/7-digit no extra guard (years are
         # exactly 4-digit; HEX-frame colon-led runs miss the ``^`` shape;
         # no snapshot hits, verified).
-        for _pat in (r"^\s*(\d{3})(?!\d)[\s,;:]+(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)[\s,;:]+(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)[\s,;:]+(\S.*?)\s*$"):
+        for _pat in (r"^\s*(\d{3})(?!\d)[\s,;:=]+(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)[\s,;:=]+(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)[\s,;:=]+(\S.*?)\s*$"):
             m36 = re.match(_pat, line)
             if m36:
                 _rid36 = int(m36.group(1))
@@ -696,17 +708,17 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # zero-diff: no snapshot hits). Exact lengths with (?!\d) so
         # "60961" never partially matches as "609".
         for _tpat, _flags in (
-            (r"^\s*(\d{3})(?!\d)[\s,;:]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
-            (r"^\s*(\d{6})(?!\d)[\s,;:]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
-            (r"^\s*(\d{7})(?!\d)[\s,;:]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{3})(?!\d)[\s,;:=]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{6})(?!\d)[\s,;:=]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{7})(?!\d)[\s,;:=]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
         ):
             _tm = re.match(_tpat, line, _flags)
             if _tm:
                 ids.add(int(_tm.group(1)))
         for _mpat in (
-            r"(?<!\w)(\d{3})(?!\d)[\s,;:]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-            r"(?<!\w)(\d{6})(?!\d)[\s,;:]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-            r"(?<!\w)(\d{7})(?!\d)[\s,;:]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{3})(?!\d)[\s,;:=]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{6})(?!\d)[\s,;:=]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{7})(?!\d)[\s,;:=]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
         ):
             for m_mid36 in re.finditer(_mpat, line, re.IGNORECASE):
                 ids.add(int(m_mid36.group(1)))
@@ -4013,6 +4025,47 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(norm_parser.parse_registers()[0x0150].access, "R")
         self.assertEqual(norm_parser.unknown_accesses, [])
 
+    def test_phoenix_section_table_unit_qualifier_loud(self):
+        """Phoenix section-table drops Unit-column tokens past the unit with
+        no loud gate: probe ``0x0230 VE_REG_AC_OUT_VOLTAGE_SETPOINT R/W
+        un16 0.01 V (peak)`` yielded unit ``V`` with no ``unknown_units``
+        attr at all (this class defined only unknown_accesses/unknown_scales)
+        — byte-identical on every asserted axis to the ``V`` control — while
+        BlueSolar/Orion/BMV/Text all record such qualifiers via
+        unknown_units (reproduced synthetically before the fix). Trailing
+        qualifier tokens now record via ``unknown_units`` (siblings pattern)
+        while unit stays as today. Bare multi-word remainders (``V peak``,
+        ``V foo bar``) record too; footnote-only tails (``V 1)``) stay silent.
+        Regression + zero-diff (snapshot gate empty, counts unchanged)."""
+        from spec_parser import PhoenixInverterHEXParser
+
+        self.assertEqual(self.specs["phoenix"].unknown_units, [])
+        self.assertEqual(self.specs["phoenix"].unknown_accesses, [])
+        self.assertEqual(self.specs["phoenix"].unknown_scales, [])
+        base = "0x0230 VE_REG_AC_OUT_VOLTAGE_SETPOINT R/W un16 0.01 V"
+        probe = PhoenixInverterHEXParser(f"{base} (peak)\n")
+        regs = probe.parse_registers()
+        self.assertEqual(regs[0x0230].unit, "V")
+        self.assertEqual(probe.unknown_units, [(0x0230, "(peak)")])
+        # Byte-identical to the control on every asserted axis.
+        ctrl = PhoenixInverterHEXParser(f"{base}\n")
+        ctrl_regs = ctrl.parse_registers()
+        self.assertEqual(ctrl_regs[0x0230].unit, "V")
+        self.assertEqual(ctrl.unknown_units, [])
+        for axis in ("scale", "data_type", "access", "unit"):
+            self.assertEqual(getattr(regs[0x0230], axis), getattr(ctrl_regs[0x0230], axis))
+        # Bare multi-word remainders record loudly too.
+        bare = PhoenixInverterHEXParser(f"{base} peak\n")
+        bare.parse_registers()
+        self.assertEqual(bare.unknown_units, [(0x0230, "peak")])
+        multi = PhoenixInverterHEXParser(f"{base} foo bar\n")
+        multi.parse_registers()
+        self.assertEqual(multi.unknown_units, [(0x0230, "foo bar")])
+        # Footnote-only tail stays silent (snapshot furniture).
+        foot = PhoenixInverterHEXParser(f"{base} 1)\n")
+        self.assertEqual(foot.parse_registers()[0x0230].unit, "V")
+        self.assertEqual(foot.unknown_units, [])
+
     def test_bmv_access_read_write_included(self):
         """BMV access skips READ_WRITE: probe removing ``(write only)`` from
         ``0x1029 Zero Current`` flips WRITE_ONLY->READ_WRITE while the old
@@ -6192,6 +6245,48 @@ class TestCycle34SeparatorVariants(unittest.TestCase):
         self.assertEqual(scrape_decimal_ids("60961- Future history record\n"), set())
         self.assertNotIn(60961, BlueSolarHEXParser("Restore factory defaults\n60961- Future history record\n1.2 Asynchronous items\n").parse_registers())
         self.assertEqual(scrape_decimal_ids("2021, some prose note\n"), set())
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+
+    def test_decimal_equals_divergence(self):
+        """Spaceless-``=`` decimal ID-only rows were missed everywhere: probe
+        ``60961=Future history record`` was missed by both history parsers
+        AND both scans (``[\\s,;:]`` excludes ``=`` — reproduced synthetically
+        before the fix), while the spaced ``60961 = Future`` control is
+        caught by the decimal scan and diverges loudly from the parsers
+        (their ``"=" in line`` skip). The decimal separator class now
+        includes ``=`` in the scans and both parsers, so the spaceless probe
+        is scraped (diverging from the still-skipping parsers — loud, not
+        agreed-missing, same as the spaced control). ``x=y`` prose and ``==``
+        trip nothing on snapshots (sole ``==`` line is the Orion ``LL ==
+        0xFF`` note; product-ID prose ``0xA381 = BMV712`` /
+        ``BMV712 = 0xA381`` is hex-/letter-led, never line-leading decimal).
+        Zero-diff on snapshots."""
+        from spec_parser import OrionXSHEXParser
+
+        probe = "60961=Future history record\n"
+        hist = f"Restore factory defaults\n{probe}1.2 Asynchronous items\n"
+        # Scans catch the spaceless probe; hex scrape never does (no 0x).
+        self.assertIn(60961, scrape_decimal_ids(hist))
+        self.assertIn(60961, scrape_decimal_ids(probe))
+        self.assertNotIn(60961, scrape_doc_ids(probe))
+        # Parsers still skip ``=`` lines (same as the spaced control) —
+        # scraped-but-unparsed divergence, loud instead of agreed-missing.
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            self.assertNotIn(60961, cls(hist).parse_registers())
+        spaced = "Restore factory defaults\n60961 = Future history record\n1.2 Asynchronous items\n"
+        self.assertIn(60961, scrape_decimal_ids(spaced))
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            self.assertNotIn(60961, cls(spaced).parse_registers())
+        # ``x=y`` prose / ``==`` / product-ID prose stay excluded.
+        self.assertEqual(scrape_decimal_ids("Note 2: vHH.MM, LL == 0xFF means release\n"), set())
+        self.assertEqual(scrape_decimal_ids("a=b\n"), set())
+        self.assertEqual(scrape_decimal_ids("0xA381 = BMV712\n"), set())
+        self.assertEqual(scrape_decimal_ids("BMV712 = 0xA381\n"), set())
+        self.assertNotIn(0xA381, BlueSolarHEXParser(
+            "Restore factory defaults\n0xA381 = BMV712\n1.2 Asynchronous items\n").parse_registers())
+        # Zero-diff on snapshots.
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
             with self.subTest(spec=key):
                 self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
