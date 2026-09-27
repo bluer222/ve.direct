@@ -616,10 +616,10 @@ def register_id_set_from_text(text: str) -> set[int]:
         # "0x EDF0 ... un16" rescue). Global (not line-anchored): stdlib
         # live text joins layout columns (single-line), so line-leading
         # would miss mid-text splits while the dtype window still proves a
-        # table row. Single ``\s`` for the mid split (space or tab; a column
-        # gap is 2+, so "0xED  E0" stays out like _split_typed_row; probe
-        # ``0xED\tE0`` was missed on all four sides by a literal single
-        # space — reproduced synthetically before the fix).
+        # table row. ``\s+`` for the mid split (single/double-space, tab —
+        # a lone ``\s`` missed "0xED  E0" on all four sides while the
+        # single-space control hit: parser, both scrapers, and this matcher
+        # shared the assumption — reproduced before the fix).
         # Zero-diff: no snapshot carries either form with a nearby dtype
         # (verified, including tab-split — zero ``\t`` in ID context), so
         # no prose false positives.
@@ -630,7 +630,7 @@ def register_id_set_from_text(text: str) -> set[int]:
                     ids.add(int(m.group(1), 16))
             except Exception:
                 continue
-        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{1,3})\s([0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])", t):
+        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{1,3})\s+([0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])", t):
             try:
                 if len(m.group(1)) + len(m.group(2)) != 4:
                     continue

@@ -144,6 +144,63 @@ _SCALE_TOKEN_RE = re.compile(r"^(?:\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?|-)$")
 #: comma-bearing but unparsable cell (e.g. "1,x") still records loudly.
 _SCALE_LIKE_RE = re.compile(r"^(?=.*\d)[0-9eE.,+\-/xX]+$")
 
+#: Unicode dash lookalikes the docs' layout layer can emit for a minus sign
+#: (U+2212 MINUS SIGN, U+2013 EN DASH, U+2014 EM DASH): ``float()`` and the
+#: ASCII-only scale token shapes above reject them, so a ``−0.1`` scale cell
+#: parsed as scale None with EMPTY gates on BlueSolar/BMV/Orion section
+#: paths while ASCII ``-0.1`` recorded loudly there (and Phoenix recorded
+#: loudly via its digit-bearing gate) — reproduced synthetically before the
+#: fix. All three behave identically (silent on BS/BMV-short/Orion section
+#: paths, loud on Phoenix — verified), so all three normalize to the ASCII
+#: hyphen in scale-token paths of ALL families (never parsed as negative
+#: factors: the strict token shapes still reject a leading ``-``, so the
+#: normalized form routes to the loud unknown-scale gate exactly like ASCII
+#: ``-0.1``; Phoenix parity is whatever ASCII does there via ``float()``).
+#: Applied only to single scale-cell tokens (never whole prose: revision-log
+#: ``– rev N`` separators and BMV prose carry these chars, verified —
+#: normalization there would be a no-op anyway, but the paths below only
+#: ever feed scale matching). Zero-diff: no snapshot scale cell carries any
+#: of the three (verified: only prose hits), so normalization is identity
+#: on current docs.
+_SCALE_DASH_RE = re.compile("[\u2212\u2013\u2014]")
+
+
+def _normalize_scale_dashes(tok: str) -> str:
+    """Map U+2212/U+2013/U+2014 to ASCII hyphen in a scale-cell token."""
+    return _SCALE_DASH_RE.sub("-", tok)
+
+
+#: Sentinel annotation inside a unit/description cell: a hex value glued to
+#: ``=`` with its meaning (``K, 0xFFFF=N/A``, ``A, 0xFFFF=use max``) or an
+#: explicit ``0xXXXX means ...`` clause. The ``=`` must be GLUED (no spaces):
+#: the only spaced ``0xHEX = ...`` unit cells in any snapshot are the
+#: 0xEDF1 Battery-type ``0xFF = user`` enum-value rows (BlueSolar + Orion —
+#: a genuine value encoding, not a sentinel), so glued-only keeps them out
+#: while the four sentinel rows match (verified by scan: glued ``0xHEX=``
+#: unit cells are exactly BlueSolar/Orion 0xEDEC/0xEDE6; spaced are exactly
+#: the two 0xEDF1 rows). Widths accept 1-8 hex digits (0xFF..0xFFFFFFFF);
+#: bare hex without ``=``/``means`` (Range ``0x0000..0xFFFF``, Step
+#: ``0xFFFFFFFF``, product IDs) never matches. Callers scan unit/desc cells
+#: only (never Range/prose/values tables).
+_SENTINEL_ANNOT_RE = re.compile(
+    r"0[xX]([0-9A-Fa-f]{1,8})=(?!=)|0[xX]([0-9A-Fa-f]{1,8})\s+means\b"
+)
+
+
+def _extract_sentinel_annotations(*cells: Optional[str]) -> Set[int]:
+    """Collect sentinel values annotated in unit/desc cells (see above)."""
+    found: Set[int] = set()
+    for cell in cells:
+        if not cell:
+            continue
+        for m in _SENTINEL_ANNOT_RE.finditer(cell):
+            hexpart = m.group(1) if m.group(1) is not None else m.group(2)
+            try:
+                found.add(int(hexpart, 16))
+            except ValueError:
+                continue
+    return found
+
 #: A bare register-ID token (Orion-XS allows the doc-typo form "xHHHH").
 #: The 0X prefix is uppercase-X rescue (e.g. "0XEDF0" for 0xEDF0, "XEDE0"
 #: for xEDE0): the docs print hex both ways, and the crude scrapers share
@@ -177,23 +234,25 @@ _HEX4_RE = re.compile(r"^[0-9A-Fa-f]{4}$")
 #: everywhere while counts stay green. Rescued at the token level wherever
 #: a table row is split (see _split_typed_row and the BMV/Phoenix
 #: token-merge below) plus the line-level pre-filters and both test-side
-#: scrapers. Shape guards (explicit, justified): exactly one single
-#: whitespace char between the runs (``\s``: space or tab, a column gap is
-#: 2+ so ``0xED  E0`` still misses — enforced on the raw line since
-#: token-split collapses gaps; probe ``0xED\tE0`` was missed by
-#: _split_typed_row, hex scrape, decimal scrape, and live
-#: register_id_set_from_text (all required a literal single space) while
-#: counts stayed green — reproduced synthetically before the fix; tab
-#: included via ``\s``), runs of 1-3 hex digits each rejoining to
+#: scrapers. Shape guards (explicit, justified): one OR MORE whitespace
+#: chars between the runs (``\s+``: space, tab, or a double-space column
+#: gap — a single ``\s`` missed ``0xED  E0`` on all four sides while the
+#: single-space control hit: parser, both scrapers, and live matcher all
+#: shared the single-space assumption — reproduced synthetically before the
+#: fix; enforced on the raw line since token-split collapses gaps; probe
+#: ``0xED\tE0`` was likewise missed before its rescue), runs of 1-3 hex
+#: digits each rejoining to
 #: exactly 4, line-leading table-row shape, and the scale/dtype anchors
 #: below as the table-row guard (prose never carries a dtype tail).
 #: Verified zero-diff: no "0xHH HHHH" mid-split occurrence in any current
-#: snapshot (and no tab-split IDs — verified zero ``\t`` in ID context),
+#: snapshot (single- or double-spaced — verified zero ``\s+`` rejoin-4 hits
+#: with a dtype tail — and no tab-split IDs — verified zero ``\t`` in ID
+#: context),
 #: so no prose false positives; a future split row is now
 #: rescued instead of missed by all sides.
 _MID_SPLIT_HEAD_RE = re.compile(r"^0[xX][0-9A-Fa-f]{1,3}$")
 _MID_SPLIT_TAIL_RE = re.compile(r"^[0-9A-Fa-f]{1,3}$")
-_MID_SPLIT_LINE_RE = re.compile(r"0[xX][0-9A-Fa-f]{1,3}\s[0-9A-Fa-f]{1,3}\b")
+_MID_SPLIT_LINE_RE = re.compile(r"0[xX][0-9A-Fa-f]{1,3}\s+[0-9A-Fa-f]{1,3}\b")
 
 
 def _normalize_dtype(raw: str) -> Tuple[str, str]:
@@ -277,11 +336,11 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
         and _MID_SPLIT_LINE_RE.search(line)
     ):
         # Layout glitch splitting the hex run itself ("0xED E0" for
-        # 0xEDE0, tab ``0xED\tE0`` same): two tokens rejoining to exactly
-        # 4 hex digits. The single ``\s`` in _MID_SPLIT_LINE_RE is the shape
-        # (space or tab; a column gap is 2+, so ``0xED  E0`` still misses;
-        # token-split collapses gaps, so the raw-line check keeps the rescue
-        # to true mid-token splits). The
+        # 0xEDE0, double-space "0xED  E0" and tab ``0xED\tE0`` same): two
+        # tokens rejoining to exactly 4 hex digits. ``\s+`` in
+        # _MID_SPLIT_LINE_RE is the shape (space/tab/column-gap all rescue;
+        # token-split collapses gaps, so the raw-line check plus the exact-4
+        # rejoin keep the rescue to true mid-token splits). The
         # scale/dtype anchors below are the table-row guard: prose never
         # reaches here with a dtype tail. Typo-flagged like the prefix
         # rescues; the remainder starts at tokens[2:].
@@ -308,7 +367,7 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
     # loud gate below. Zero-diff: no snapshot scale cell is parenthesized.
     for footnote_ok in (False, True):
         for i, tok in enumerate(rest):
-            tok_try = _strip_one_paren(tok)
+            tok_try = _strip_one_paren(_normalize_scale_dashes(tok))
             if not _SCALE_TOKEN_RE.match(tok_try) or i + 1 >= len(rest):
                 continue
             nxt = rest[i + 1]
@@ -345,7 +404,7 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
                     if _FOOTNOTE_DTYPE_RE.match(cand):
                         pass
                     else:
-                        cand_try = _strip_one_paren(cand)
+                        cand_try = _strip_one_paren(_normalize_scale_dashes(cand))
                         if _SCALE_LIKE_RE.match(cand_try) and not _SCALE_TOKEN_RE.match(cand_try):
                             unknown_sink.append((rid, cand))
                         elif (
@@ -469,10 +528,17 @@ class BlueSolarHEXParser:
 
             scale = None if scale_str in (None, "-") else float(scale_str.replace(",", "."))
             dtype, dtype_note = _normalize_dtype(dtype_raw)
-            sentinels = set()
-            # Sentinel may print uppercase 0XFFFF; case-insensitive like IDs.
-            if unit_str and "0XFFFF" in unit_str.upper():
-                sentinels.add(0xFFFF)
+            # Sentinel annotations glued in unit/desc cells (``K,
+            # 0xFFFF=N/A``, ``A, 0xFFFF=use max`` — case-insensitive like
+            # IDs; the shared extractor keeps the ``0xFF = user`` enum-value
+            # rows out via its glued-``=`` shape, verified). A later
+            # duplicate table row (e.g. the charger-data ``0xEDEC ... K``
+            # restating the battery-settings ``K, 0xFFFF=N/A`` row) unions
+            # sentinels while every other field stays last-wins as today
+            # (description hash unchanged — only the set unions).
+            sentinels = _extract_sentinel_annotations(desc, unit_str)
+            if rid in regs:
+                sentinels |= regs[rid].sentinels
             # Write-hint detection for section-table rows (same _is_write_desc
             # / _WRITE_HINT_RES logic as ID-only/detail rows): a command
             # description (e.g. "Restore defaults ...") in a typed table
@@ -931,10 +997,13 @@ class OrionXSHEXParser:
 
             scale = None if scale_str in (None, "-") else float(scale_str.replace(",", "."))
             dtype, dtype_note = _normalize_dtype(dtype_raw)
-            sentinels = set()
-            # Sentinel may print uppercase 0XFFFF; case-insensitive like IDs.
-            if unit_str and "0XFFFF" in unit_str.upper():
-                sentinels.add(0xFFFF)
+            # Sentinel annotations glued in unit/desc cells (same shared
+            # extractor/shape as the BlueSolar branch above: ``K,
+            # 0xFFFF=N/A`` records while ``0xFF = user`` enum rows stay out;
+            # duplicate table rows union sentinels with last-wins otherwise).
+            sentinels = _extract_sentinel_annotations(desc, unit_str)
+            if rid in regs:
+                sentinels |= regs[rid].sentinels
             # Write-hint detection for section-table rows (same _is_write_desc
             # / _WRITE_HINT_RES logic as ID-only/detail rows): a command
             # description in a typed table parses as write_only/W instead of
@@ -1177,8 +1246,14 @@ class OrionXSHEXParser:
                 # match (_DTYPE_RE, Phoenix dtypes): "UN16" normalizes to
                 # "un16" instead of demoting the detail ID. Zero-diff: no
                 # snapshot single-field Type cell is uppercase (verified).
+                # Unicode-minus scales (U+2212/U+2013/U+2014) normalize to
+                # ASCII hyphen like every other scale-token path (a ``−0.1``
+                # cell records/parses exactly like ASCII ``-0.1`` instead of
+                # dropping silently). Zero-diff: no snapshot single-field
+                # scale carries one (verified — only prose hits).
                 m = re.match(
-                    r"^\s*\d+\s+.+?\s+(-|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)\s+(un\d+|sn\d+|string\d*)\s*(\S.*)?$", line,
+                    r"^\s*\d+\s+.+?\s+(-|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)\s+(un\d+|sn\d+|string\d*)\s*(\S.*)?$",
+                    _normalize_scale_dashes(line),
                     re.IGNORECASE,
                 )
                 if m:
@@ -1229,7 +1304,7 @@ def _bmv_dtype_tail_valid(rest: List[str]) -> bool:
     # Step cell): strip one outer pair before the strict shape so a
     # parenthesized factor counts as a valid tail (anchor selection).
     # Zero-diff: no snapshot tail is parenthesized (verified).
-    first_try = _strip_one_paren(first)
+    first_try = _strip_one_paren(_normalize_scale_dashes(first))
     if re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", first_try):
         return True  # short-layout scale factor, possibly unit-glued
     if first in ("V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"):
@@ -1284,9 +1359,9 @@ class BMV7xxHEXParser:
                 tokens = [tokens[0] + tokens[1]] + tokens[2:]
             # Mid-token split ("0xED E0" for 0xEDE0, see
             # _MID_SPLIT_LINE_RE): rejoin the two hex runs so the column
-            # math below is unchanged. The raw-line single space keeps
-            # true splits apart from column gaps; the dtype/dash anchors
-            # below are the table-row guard. Zero-diff: no snapshot line
+            # math below is unchanged. ``\s+`` covers single/double-space
+            # and tab splits (the rejoin-4 plus dtype/dash anchors below are
+            # the table-row guard). Zero-diff: no snapshot line
             # matches (verified).
             if (
                 len(tokens) >= 4
@@ -1376,9 +1451,12 @@ class BMV7xxHEXParser:
                 # parenthesized-but-unparsable cell ("(1x)") records via
                 # the loud gate below instead of dropping silently (probe
                 # Step "(0.1)" gave scale None with empty unknown_scales
-                # while SCALE_NONE_ALLOW kept the suite green). No snapshot
-                # Step cell is parenthesized (verified), so zero-diff.
-                step_try = _strip_one_paren(step)
+                # while SCALE_NONE_ALLOW kept the suite green). Unicode-minus
+                # Step cells ("−0.1") normalize to ASCII hyphen like every
+                # other scale-token path (routing exactly like ASCII "-0.1"
+                # below). No snapshot
+                # Step cell is parenthesized or dash-prefixed (verified), so zero-diff.
+                step_try = _strip_one_paren(_normalize_scale_dashes(step))
                 if re.fullmatch(r"\d+([.,]\d+)?([eE][+-]?\d+)?", step_try):
                     scale = float(step_try.replace(",", "."))
                 elif step and re.search(r"\d", step) and "*" not in step and (
@@ -1438,6 +1516,7 @@ class BMV7xxHEXParser:
                 # snapshot short-layout rows either capture a unit or carry
                 # "-" / empty (no letters), verified.
                 is_write_only = bool(_WRITE_ONLY_RE.search(desc))
+                unit_pos: Optional[int] = None
                 for j, p in enumerate(rest):
                     p_clean = p.strip()
                     # Parenthesized scale cell ("(0.1)", cf. Phoenix p4_try
@@ -1445,9 +1524,12 @@ class BMV7xxHEXParser:
                     # honestly instead of leaking into scale None with empty
                     # gates (probe "0xED8E Power 1 un16 (0.1) W" gave
                     # scale None while SCALE_NONE_ALLOW kept the suite
-                    # green). No snapshot short-layout cell is
-                    # parenthesized (verified), so zero-diff.
-                    p_try = _strip_one_paren(p_clean)
+                    # green). Unicode-minus scales (U+2212/U+2013/U+2014)
+                    # normalize to ASCII hyphen here too (a "−0.1" cell
+                    # routes exactly like ASCII "-0.1" below instead of
+                    # dropping silently). No snapshot short-layout cell is
+                    # parenthesized or dash-prefixed (verified), so zero-diff.
+                    p_try = _strip_one_paren(_normalize_scale_dashes(p_clean))
                     if not is_write_only:
                         # Unit column holds the factor ("0.01 V" split across
                         # tokens by single-space gaps, or combined "0.001A").
@@ -1463,7 +1545,23 @@ class BMV7xxHEXParser:
                         # parsed (reproduced before fix); SCALE_NONE_ALLOW
                         # excused the allowlisted ID. Zero-diff: no snapshot
                         # short-layout rest token newly matches (verified).
-                        sm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", p_try)
+                        # Explicitly-signed ("+0.1") and slash-suffixed
+                        # ("0.02/") factors parse too (Phoenix trailing-slash
+                        # treatment mirrored: 0xEB10 "0.02/" parses as 0.02;
+                        # probes "0xED8E Power 1 un16 +0.1 W" / "... 0.02/
+                        # W" gave scale None with empty gates, excused by
+                        # SCALE_NONE_ALLOW — reproduced before fix). One
+                        # leading "+" strips (explicit positive, same value);
+                        # a leading "-" never strips (a negative factor is
+                        # unphysical and must trip the loud gate below, like
+                        # ASCII "-0.1"). Zero-diff: no snapshot short-layout
+                        # rest token leads with "+" or trails with "/"
+                        # (verified), so current rows parse identically.
+                        q = p_try
+                        if q.startswith("+"):
+                            q = q[1:]
+                        q = q.rstrip("/")
+                        sm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", q)
                         # Bare-int glued units ("1x") never parse as scale:
                         # "1" alone parses (issue-1 fix) and decimal/exponent
                         # glued ("0.001A", "1e-2V") parse, but bare-int plus
@@ -1475,22 +1573,39 @@ class BMV7xxHEXParser:
                             scale = float(sm.group(1).replace(",", "."))
                             if sm.group(2):
                                 unit = sm.group(2)
+                                unit_pos = j
                             elif j + 1 < len(rest) and re.fullmatch(r"[A-Za-z%°]+", rest[j + 1].strip()):
                                 unit = rest[j + 1].strip()
+                                unit_pos = j + 1
                             continue
                         # Loud unknown-scale gate (Step/_split_typed_row
-                        # pattern): a parenthesized-but-unparsable
-                        # digit-bearing cell ("(1x)", double-wrapped
-                        # "((0.1))") records loudly even on allowlisted IDs
-                        # instead of dropping silently. Non-parenthesized
-                        # letter-bearing tokens (e.g. "1x") stay with the
-                        # unknown-units gate below; digit-less parens
-                        # ("(foo)") are description furniture, never a
-                        # scale. Bare-int glued ("1x") counts as unparsable
-                        # here too (same exclusion as the scale gate above),
-                        # so "(1x)" records instead of parsing as 1.0/x.
-                        # Zero-diff: no snapshot short-layout rest token is
-                        # parenthesized-digit-bearing (verified).
+                        # pattern): a scale-shaped-but-unparsable
+                        # digit-bearing cell records loudly even on
+                        # allowlisted IDs instead of dropping silently. Two
+                        # halves: parenthesized-but-unparsable cells
+                        # ("(1x)", double-wrapped "((0.1))") as before, plus
+                        # bare letterless scale-punctuation cells ("-0.1",
+                        # ASCII or unicode-minus, "+/-" junk, "1.2.3"):
+                        # probes "+0.1"/"0.02/" now parse above while a
+                        # "-0.1"-shaped cell (which no strict shape accepts)
+                        # records here instead of leaking into scale None
+                        # with empty gates (reproduced before fix).
+                        # Letter-bearing tokens (e.g. "1x") stay with the
+                        # unknown-units gate below, never here (pinned);
+                        # digit-less parens ("(foo)") are description
+                        # furniture, never a scale. Zero-diff: no snapshot
+                        # short-layout rest token is parenthesized-
+                        # digit-bearing or letterless-digit-bearing
+                        # (verified: "-" carries no digit, units carry
+                        # letters via the vocab gate).
+                        if (
+                            re.search(r"\d", p_try)
+                            and re.fullmatch(r"[+\-./,0-9eE]+", p_try)
+                            and not re.fullmatch(r"\d+([.,]\d+)?([eE][+-]?\d+)?", p_try)
+                        ):
+                            if (rid, p_clean) not in self.unknown_scales:
+                                self.unknown_scales.append((rid, p_clean))
+                            continue
                         _gm = re.match(r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$", p_try)
                         _gvalid = bool(_gm) and not (_gm.group(2) and re.fullmatch(r"\d+", _gm.group(1)))
                         if (
@@ -1504,6 +1619,7 @@ class BMV7xxHEXParser:
                             continue
                     if p_clean in ["V", "A", "W", "Ah", "seconds", "minutes", "min.", "K", "%"]:
                         unit = p_clean
+                        unit_pos = j
                 if unit is None:
                     for p in rest:
                         cand = p.strip()
@@ -1542,7 +1658,7 @@ class BMV7xxHEXParser:
                         cand = p.strip()
                         if (rid, cand) in self.unknown_scales:
                             break
-                        tried = _strip_one_paren(cand)
+                        tried = _strip_one_paren(_normalize_scale_dashes(cand))
                         sm = re.match(
                             r"^(0?[.,]\d+|\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?)([A-Za-z%°]+)?$",
                             tried,
@@ -1555,6 +1671,36 @@ class BMV7xxHEXParser:
                         if qual and (rid, qual) not in self.unknown_units:
                             self.unknown_units.append((rid, qual))
                         break
+                    # Bare trailing-qualifier loud gate: a paren-less word
+                    # after a captured unit ("W peak", probe "0xED8E Power 1
+                    # un16 W peak" yielded unit "W" with empty unknown_units
+                    # — the gate above requires parens, so the bare word was
+                    # silently lost, byte-identical to the qualifier-less
+                    # control — reproduced before fix). The trailing
+                    # remainder past the captured unit (multi-word "peak
+                    # load" joins) records loudly while unit stays as today
+                    # (schema side unchanged, gate is loud). Denylist
+                    # (explicit, justified): pure-numeric remainders ("11")
+                    # are footnote references, never qualifier words — the
+                    # docs' furniture vocabulary is numeric (BMV desc markers
+                    # "(1)"/"(*)", Phoenix "N)" tails, Text footnote runs),
+                    # while qualifier content is letter-bearing (unit-gate
+                    # precedent: _UNKNOWN_UNIT_CAND_RE). A paren-fragment
+                    # remainder ("1)") never reaches this gate (the paren
+                    # gate above fires first — unchanged, still zero-diff).
+                    # Proven from snapshot rows:
+                    # no snapshot short-layout row trails ANY token past its
+                    # unit (verified scan — the gate is empty today), so the
+                    # denylist narrows only future shapes, never current
+                    # rows; a letter-bearing trailer can only be new content.
+                    if unit_pos is not None:
+                        trail = rest[unit_pos + 1:]
+                        if trail and not any("(" in t or ")" in t for t in trail):
+                            joined = " ".join(t.strip() for t in trail).strip()
+                            shape = re.sub(r"\d[\d\s,]*$", "", joined).strip() or joined
+                            if joined and _UNKNOWN_UNIT_CAND_RE.search(shape):
+                                if (rid, joined) not in self.unknown_units:
+                                    self.unknown_units.append((rid, joined))
 
             if _WRITE_ONLY_RE.search(desc):
                 access = "WRITE_ONLY"
@@ -1567,6 +1713,17 @@ class BMV7xxHEXParser:
             clean_desc = re.sub(r"\s*\*$", "", clean_desc).strip()
             name = "BMV_" + clean_desc.upper().replace(" ", "_").replace("-", "_").replace(".", "_")
 
+            # Sentinel annotations glued in desc/Unit cells (shared
+            # extractor/shape as the section-table branches: a future
+            # "0.01 K, 0xFFFF=N/A" short row records {0xFFFF} here while
+            # the bare-hex Step ("0xFFFFFFFF") and Range ("0x0000..0xFFFF")
+            # cells never match — no glued "=". Duplicate rows union
+            # sentinels with last-wins otherwise, like BlueSolar/Orion).
+            # Zero-diff: no snapshot BMV desc/rest carries a glued "0xHEX="
+            # annotation (verified), so all snapshot sets stay empty.
+            sentinels = _extract_sentinel_annotations(desc, " ".join(rest))
+            if rid in regs:
+                sentinels |= regs[rid].sentinels
             regs[rid] = ParsedRegister(
                 id=rid,
                 name=name,
@@ -1576,6 +1733,7 @@ class BMV7xxHEXParser:
                 unit=unit,
                 access=access,
                 source="BMV-7xx-HEX",
+                sentinels=sentinels,
             )
         return regs
 
@@ -1637,9 +1795,9 @@ class PhoenixInverterHEXParser:
                 tokens = [tokens[0] + tokens[1]] + tokens[2:]
             # Mid-token split ("0xED E0" for 0xEDE0, see
             # _MID_SPLIT_LINE_RE): rejoin the two hex runs so the column
-            # math below is unchanged. The raw-line single space keeps
-            # true splits apart from column gaps; the VE_REG_/access
-            # columns below are the table-row guard. Zero-diff: no
+            # math below is unchanged. ``\s+`` covers single/double-space
+            # and tab splits (the rejoin-4 plus VE_REG_/access columns below
+            # are the table-row guard). Zero-diff: no
             # snapshot line matches (verified).
             if (
                 len(tokens) >= 4
@@ -1687,7 +1845,12 @@ class PhoenixInverterHEXParser:
                 # skip (no leading "(", never a scale). Comma-decimal
                 # ("0,1") parses via comma->dot; no snapshot Scale cell
                 # uses parens or commas (verified), so zero-diff.
-                p4_try = p4
+                # Unicode-minus Scale cells (U+2212/U+2013/U+2014)
+                # normalize to ASCII hyphen like every other scale-token
+                # path (a "−0.1" cell behaves exactly like ASCII "-0.1"
+                # below instead of dropping silently). Zero-diff: no
+                # snapshot Scale cell carries one (verified).
+                p4_try = _normalize_scale_dashes(p4)
                 if p4_try.startswith("(") and p4_try.endswith(")"):
                     p4_try = p4_try[1:-1].strip()
                 if p4_try != "-" and not p4_try.endswith(")"):
@@ -1749,6 +1912,14 @@ class PhoenixInverterHEXParser:
                 elif unit is not None and "(" in unit:
                     self.unknown_units.append((rid, unit))
 
+            # Sentinel annotations glued in Unit/desc cells (shared
+            # extractor/shape as the section-table branches; Phoenix unit
+            # cells carry none today). Duplicate rows union sentinels with
+            # last-wins otherwise. Zero-diff: all snapshot sets stay empty
+            # (verified — no glued "0xHEX=" annotation in any Phoenix row).
+            sentinels = _extract_sentinel_annotations(name, unit)
+            if rid in regs:
+                sentinels |= regs[rid].sentinels
             regs[rid] = ParsedRegister(
                 id=rid,
                 name=name,
@@ -1758,6 +1929,7 @@ class PhoenixInverterHEXParser:
                 unit=unit,
                 access=access,
                 source="Phoenix-HEX",
+                sentinels=sentinels,
             )
         return regs
 

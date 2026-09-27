@@ -263,10 +263,13 @@ def scrape_doc_ids(text: str) -> set[int]:
     # Mid-token split rescue ("0xED E0" for 0xEDE0, layout glitch splitting
     # the hex run itself): line-leading table-row shape plus a dtype tail on
     # the same line (prose never carries a dtype token), runs of 1-3 hex
-    # digits each rejoining to exactly 4 with a single space. Verified
-    # zero-diff: no snapshot line matches, so no prose false positives.
+    # digits each rejoining to exactly 4 with one or more whitespace chars
+    # (``\s+``: single/double-space or tab — a lone ``\s`` missed "0xED  E0"
+    # while the single-space control hit on all four sides — reproduced
+    # before the fix). Verified zero-diff: no snapshot line matches, so no
+    # prose false positives.
     for _line in text.splitlines():
-        _mm = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s([0-9A-Fa-f]{1,3})\b", _line)
+        _mm = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s+([0-9A-Fa-f]{1,3})\b", _line)
         if (
             _mm
             and len(_mm.group(1)) + len(_mm.group(2)) == 4
@@ -729,10 +732,12 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # Mid-token split rescue ("0xED E0" for 0xEDE0, layout glitch
         # splitting the hex run itself): line-leading table-row shape plus a
         # dtype tail on the same line (prose never carries a dtype token),
-        # runs of 1-3 hex digits each rejoining to exactly 4 with a single
-        # space. Verified zero-diff: no snapshot line matches, so snapshot
+        # runs of 1-3 hex digits each rejoining to exactly 4 with ``\s+``
+        # (single/double-space or tab — lone ``\s`` missed "0xED  E0" on all
+        # four sides while the single-space control hit — reproduced before
+        # the fix). Verified zero-diff: no snapshot line matches, so snapshot
         # scans stay exactly EXPECTED_DECIMAL_SCAN_HITS.
-        _mid = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s([0-9A-Fa-f]{1,3})\b", line)
+        _mid = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s+([0-9A-Fa-f]{1,3})\b", line)
         if (
             _mid
             and len(_mid.group(1)) + len(_mid.group(2)) == 4
@@ -1767,20 +1772,25 @@ class TestSpecParsers(unittest.TestCase):
         prefix-split / bare-x rescues missed all three while counts stayed
         green (reproduced synthetically before the fix). Rescue-style like
         the existing prefix-split handling. Shape guards (explicit,
-        justified): single space between 1-3-hex runs rejoining to exactly
-        4, line-leading table-row shape, plus the scale/dtype anchors (or a
+        justified): one or more whitespace chars between 1-3-hex runs
+        rejoining to exactly 4 (``\\s+``: single/double-space or tab — a lone
+        ``\\s`` missed "0xED  E0" on all four sides while the single-space
+        control hit: parser, both scrapers, and the live matcher shared the
+        single-space assumption — reproduced synthetically before the fix),
+        line-leading table-row shape, plus the scale/dtype anchors (or a
         dtype tail on the same line for the scrapers) — prose without a
         dtype tail stays out. Control: zero mid-split occurrences in any
-        current HEX snapshot, so the rescue is zero-diff (no prose false
-        positives)."""
+        current HEX snapshot (single- or double-spaced), so the rescue is
+        zero-diff (no prose false positives)."""
         # Zero-FP pin: no snapshot line carries a mid-token split rejoining
-        # to exactly 4 hex digits (verified live here, not just asserted).
+        # to exactly 4 hex digits, single- or double-spaced (verified live
+        # here, not just asserted).
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
             with self.subTest(spec=key):
                 mid = [
                     line
                     for line in self.raw_texts[key].splitlines()
-                    for m in [re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3}) ([0-9A-Fa-f]{1,3})\b", line)]
+                    for m in [re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s+([0-9A-Fa-f]{1,3})\b", line)]
                     if m and len(m.group(1)) + len(m.group(2)) == 4
                 ]
                 self.assertEqual(mid, [], f"{key} snapshot gained mid-token-split prose")
@@ -1832,8 +1842,8 @@ class TestSpecParsers(unittest.TestCase):
         self.assertIn(0xEDE0, scrape_doc_ids("0xED E0    Split inside  0.1  un16  V\n"))
         self.assertIn(0xEDE0, scrape_decimal_ids("0xED E0    Split inside  0.1  un16  V\n"))
         # Guard controls: prose-shaped mid-splits without a dtype tail stay
-        # out on every side (no false positives); a double-space column gap
-        # is not a mid-token split.
+        # out on every side (no false positives); a run pair rejoining to
+        # other than exactly 4 hex digits stays out too.
         self.assertNotIn(0xEDE0, scrape_doc_ids("(register 0xED E0) prose mention\n"))
         self.assertNotIn(0xEDE0, scrape_decimal_ids("(register 0xED E0) prose mention\n"))
         self.assertNotIn(
@@ -1842,7 +1852,15 @@ class TestSpecParsers(unittest.TestCase):
                 "1.1 Get and Set items\n(register 0xED E0) prose mention\n1.2 Asynchronous items\n"
             ).parse_registers(),
         )
-        self.assertIsNone(_split_typed_row("0xED  E0    Split inside  0.1  un16  V"))
+        # Double-space column gap is a mid-token split too (``\\s+`` on all
+        # four sides): the probe hits the parser, both scrapers, and the
+        # live matcher, exactly like the single-space control above.
+        dbl_row = _split_typed_row("0xED  E0    Split inside  0.1  un16  V")
+        self.assertIsNotNone(dbl_row)
+        assert dbl_row is not None
+        self.assertEqual(dbl_row[0], 0xEDE0)
+        self.assertIn(0xEDE0, scrape_doc_ids("0xED  E0    Split inside  0.1  un16  V\n"))
+        self.assertIn(0xEDE0, scrape_decimal_ids("0xED  E0    Split inside  0.1  un16  V\n"))
         # Split-position variants rejoin honestly (1+3 and 3+1 shapes).
         for variant in ("0xE DE0", "0xEDE 0"):
             with self.subTest(variant=variant):
@@ -1856,17 +1874,18 @@ class TestSpecParsers(unittest.TestCase):
         """The live ID scanner accepts split table IDs but ignores prose."""
         cases = (
             ("0xED E0 Battery 0.1 un16 V", {0xEDE0}),
+            ("0xED  E0 Battery 0.1 un16 V", {0xEDE0}),
             ("0x EDF0 Battery 0.1 un16 V", {0xEDF0}),
             ("0xEDF0 Battery 0.1 un16 V", {0xEDF0}),
             ("(register 0xED E0) prose mention", set()),
             ("(register 0x EDF0) prose mention", set()),
-            ("0xED  E0    Split inside  0.1  un16  V", set()),
+            ("(register 0xED  E0) prose mention", set()),
         )
         for source, expected in cases:
             with self.subTest(source=source):
                 self.assertEqual(register_id_set_from_text(source), expected)
         split_ids = re.compile(
-            r"0[xX](?:\s+[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,3}\s[0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])"
+            r"0[xX](?:\s+[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,3}\s+[0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])"
         )
         dtype = re.compile(r"\b(?:un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.I)
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
@@ -2319,6 +2338,54 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(ctrl.unknown_units, [])
         self.assertEqual(ctrl.unknown_scales, [])
         self.assertEqual(probe.unit, control.unit)
+
+    def test_bmv_short_layout_bare_trailing_qualifier_loud(self):
+        """BMV short-layout bare (paren-less) trailing qualifier records loudly.
+        Probe ``0xED8E Power 1 un16 W peak`` yielded unit "W" with empty
+        unknown_units — byte-identical to the qualifier-less control — because
+        the trailing-qualifier gate required parens (the paren form
+        ``V (peak)`` records via the gate above), so the bare word was
+        silently lost (reproduced synthetically before the fix). The trailing
+        remainder past the captured unit now records loudly while unit stays
+        "W" (schema side unchanged, gate is loud). Denylist (explicit,
+        justified): pure-numeric remainders ("11") are footnote references,
+        never qualifier words — the docs' furniture vocabulary is numeric
+        (BMV desc markers "(1)"/"(*)", Phoenix "N)" tails, Text footnote
+        runs), while qualifier content is letter-bearing (unit-gate
+        precedent). A paren-fragment remainder ("1)") routes via the
+        pre-existing paren gate instead (unchanged, still zero-diff).
+        Regression with the probe + control + denylist. Zero-diff:
+        no snapshot short-layout row trails any token past its unit (verified
+        live here), snapshots stay 110 with empty gates."""
+        from spec_parser import BMV7xxHEXParser
+
+        self.assertEqual(self.specs["bmv"].unknown_units, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        self.assertEqual(len(self.bmv_regs), EXPECTED_COUNTS["bmv"])
+        # Probe: bare qualifier records loudly while unit stays "W".
+        parser = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 W peak\nftr")
+        probe = parser.parse_registers()[0xED8E]
+        self.assertEqual(probe.unit, "W")
+        self.assertEqual(parser.unknown_scales, [])
+        self.assertEqual(parser.unknown_units, [(0xED8E, "peak")])
+        self.assertIn(0xED8E, SCALE_NONE_ALLOW["bmv"])
+        # Multi-word qualifier joins; control stays silent and schema-equal.
+        multi = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 W peak load\nftr")
+        multi.parse_registers()
+        self.assertEqual(multi.unknown_units, [(0xED8E, "peak load")])
+        ctrl = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 W\nftr")
+        control = ctrl.parse_registers()[0xED8E]
+        self.assertEqual(control.unit, "W")
+        self.assertEqual(ctrl.unknown_units, [])
+        self.assertEqual(ctrl.unknown_scales, [])
+        self.assertEqual(probe.unit, control.unit)
+        # Denylist control: a pure-numeric footnote-shaped remainder stays
+        # silent in the bare gate (letter-bearing check). A paren-fragment
+        # remainder ("1)") routes via the pre-existing paren gate instead
+        # (unchanged behavior, still zero-diff on snapshots).
+        foot = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 W 11\nftr")
+        foot.parse_registers()
+        self.assertEqual(foot.unknown_units, [])
 
     def test_bmv_dtype_anchor_structural_tail(self):
         """BMV anchor-first-wins truncated descriptions with dtype-like words:
@@ -4105,6 +4172,173 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(ctrl.access, "WRITE_ONLY")
         self.assertIn(db_access, allowed_by_parser[ctrl.access])
 
+    def test_exact_access_flipped_probes_fail_loudly(self):
+        """Exact normalized access per parsed register catches doc access
+        changes the category/flavor lists miss. Probes: reparse Phoenix
+        ``0xEB99 ... W un8`` as ``R un8`` and drop the BMV ``(read-only)``
+        marker (READ_ONLY->READ_WRITE) — both passed every schema list
+        silently (flavor-accessibility + category checks never compare exact
+        access strings — reproduced synthetically before the fix). Exact
+        normalized comparison (parser access mapped 1:1, CONSTANT allowed
+        like the Phoenix gate): Phoenix asserts exactly on snapshots already
+        (zero mismatches, pinned in test_access_and_product_specific_semantics
+        and re-asserted here); BMV rows carrying an explicit doc signal
+        (``(write only)``/``(read-only)`` markers, i.e. access != READ_WRITE
+        default) assert exactly too — the doc genuinely signals access there,
+        while unmarked defaults keep the refinement sets (DB refines readable
+        measurements/history to READ_ONLY, e.g. 0x0300 depth, 0xED8E power).
+        Zero-diff: all current exact values pass (BMV marked: 4 WRITE_ONLY +
+        7 READ_ONLY = 11 rows, 3 CONSTANT product-info rows allowed). Regression with
+        all three flipped probes (each must mismatch loudly) + controls."""
+        from spec_parser import BMV7xxHEXParser, BlueSolarHEXParser, PhoenixInverterHEXParser
+
+        access_map = {"R": "READ_ONLY", "W": "WRITE_ONLY", "R/W": "READ_WRITE"}
+
+        def exact_mismatches(regs, flavor):
+            bad = []
+            for rid, spec_reg in sorted(regs.items()):
+                expected = access_map.get(spec_reg.access, spec_reg.access)
+                try:
+                    actual = R.lookup(rid, flavor=flavor).access
+                except Exception:
+                    continue  # flavor-aliased entries checked elsewhere
+                if actual != expected and actual != "CONSTANT":
+                    bad.append(f"0x{rid:04X}: parser {spec_reg.access} vs DB {actual}")
+            return bad
+
+        # Zero-diff: Phoenix exact on all 48 snapshot rows; BMV exact on all
+        # explicitly-marked rows (non-default access); the marked set is
+        # non-trivial (commands + read-only markers on both sides).
+        self.assertEqual(exact_mismatches(self.ph_regs, "INV"), [])
+        marked = {rid: r for rid, r in self.bmv_regs.items() if r.access != "READ_WRITE"}
+        self.assertEqual(exact_mismatches(marked, "BMV"), [])
+        self.assertIn(0x1029, marked)  # Zero Current (write only)
+        self.assertIn(0xEEF9, marked)  # SW Version (read only)
+        self.assertIn(0x1034, marked)  # User Current Zero (read only)
+        self.assertEqual(len(marked), 11)  # 4 write-only + 7 read-only markers
+        # Probe 1: Phoenix 0xEB99 W -> R (DB stays WRITE_ONLY).
+        flip = PhoenixInverterHEXParser("0xEB99 VE_REG_INV_NVM_COMMAND R un8\n").parse_registers()
+        self.assertEqual(flip[0xEB99].access, "R")
+        self.assertEqual(R.lookup(0xEB99, flavor="INV").access, "WRITE_ONLY")
+        self.assertEqual(len(exact_mismatches(flip, "INV")), 1)
+        ctrl_phx = PhoenixInverterHEXParser("0xEB99 VE_REG_INV_NVM_COMMAND W un8\n").parse_registers()
+        self.assertEqual(exact_mismatches(ctrl_phx, "INV"), [])
+        # Probe 2: BMV (read-only) marker dropped on 0xEEF9 (READ_ONLY ->
+        # READ_WRITE while DB stays READ_ONLY). The refinement set would
+        # still pass this (READ_WRITE allows READ_ONLY) — the exact rule on
+        # explicitly-marked rows is the loud axis.
+        marked_row = BMV7xxHEXParser(
+            "hdr\n0xEEF9    SW Version (read only)                     61      Un16          0x0000..0xFFFF              -             -        HEX (AA.BB)\nftr"
+        ).parse_registers()[0xEEF9]
+        self.assertEqual(marked_row.access, "READ_ONLY")
+        self.assertEqual(exact_mismatches({0xEEF9: marked_row}, "BMV"), [])
+        dropped = BMV7xxHEXParser(
+            "hdr\n0xEEF9    SW Version                     61      Un16          0x0000..0xFFFF              -             -        HEX (AA.BB)\nftr"
+        ).parse_registers()[0xEEF9]
+        self.assertEqual(dropped.access, "READ_WRITE")
+        self.assertEqual(R.lookup(0xEEF9, flavor="BMV").access, "READ_ONLY")
+        self.assertEqual(len(exact_mismatches({0xEEF9: dropped}, "BMV")), 1)
+        # Probe 3: BlueSolar 0x0004 W -> R (DB stays WRITE_ONLY) fails under
+        # the no-skipping rule (R allows only READ_ONLY).
+        bs_flip = BlueSolarHEXParser(
+            "Restore factory defaults\n0x0004 History record\n1.2 Asynchronous items\n"
+        ).parse_registers()[0x0004]
+        self.assertEqual(bs_flip.access, "R")
+        self.assertEqual(R.lookup(0x0004, flavor="MPPT").access, "WRITE_ONLY")
+        self.assertNotIn("WRITE_ONLY", {"READ_ONLY"})
+
+    def test_sentinel_annotations_compared_against_db(self):
+        """Doc-vs-DB sentinel sets per register: sentinel annotations glued
+        in unit/desc cells (``K, 0xFFFF=N/A``, ``A, 0xFFFF=use max``) are
+        extracted into ``ParsedRegister.sentinels`` and compared against the
+        DB per-ID sentinel map (``R._NONE_SENTINELS``,
+        src/ve_direct/registers/__init__.py:822 — read-only; mismatches are
+        reported, never worked around). Probes ``0xEDEC Battery temperature
+        0.01 un16 K, 0xFFFF=N/A`` vs ``... K`` (same shape on 0xEDE6) both
+        normalize to unit "K" with no sentinel comparison anywhere (only the
+        unrelated 0xEC41 pin existed) — a dropped annotation stayed green
+        (reproduced synthetically before the fix). The compared structure is
+        the loud axis now: a dropped annotation mismatches DB loudly.
+        Zero-diff: current sentinel sets match (glued ``0xHEX=`` unit cells
+        are exactly BlueSolar/Orion 0xEDEC/0xEDE6; the spaced ``0xFF = user``
+        enum-value rows on 0xEDF1 stay out by the glued-``=`` shape). DB-only
+        entries are allowlisted ONLY as prose-only mentions (no glued
+        annotation in any unit/desc cell — extractor-verified empty), each
+        justified below."""
+        from spec_parser import BMV7xxHEXParser
+
+        # DB-only sentinels documented in prose/values tables only (never a
+        # glued ``0xHEX=``/``0xHEX means`` annotation in a unit/desc cell, so
+        # the extractor honestly yields empty — verified: parsed sentinels
+        # are empty for every ID below on all four HEX snapshots):
+        # - 0xEDEF {0}: BlueSolar "Battery voltage setting values (register
+        #   0xEDEF and 0xEDEA)" table prints decimal "0  Auto detection at
+        #   startup" (values-table prose, no hex annotation).
+        # - 0x2031 {0xFFFF}: BlueSolar Note 5 prose "A value of 0xFFFF
+        #   indicates that the time is unknown" (timeout/unknown prose).
+        # - 0x2002 {0xFFFF} / 0x2003 {0x7FFF}: BlueSolar detail prose
+        #   "register 0x2002 (vsense): transmit 0xFFFF @ timeout" /
+        #   "register 0x2003 (tsense): transmit 0x7FFF @ timeout".
+        # - 0xD18D {0x7FFFFFFF}: Orion Note 1 prose "the value will be
+        #   0x7FFFFFFF" (smart-battery-sense detail, no table annotation).
+        # - 0xEC41 {0xFFFFFFFF}: BMV values-table prose "0xFFFF FFFF
+        #   Invalid ..." (spaced hex words, never glued ``=``).
+        # - BMV 0x032A-0x032D / 0x035A-0x035D {0}: Range cells print decimal
+        #   "0=disabled; 174..372" (Range column — the extractor scans
+        #   unit/desc cells only — never hex-annotated).
+        _SENTINEL_PROSE_ONLY_ALLOW = frozenset({
+            0xEDEF, 0x2031, 0x2002, 0x2003, 0xD18D, 0xEC41,
+            0x032A, 0x032B, 0x032C, 0x032D,
+            0x035A, 0x035B, 0x035C, 0x035D,
+        })
+        parsed = {}
+        for regs in (self.bs_regs, self.or_regs, self.bmv_regs, self.ph_regs):
+            for rid, reg in regs.items():
+                parsed.setdefault(rid, set()).update(reg.sentinels)
+        mismatches = []
+        for rid in sorted(set(parsed) | set(R._NONE_SENTINELS)):
+            doc, db = parsed.get(rid, set()), R._NONE_SENTINELS.get(rid, set())
+            if doc != db and rid not in _SENTINEL_PROSE_ONLY_ALLOW:
+                mismatches.append(f"0x{rid:04X}: doc {sorted(doc)} vs DB {sorted(db)}")
+        self.assertEqual(mismatches, [])
+        # The allowlist is exact: every entry is genuinely DB-only on the
+        # parsed side (no extractor hit anywhere), so it excuses prose-only
+        # documentation, never a dropped annotation.
+        for rid in sorted(_SENTINEL_PROSE_ONLY_ALLOW):
+            with self.subTest(allow=hex(rid)):
+                self.assertEqual(parsed.get(rid, set()), set())
+                self.assertNotEqual(R._NONE_SENTINELS.get(rid, set()), set())
+        # Glued-annotation shape pins: snapshot rows with annotations parse
+        # them; the spaced enum-value rows stay out.
+        self.assertEqual(self.bs_regs[0xEDEC].sentinels, {0xFFFF})
+        self.assertEqual(self.bs_regs[0xEDE6].sentinels, {0xFFFF})
+        self.assertEqual(self.or_regs[0xEDEC].sentinels, {0xFFFF})
+        self.assertEqual(self.or_regs[0xEDE6].sentinels, {0xFFFF})
+        self.assertEqual(self.bs_regs[0xEDF1].sentinels, set())
+        self.assertEqual(self.or_regs[0xEDF1].sentinels, set())
+        # Regression probes (BMV short-layout shape from the issue): the
+        # annotated row matches DB {0xFFFF}; the annotation-dropped row
+        # mismatches loudly (unit normalizes to "K" on both — the sentinel
+        # set is the loud axis).
+        for rid, desc, annot in (
+            (0xEDEC, "Battery temperature 0.01", "K, 0xFFFF=N/A"),
+            (0xEDE6, "Low temp charge current 0.1", "A, 0xFFFF=use max"),
+        ):
+            with self.subTest(register=hex(rid)):
+                db = R._NONE_SENTINELS.get(rid, set())
+                self.assertEqual(db, {0xFFFF})
+                full = BMV7xxHEXParser(f"hdr\n0x{rid:04X} {desc} un16 {annot}\nftr").parse_registers()[rid]
+                self.assertEqual(full.sentinels, {0xFFFF})
+                bare = BMV7xxHEXParser(f"hdr\n0x{rid:04X} {desc} un16 {annot.split(',')[0]}\nftr").parse_registers()[rid]
+                self.assertEqual(bare.sentinels, set())
+                self.assertNotEqual(bare.sentinels, db)  # dropped annotation fails loudly
+        # The ``0xXXXX means ...`` clause shape extracts from desc cells too.
+        means = BMV7xxHEXParser(
+            "hdr\n0xEDEC Battery 0xFFFF means N/A 0.01 un16 K\nftr"
+        ).parse_registers()[0xEDEC]
+        self.assertEqual(means.sentinels, {0xFFFF})
+        self.assertEqual(means.unit, "K")
+
     def test_scale_scientific_notation_parsed(self):
         """A scientific-notation scale on an allowlisted ID (probe ``0xEDB3
         Tracker mode 1e-2 un16 -``) parsed as scale None with the factor
@@ -4750,6 +4984,144 @@ class TestSpecParsers(unittest.TestCase):
         exp = BMV7xxHEXParser("hdr\n0x0303 Foo - un32 1e-2 V\nftr")
         self.assertAlmostEqual(exp.parse_registers()[0x0303].scale, 0.01)
         self.assertEqual(exp.unknown_scales, [])
+
+    def test_bmv_short_layout_signed_slash_scale(self):
+        """BMV short-layout explicitly-signed and slash-suffixed scales parse
+        honestly (not silent None). Probes ``0xED8E Power 1 un16 +0.1 W`` and
+        ``0xED8E Power 1 un16 0.02/ W`` yielded scale None with empty gates
+        (control ``0.1 W`` parsed), excused by SCALE_NONE_ALLOW (0xED8E, bare
+        "W") — reproduced synthetically before the fix. One leading "+"
+        strips (explicit positive, same value) and trailing "/" strips
+        (mirroring the Phoenix trailing-slash treatment: 0xEB10 "0.02/"
+        parses as 0.02); a leading "-" never strips (a negative factor is
+        unphysical and routes to the loud unknown_scales gate like ASCII
+        "-0.1"). Regression with both probes + controls. Zero-diff: no
+        snapshot short-layout rest token leads with "+" or trails with "/"
+        (verified live here), snapshots stay 110 with empty gates."""
+        from spec_parser import BMV7xxHEXParser
+
+        self.assertEqual(self.specs["bmv"].unknown_units, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        self.assertEqual(len(self.bmv_regs), EXPECTED_COUNTS["bmv"])
+        # Zero-diff pin: no snapshot short-layout rest token carries the
+        # fixed shapes (verified live, not just asserted).
+        for line in self.raw_texts["bmv"].splitlines():
+            toks = line.split()
+            if toks and re.match(r"^0[xX][0-9A-Fa-f]{4}$", toks[0]):
+                for tok in toks[1:]:
+                    if any(c.isdigit() for c in tok):
+                        self.assertFalse(tok.startswith("+"), f"signed snapshot token: {line!r}")
+                        self.assertFalse(tok.endswith("/"), f"slashed snapshot token: {line!r}")
+        for probe_text, expected in (
+            ("hdr\n0xED8E Power 1 un16 +0.1 W\nftr", 0.1),
+            ("hdr\n0xED8E Power 1 un16 0.02/ W\nftr", 0.02),
+        ):
+            with self.subTest(probe=probe_text):
+                p = BMV7xxHEXParser(probe_text)
+                r = p.parse_registers()[0xED8E]
+                self.assertAlmostEqual(r.scale, expected)
+                self.assertEqual(r.unit, "W")
+                self.assertEqual(p.unknown_scales, [])
+                self.assertEqual(p.unknown_units, [])
+                self.assertIn(0xED8E, SCALE_NONE_ALLOW["bmv"])
+        # Controls: plain factor parses identically; negative routes loudly.
+        ctrl = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 0.1 W\nftr")
+        self.assertAlmostEqual(ctrl.parse_registers()[0xED8E].scale, 0.1)
+        self.assertEqual(ctrl.unknown_scales, [])
+        neg = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 -0.1 W\nftr")
+        neg.parse_registers()
+        self.assertEqual(neg.unknown_scales, [(0xED8E, "-0.1")])
+
+    def test_unicode_minus_scale_normalized_per_family(self):
+        """Unicode-minus (U+2212) scale behaves exactly like ASCII "-0.1" in
+        every family's scale-token path. Probe ``−0.1`` yielded scale None
+        with EMPTY gates on BlueSolar/BMV/Orion section paths (``float()``
+        and the ASCII-only token shapes reject it) while ASCII ``-0.1``
+        recorded loudly there and Phoenix recorded loudly via its
+        digit-bearing gate — reproduced synthetically before the fix. U+2013
+        (EN DASH) and U+2014 (EM DASH) behave the same (verified here, not
+        assumed): all three normalize to the ASCII hyphen in scale-token
+        paths of ALL families (never parsed as negative factors — the strict
+        shapes still reject a leading "-", so the normalized form routes to
+        the loud unknown-scale gate exactly like ASCII "-0.1"; Phoenix parity
+        is whatever ASCII does there via ``float()``). Regression per family
+        (BlueSolar, BMV short-layout, BMV settings-Step, Orion section
+        tables, Orion single-field, Phoenix) + controls. Zero-diff: no
+        snapshot scale cell carries any of the three (verified live here —
+        U+2013 hits are revision-log "– rev N" separators and one BMV prose
+        line only), so normalization is identity on current docs."""
+        from spec_parser import (
+            BlueSolarHEXParser,
+            BMV7xxHEXParser,
+            OrionXSHEXParser,
+            PhoenixInverterHEXParser,
+        )
+
+        dashes = {"U+2212": "−", "U+2013": "–", "U+2014": "—"}
+        # Zero-diff pin: no digit-bearing dash token in any HEX snapshot
+        # (prose separators carry no digits in scale position).
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(snapshot=key):
+                bad = [
+                    tok
+                    for line in self.raw_texts[key].splitlines()
+                    for tok in line.split()
+                    if any(c in tok for c in dashes.values()) and any(c.isdigit() for c in tok)
+                ]
+                self.assertEqual(bad, [])
+        self.assertEqual(self.specs["bluesolar"].unknown_scales, [])
+        self.assertEqual(self.specs["bmv"].unknown_scales, [])
+        self.assertEqual(self.specs["orion"].unknown_scales, [])
+        self.assertEqual(self.specs["phoenix"].unknown_scales, [])
+        for dash_name, dash in dashes.items():
+            with self.subTest(dash=dash_name):
+                uni, asc = f"{dash}0.1", "-0.1"
+                # BlueSolar section tables: loud like ASCII.
+                for cell in (uni, asc):
+                    with self.subTest(family="bluesolar", cell=cell):
+                        text = f"1.1 Get and Set items\n0xED8E Power {cell} un16 W\n1.2 Asynchronous items\n"
+                        p = BlueSolarHEXParser(text)
+                        self.assertIsNone(p.parse_registers()[0xED8E].scale)
+                        self.assertEqual(p.unknown_scales, [(0xED8E, cell)])
+                # Orion section tables: loud like ASCII.
+                for cell in (uni, asc):
+                    with self.subTest(family="orion", cell=cell):
+                        text = f"1.1 Get and Set items\n0xED8E Power {cell} un16 W\n1.2 Asynchronous items\n"
+                        p = OrionXSHEXParser(text)
+                        self.assertIsNone(p.parse_registers()[0xED8E].scale)
+                        self.assertEqual(p.unknown_scales, [(0xED8E, cell)])
+                # BMV short layout + settings Step: loud like ASCII.
+                for cell in (uni, asc):
+                    with self.subTest(family="bmv-short", cell=cell):
+                        p = BMV7xxHEXParser(f"hdr\n0xED8E Power 1 un16 {cell} W\nftr")
+                        self.assertIsNone(p.parse_registers()[0xED8E].scale)
+                        self.assertEqual(p.unknown_scales, [(0xED8E, cell)])
+                    with self.subTest(family="bmv-step", cell=cell):
+                        text = (
+                            "hdr\n0x0100 Product Foo 1 un16 0..1 (OFF, ON) 0 "
+                            f"{cell} V\nftr"
+                        )
+                        p = BMV7xxHEXParser(text)
+                        self.assertIsNone(p.parse_registers()[0x0100].scale)
+                        self.assertEqual(p.unknown_scales, [(0x0100, cell)])
+                # Orion single-field Bytes width: parity with ASCII.
+                base = "registers 0x0150 dummy\nBytes Description Scale Type Unit\n0 Count %s un16\n"
+                for cell in (uni, asc):
+                    with self.subTest(family="orion-single", cell=cell):
+                        o = OrionXSHEXParser(base % cell)
+                        pos = (base % cell).find("registers 0x0150") + len("registers 0x0150 dummy")
+                        self.assertEqual(o._single_field_bytes_width(pos), (None, None))
+                # Phoenix Scale cell: parity with ASCII (whatever float does).
+                for cell in (uni, asc):
+                    with self.subTest(family="phoenix", cell=cell):
+                        x = PhoenixInverterHEXParser(f"0xEB99 VE_REG_FOO R/W un16 {cell} V\n")
+                        reg = x.parse_registers()[0xEB99]
+                        ctrl = PhoenixInverterHEXParser("0xEB99 VE_REG_FOO R/W un16 -0.1 V\n").parse_registers()[0xEB99]
+                        self.assertEqual(reg.scale, ctrl.scale)
+                        self.assertEqual(x.unknown_scales, [])
+        neg = BMV7xxHEXParser("hdr\n0xED8E Power 1 un16 -0.1 W\nftr")
+        neg.parse_registers()
+        self.assertEqual(neg.unknown_scales, [(0xED8E, "-0.1")])
 
     def test_decimal_3digit_6digit_divergence(self):
         """Issue-2: shared ``\\d{4,5}`` floor missed ``999 Future history
@@ -6301,8 +6673,17 @@ class TestCycle34SeparatorVariants(unittest.TestCase):
         self.assertIn(0xEDE0, scrape_doc_ids(probe))
         self.assertIn(0xEDE0, scrape_decimal_ids(probe))
         self.assertEqual(register_id_set_from_text(probe), {0xEDE0})
+        # Double-space column gap rescues on all four sides too (``\s+`` —
+        # a lone ``\s`` missed it everywhere while the single-space control
+        # hit — reproduced synthetically before the fix).
         dbl = "0xED  E0    Split inside  0.1  un16  V\n"
-        self.assertIsNone(_split_typed_row(dbl))
+        dbl_row = _split_typed_row(dbl)
+        self.assertIsNotNone(dbl_row)
+        assert dbl_row is not None
+        self.assertEqual(dbl_row[0], 0xEDE0)
+        self.assertIn(0xEDE0, scrape_doc_ids(dbl))
+        self.assertIn(0xEDE0, scrape_decimal_ids(dbl))
+        self.assertEqual(register_id_set_from_text(dbl), {0xEDE0})
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
             with self.subTest(spec=key):
                 self.assertNotIn("\t", self.raw_texts[key])
