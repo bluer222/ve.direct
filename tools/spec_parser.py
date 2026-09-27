@@ -170,6 +170,22 @@ def _normalize_scale_dashes(tok: str) -> str:
     return _SCALE_DASH_RE.sub("-", tok)
 
 
+def _normalize_range_dashes(line: str) -> str:
+    """Map U+2212/U+2013/U+2014 to ASCII hyphen in a range line.
+
+    Mirror of :func:`_normalize_scale_dashes` for decimal range
+    separators: inline decimal ranges accept ASCII ``..``/``...``/``-``,
+    so a unicode-dash ``60961–60999`` line missed every parser and scan
+    while the ASCII control expanded. Normalizing first routes all three
+    through the same ASCII shape guards (signed ``-32768..`` lookbehind,
+    ``--`` exclusion, span caps unchanged). Applied only to range-scan
+    lines (never whole-doc prose mutation). Zero-diff: no snapshot line
+    carries a digit-flanking unicode dash (verified), so normalization is
+    identity on current docs.
+    """
+    return _SCALE_DASH_RE.sub("-", line)
+
+
 #: Sentinel annotation inside a unit/description cell: a hex value glued to
 #: ``=`` with its meaning (``K, 0xFFFF=N/A``, ``A, 0xFFFF=use max``) or an
 #: explicit ``0xXXXX means ...`` clause. The ``=`` must be GLUED (no spaces):
@@ -696,7 +712,11 @@ class BlueSolarHEXParser:
             # so nothing expands today. Decimal ranges are always history
             # records here (timer events are hex-documented Get/Set words,
             # never decimal).
-            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", line):
+            # Unicode dashes (U+2212/U+2013/U+2014) normalize to ASCII "-"
+            # first (mirror of _normalize_scale_dashes): probe "History
+            # registers 60961–60999 table" (U+2013) missed every side
+            # before the fix while the ASCII control expanded 39 IDs.
+            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", _normalize_range_dashes(line)):
                 a, b = int(m.group(1)), int(m.group(2))
                 if not re.search(r"[Rr]egister|vreg|history|History|Timer|Cycle|0[xX]104F|0[xX]1050", line):
                     continue
@@ -1150,10 +1170,12 @@ class OrionXSHEXParser:
             # cap; see the BlueSolar branch for the full shape-guard
             # justification, widened to 3-/6-/7-digit there). Probe "History
             # registers 60961-60999 table" was missed on all sides before
-            # the fix. Zero-diff: no decimal range line with history context
+            # the fix (unicode-dash twin "60961–60999" likewise — normalized
+            # via _normalize_range_dashes, mirror of _normalize_scale_dashes).
+            # Zero-diff: no decimal range line with history context
             # exists in any snapshot (verified, incl. 3-digit "174..372"
             # Range cells which lack the context guard).
-            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", line):
+            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", _normalize_range_dashes(line)):
                 a, b = int(m.group(1)), int(m.group(2))
                 if not re.search(r"[Rr]egister|history|History|Cycle", line):
                     continue

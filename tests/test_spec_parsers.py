@@ -827,17 +827,23 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # expansion (same shape guards as the parser branches, scraper-side
         # cap 1024 instead of the parsers' 64 — the span divergence axis;
         # no register-context guard here, over-inclusion is the safe
-        # direction). Zero-diff: no snapshot decimal range (the BMV signed
+        # direction). Unicode dashes (U+2212/U+2013/U+2014) normalize to
+        # ASCII "-" first (mirror of spec_parser._normalize_scale_dashes):
+        # probe "History registers 60961–60999 table" (U+2013) missed
+        # every side before the fix while the ASCII control expanded 39
+        # IDs. Zero-diff: no snapshot decimal range (the BMV signed
         # "-32768..32767" cell is excluded by the signed lookbehind and the
-        # span cap alike).
-        for m5 in re.finditer(r"(?<![\w\-])(\d{4,5})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{4,5})(?!\w)", line):
+        # span cap alike; no snapshot digit-flanking unicode dash, verified).
+        _range_line = re.sub("[\u2212\u2013\u2014]", "-", line)
+        for m5 in re.finditer(r"(?<![\w\-])(\d{4,5})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{4,5})(?!\w)", _range_line):
             a, b = int(m5.group(1)), int(m5.group(2))
             if 0 < b - a <= 1024:
                 ids.update(range(a, b + 1))
         # 3-/6-/7-digit ranges ONLY with history/register context (unlike
         # guard-free 4-5 digit above — the BMV "174..372" Range cells lack
-        # it so stay excluded; see docstring). Zero-diff verified.
-        for m536 in re.finditer(r"(?<![\w\-])(\d{3,7})(?!\d)\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\d)(?!\w)", line):
+        # it so stay excluded; see docstring). Unicode dashes normalized
+        # via _range_line above (same mirror). Zero-diff verified.
+        for m536 in re.finditer(r"(?<![\w\-])(\d{3,7})(?!\d)\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\d)(?!\w)", _range_line):
             a, b = int(m536.group(1)), int(m536.group(2))
             # Skip pure 4-5 digit pairs already covered guard-free above
             # (avoid double work; guarded path would also match them but the
@@ -1699,6 +1705,65 @@ class TestSpecParsers(unittest.TestCase):
             BlueSolarHEXParser("History registers 60961-61261 table\n").parse_registers().get(61100),
             None,
         )
+
+    def test_decimal_unicode_dash_range_expansion(self):
+        """Unicode-dash decimal ranges expand like ASCII ``-`` on every side.
+
+        Probe ``History registers 60961–60999 table`` (U+2013 EN DASH) was
+        missed by both history parsers and the decimal scan (0 IDs) while
+        the ASCII control expanded 39 IDs on both (all sides shared the
+        ASCII-only ``..``/``...``/``-`` separator assumption — reproduced
+        synthetically before the fix). U+2014 (EM DASH) and U+2212 (MINUS
+        SIGN) behaved identically (verified here, not assumed): all three
+        normalize to ASCII hyphen in decimal range expansion on parser
+        (BlueSolar + Orion history branches via
+        spec_parser._normalize_range_dashes, mirror of
+        _normalize_scale_dashes) and scraper sides, so the probe now
+        expands honestly (39 IDs, struct/R/None like the control).
+        Zero-diff: no snapshot line carries a digit-flanking unicode dash
+        (verified live here), so snapshot scans stay exactly
+        EXPECTED_DECIMAL_SCAN_HITS. Hex paths need no fix: hex inline
+        ranges use ``..`` only (never a dash separator — even ASCII
+        ``0x1060-0x1062`` expands nothing on the parser side), so there is
+        no unicode-dash variant to normalize; pinned by the control below.
+        """
+        from spec_parser import OrionXSHEXParser
+
+        dashes = {"U+2013": "–", "U+2014": "—", "U+2212": "−"}
+        # Zero-diff pin: no digit-flanking unicode dash in any snapshot.
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(snapshot=key):
+                hits = [
+                    line
+                    for line in self.raw_texts[key].splitlines()
+                    for m in [re.search(r"\d[\u2212\u2013\u2014]\d", line)]
+                    if m
+                ]
+                self.assertEqual(hits, [])
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+        # Honest pass: each unicode dash matches the ASCII control.
+        for dash_name, dash in dashes.items():
+            with self.subTest(dash=dash_name):
+                line = f"History registers 60961{dash}60999 table\n"
+                scraped = scrape_decimal_ids(line)
+                self.assertEqual(len(scraped), 39)
+                self.assertIn(60961, scraped)
+                self.assertIn(60999, scraped)
+                self.assertNotIn(60961, scrape_doc_ids(line))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(parser=cls.__name__):
+                        regs = cls(line).parse_registers()
+                        block = [r for r in regs if 60961 <= r <= 60999]
+                        self.assertEqual(len(block), 39)
+                        self.assertEqual(regs[60980].data_type, "struct")
+                        self.assertEqual(regs[60980].access, "R")
+                        self.assertIsNone(regs[60980].scale)
+        # Control: ASCII still expands identically (no regression).
+        ctrl = "History registers 60961-60999 table\n"
+        self.assertEqual(len(scrape_decimal_ids(ctrl)), 39)
+        # Hex control: dash-separated hex is not a range shape on any side
+        # (``..`` only), so no unicode normalization applies there.
+        self.assertEqual(BlueSolarHEXParser("History 0x1060-0x1062 table\n").parse_registers().get(0x1061), None)
 
     def test_bmv_settings_parenthesized_unit_loud(self):
         """BMV settings-branch parenthesized units dropped silently: probe
