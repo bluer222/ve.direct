@@ -1,0 +1,2777 @@
+{
+  "area": "register",
+  "requirements": [
+    {
+      "id": "REG-001",
+      "requirement": "Every documented register and register range has the family-correct ID, scalar width, sign, factor, unit and access metadata.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 206,
+          "end": 1152
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:138",
+        "src/ve_direct/registers/__init__.py:874"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance",
+        "test_spec_parsers.TestSpecParsers.test_spec_snapshot_reverse_coverage",
+        "test_spec_parsers.TestSpecParsers.test_access_and_product_specific_semantics"
+      ],
+      "disposition": "tested",
+      "notes": "Existing schema tests cover all parsed rows and reverse-check source IDs. They are not proof of structure layouts, meanings, string widths, model availability, or device behavior; those are classified separately below."
+    },
+    {
+      "id": "REG-002",
+      "requirement": "Every documented register and register range has the family-correct ID, scalar width, sign, factor, unit and access metadata.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 89,
+          "end": 581
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:138",
+        "src/ve_direct/registers/__init__.py:874"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance",
+        "test_spec_parsers.TestSpecParsers.test_spec_snapshot_reverse_coverage",
+        "test_spec_parsers.TestSpecParsers.test_access_and_product_specific_semantics"
+      ],
+      "disposition": "tested",
+      "notes": "Existing schema tests cover all parsed rows and reverse-check source IDs. They are not proof of structure layouts, meanings, string widths, model availability, or device behavior; those are classified separately below."
+    },
+    {
+      "id": "REG-003",
+      "requirement": "Every documented register and register range has the family-correct ID, scalar width, sign, factor, unit and access metadata.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 110,
+          "end": 322
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:138",
+        "src/ve_direct/registers/__init__.py:874"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance",
+        "test_spec_parsers.TestSpecParsers.test_spec_snapshot_reverse_coverage",
+        "test_spec_parsers.TestSpecParsers.test_access_and_product_specific_semantics"
+      ],
+      "disposition": "tested",
+      "notes": "Existing schema tests cover all parsed rows and reverse-check source IDs. They are not proof of structure layouts, meanings, string widths, model availability, or device behavior; those are classified separately below."
+    },
+    {
+      "id": "REG-004",
+      "requirement": "Every documented register and register range has the family-correct ID, scalar width, sign, factor, unit and access metadata.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 234,
+          "end": 624
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:138",
+        "src/ve_direct/registers/__init__.py:874"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance",
+        "test_spec_parsers.TestSpecParsers.test_spec_snapshot_reverse_coverage",
+        "test_spec_parsers.TestSpecParsers.test_access_and_product_specific_semantics"
+      ],
+      "disposition": "tested",
+      "notes": "Existing schema tests cover all parsed rows and reverse-check source IDs. They are not proof of structure layouts, meanings, string widths, model availability, or device behavior; those are classified separately below."
+    },
+    {
+      "id": "REG-005",
+      "requirement": "Decode the product-ID register instance byte, little-endian PID, and reserved FF or Phoenix FE byte.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 218,
+          "end": 223
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 99,
+          "end": 104
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 305,
+          "end": 311
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1174"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_product_id_register_layouts"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-006",
+      "requirement": "Prefer command :4; the old two-byte product-ID register response has inconsistent endianness on some builds and should not identify a product without independent evidence.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 214,
+          "end": 223
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 99,
+          "end": 104
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "This warning concerns the register, not the Done reply to command :4. Raw Get remains available. The high-level command reply behavior is covered by the HEX ledger. No universal endian interpretation is asserted for legacy two-byte register values."
+    },
+    {
+      "id": "REG-007",
+      "requirement": "Decode every published capabilities bit for BlueSolar, Orion and Phoenix, with zero indicating feature absence.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 225,
+          "end": 252
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 116,
+          "end": 148
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 334,
+          "end": 355
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:705",
+        "src/ve_direct/registers/__init__.py:1321"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_capability_bits",
+        "test_spec_parsers.TestSpecParsers.test_capabilities_against_doc"
+      ],
+      "disposition": "tested",
+      "notes": "Full documented bit sets are independently exercised one bit at a time. Bits reserved by a family are not required to gain another family's labels; the current shared map is an explicit superset."
+    },
+    {
+      "id": "REG-008",
+      "requirement": "Use product information, capabilities and firmware to establish physical load, relay, rotary switch, BLE/network, tracker and operating-power availability.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 96,
+          "end": 216
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 83,
+          "end": 97
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 119,
+          "end": 193
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 283,
+          "end": 303
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 334,
+          "end": 368
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 110,
+          "end": 137
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:47",
+        "src/ve_direct/registers/__init__.py:1446",
+        "src/ve_direct/registers/__init__.py:1459"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Flavor membership is a declared metadata superset, not a promise every model supports a register. Hardware rejects unsupported IDs. PV-only units may not communicate at night; BLE port multiplexing and obsolete/revised models are device facts. Tests intentionally do not turn absence from a family document into a forbidden raw query."
+    },
+    {
+      "id": "REG-009",
+      "requirement": "Encode and decode every documented device state/mode value separately for MPPT, Orion and Phoenix.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 253,
+          "end": 300
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 149,
+          "end": 184
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 387,
+          "end": 396
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 460,
+          "end": 474
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:556",
+        "src/ve_direct/registers/__init__.py:569"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_device_state_and_mode_tables"
+      ],
+      "disposition": "tested",
+      "notes": "Mode synonyms use numeric writes in the acceptance test so alternate wire encodings remain representable. Phoenix mode3 versus prose value1 is classified separately."
+    },
+    {
+      "id": "REG-010",
+      "requirement": "Enable remote-on/off bit1 in 0x0202 before controlling mode on old firmware; preserve set-only semantics and changes in meaning across firmware.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 264,
+          "end": 275
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 301,
+          "end": 313
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:149",
+        "src/ve_direct/registers/__init__.py:739"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Caller must set bit1 once after power-up on pre-1.42 firmware. Reserved bits may be sent and have no effect; only restart clears bits. Firmware <=1.16 reports actual operation, >=1.17 the soft switch. A register codec should not invent power-up state or silently write this mask."
+    },
+    {
+      "id": "REG-011",
+      "requirement": "Decode family-specific off-reason bits and the old one-byte MPPT representation.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 315,
+          "end": 329
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 186,
+          "end": 198
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 398,
+          "end": 407
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:685"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_off_reasons_and_warning_bits"
+      ],
+      "disposition": "tested",
+      "notes": "MPPT bits7-8 reserved; bit9 low battery temperature only fits 0x0207. Orion bit7 engine shutdown and bit8 error. Phoenix only bits0,2,3,4,5."
+    },
+    {
+      "id": "REG-012",
+      "requirement": "Honor device-defined firmware availability and state reporting, rather than infer universal support from a register name.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 258,
+          "end": 262
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 277,
+          "end": 299
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 502,
+          "end": 512
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 281,
+          "end": 284
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 373,
+          "end": 381
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "MPPT 0x0205 is firmware1.29-1.43; 0x0207 >=1.44 SmartSolar/RS. Batterysafe and automatic equalization migrate between device state and additional state. Phoenix 0x0207 >=1.17 and BLE announcements require BLE2.20. Orion battery sensing is unavailable without the sensor. These are device observations, not host-side transformations."
+    },
+    {
+      "id": "REG-013",
+      "requirement": "Encode battery voltage/current/time/temperature scalars and boolean flags in the documented units, including firmware-dependent yield widths.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 330,
+          "end": 359
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 464,
+          "end": 499
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 200,
+          "end": 229
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_boolean_settings",
+        "test_register_acceptance.RegisterAcceptance.test_voltage_range_and_yield_widths",
+        "test_register_acceptance.RegisterAcceptance.test_scalar_sentinels",
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance"
+      ],
+      "disposition": "tested",
+      "notes": "All scalar definitions use the exhaustive schema comparison. Independent wire examples verify signed values, sentinels, and both yield widths; these examples do not claim exhaustive value-range testing."
+    },
+    {
+      "id": "REG-014",
+      "requirement": "Avoid continuous writes to battery settings stored in NVM; select USER before editing protected charge parameters and follow device validity and recovery rules.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 330,
+          "end": 378
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 200,
+          "end": 229
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:383",
+        "src/ve_direct/registers/__init__.py:188"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Caller obligation: no control-loop writes to persistent settings. For BlueSolar select0xEDF1=FF before changing annotated parameters; for12V use8..17.4V and compensation -21..21mV. Error119 needs corrected settings plus reset. BMS present auto-enables when detected and can be cleared to resume standalone. Firmware availability/removal notes1-10 belong to the device."
+    },
+    {
+      "id": "REG-015",
+      "requirement": "Interpret automatic equalisation0 as off and1..250 as a day interval; equalisation current percentage is relative to maximum battery current.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 336,
+          "end": 362
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 206,
+          "end": 229
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "The host transmits raw days and percent. Trigger timing and current limiting are charger behavior; no scheduler is required of the codec."
+    },
+    {
+      "id": "REG-016",
+      "requirement": "Offer a selectable small-charger register table for 10A/15A/20A MPPT models, where raw 1 means TYPE_2.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 380,
+          "end": 386
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:212",
+        "src/ve_direct/registers/__init__.py:863",
+        "src/ve_direct/device.py:370"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_small_charger_battery_type_normal_decode",
+        "test_register_acceptance.RegisterAcceptance.test_small_charger_battery_type_normal_encode"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F09: MPPT_SMALL selects the small 10A/15A/20A table through typed lookup, reads and writes; MPPT retains the large-model default. MPPT_SMALL is a host API spelling, not a Victron term. Small and large fixtures use distinct model inputs with fixed documented wire values."
+    },
+    {
+      "id": "REG-017",
+      "requirement": "Decode and encode the unambiguous large-charger, MPPT RS and Orion battery-type values.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 388,
+          "end": 412
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 254,
+          "end": 258
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:772",
+        "src/ve_direct/registers/__init__.py:543"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_other_battery_type_tables"
+      ],
+      "disposition": "tested",
+      "notes": "Large raw2 is deliberately not resolved by this requirement; both printed labels are recorded as ambiguity below."
+    },
+    {
+      "id": "REG-018",
+      "requirement": "Preserve an explicit resolution for the large-charger table that assigns raw2 to both TYPE_2 and TYPE_3.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 390,
+          "end": 403
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:772"
+      ],
+      "tests": [
+        "test_registers.TestRegisters.test_bat_type_generic_uses_large_charger_map"
+      ],
+      "disposition": "ambiguous",
+      "notes": "SPEC_EXCEPTIONS chooses type_2. Both labels cannot be decoded uniquely. This is not an automatic blocker for the frozen specification; a Victron correction or hardware evidence is required."
+    },
+    {
+      "id": "REG-019",
+      "requirement": "For rotary-switch chargers, writing FF selects USER; writing another value restores the rotary-selected type instead of selecting that numeric chemistry.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 400,
+          "end": 403
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Caller and device write semantics. The encoder must permit the wire values but cannot force a physical rotary switch. Hardware acceptance remains unverified."
+    },
+    {
+      "id": "REG-020",
+      "requirement": "Represent BlueSolar automatic and12/24/36/48V settings and Orion12/24/48V settings; keep operational voltage readable.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 416,
+          "end": 440
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 260,
+          "end": 265
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:206",
+        "src/ve_direct/registers/__init__.py:624",
+        "src/ve_direct/registers/__init__.py:836"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_battery_voltage_settings"
+      ],
+      "disposition": "tested",
+      "notes": "The shared Orion metadata is a superset; this does not imply Orion supports0/36. Numeric0 maps to None in the existing API. Encoding and decoding supported nonzero values is verified."
+    },
+    {
+      "id": "REG-021",
+      "requirement": "Follow model-specific allowed system voltages and battery auto-detection/write/readback semantics.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 363,
+          "end": 375
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 424,
+          "end": 440
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Connect battery before panel for auto-detection;36V requires manual selection. Firmware>=1.26 detects only on first successful startup above7V. 100/20 48V defaults48 and does not auto-detect. Fixed-voltage models are read-only. 0xEDEF reports actual voltage;0xEDEA exposes AUTO and becomes writable>=1.17. These stateful/model constraints are not inferred by this family-level codec."
+    },
+    {
+      "id": "REG-022",
+      "requirement": "Represent MPPT RS remote-input mode0/1 and two-wire BMS enabled/discharge/charge bits0/1/2.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 442,
+          "end": 463
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:284",
+        "src/ve_direct/registers/__init__.py:738"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_rs_inputs_tracker_modes_and_additional_state"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-023",
+      "requirement": "Write RS remote input configuration only while USER battery type is selected.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 449,
+          "end": 455
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Device prerequisite and caller sequence; no hidden BAT_TYPE write should be inserted by a register encoder."
+    },
+    {
+      "id": "REG-024",
+      "requirement": "Decode voltage-range byte order and additional charger-state bits0,1,4,6; accept16-bit and32-bit yields.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 467,
+          "end": 512
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:242",
+        "src/ve_direct/registers/__init__.py:970",
+        "src/ve_direct/registers/__init__.py:1338"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_voltage_range_and_yield_widths",
+        "test_register_acceptance.RegisterAcceptance.test_rs_inputs_tracker_modes_and_additional_state"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-025",
+      "requirement": "Distinguish total charger current from battery current and respect historical/firmware availability.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 485,
+          "end": 499
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "For ordinary MPPT battery current subtract load current0xEDAD from charger current0xEDD7. Historical data absent on old70/15 PID0300. Range registers introduced1.16/1.30; battery-temperature sensing1.42; equalize maxima RS-only. The API exposes documented measurements rather than a derived battery current."
+    },
+    {
+      "id": "REG-026",
+      "requirement": "Decode all listed BlueSolar charger errors, expanded ranges3..5/6..8 and22,23, and Orion errors/warnings.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 513,
+          "end": 545
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 286,
+          "end": 307
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:628"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_charger_error_tables"
+      ],
+      "disposition": "tested",
+      "notes": "All published numeric values independently exercised. Labels remain the library's existing concise names after checking their meaning; naming style is not normative."
+    },
+    {
+      "id": "REG-027",
+      "requirement": "Treat documented firmware-specific transient/deprecated error meanings as device behavior.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 539,
+          "end": 545
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Error19 disabled>=1.15;21 may be ignored for5min in old firmware and is resolved1.16;26/38 added1.16;34 removed1.29;116 can follow downgrade>=1.40 to<=1.39. The decoder retains historical values instead of automatically suppressing alarms."
+    },
+    {
+      "id": "REG-028",
+      "requirement": "Represent signed RS DC replacements, each panel tracker register ID/scale, and off/limited/MPPT tracker modes.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 547,
+          "end": 579
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:267",
+        "src/ve_direct/registers/__init__.py:373"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_rs_inputs_tracker_modes_and_additional_state",
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance"
+      ],
+      "disposition": "tested",
+      "notes": "All16 individual-tracker IDs included by schema checks; independent bytes check all4 tracker voltage/power/current sets and modes."
+    },
+    {
+      "id": "REG-029",
+      "requirement": "Use tracker count0x0244 and model restrictions to determine which panel measurements exist.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 553,
+          "end": 579
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Panel current is absent on10/15/20A; max voltage>=1.16, mode>=1.42; several registers RS-only. Total panel power sums trackers. No actual hardware availability is inferred from broad flavor views."
+    },
+    {
+      "id": "REG-030",
+      "requirement": "Decode and encode the low-nibble load mode0..7, independent lighting bit7, on/off state, and off-reason bitmask.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 580,
+          "end": 641
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:986",
+        "src/ve_direct/registers/__init__.py:996",
+        "src/ve_direct/registers/__init__.py:741"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_load_control_and_off_reasons",
+        "test_register_acceptance.RegisterAcceptance.test_boolean_settings"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-031",
+      "requirement": "Respect physical-load availability and firmware-specific load thresholds, hysteresis and AES timing.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 580,
+          "end": 641
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Only load-output10/15/20A models; output voltage SmartSolar only. USER modes>=1.15 but24V needs1.16 and old70/15 unsupported. Off reasons>=1.20; AES>=1.26. ALT1 off<11.1/on>13.1V, ALT2 off<11.8/on>14.0V; USER1/2 and AES use documented high/low/timer settings. Hardware performs switching; codec tests do not simulate it."
+    },
+    {
+      "id": "REG-032",
+      "requirement": "Encode all MPPT relay operation modes and distinguish MPPT0.01V thresholds from BMV0.1V aliases.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 643,
+          "end": 669
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 218,
+          "end": 237
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:314",
+        "src/ve_direct/registers/__init__.py:620"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_relay_port_and_display_enums",
+        "test_registers.TestRegisters.test_relay_bat_scoped_out_of_bmv"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-033",
+      "requirement": "Only relay-equipped models implement relay settings and physical temperature/voltage/error-driven actions.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 643,
+          "end": 669
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Modes include >85C and <-20C temperature conditions, float/storage, day detection and load control. Relay dwell timing and contacts require hardware; named enum encoding alone does not validate operation."
+    },
+    {
+      "id": "REG-034",
+      "requirement": "Represent all six timer words with signed16-bit minute offset, anchor byte1/2/3 and0..100 dim byte.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 670,
+          "end": 722
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:381",
+        "src/ve_direct/registers/__init__.py:945",
+        "src/ve_direct/registers/__init__.py:958"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_timer_events"
+      ],
+      "disposition": "tested",
+      "notes": "Each ID and anchor is tested with independent byte packing and signed extrema. No undocumented host range-clamping rule is introduced."
+    },
+    {
+      "id": "REG-035",
+      "requirement": "Respect solar-clock, day/night threshold, gradual dimming and firmware restrictions when configuring lighting.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 670,
+          "end": 722
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:256",
+        "src/ve_direct/registers/__init__.py:846"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Lighting>=1.15 on load-output10/15/20A except old70/15. Midpoint shift corrects solar midnight. Gradual dim0 immediate else1percent per configured seconds. Day threshold must exceed night;0 selects defaults; <11.4V allowed>=1.26. Sunrise/sunset delays>=1.26. Explicit time applies5days; FFFF unknown. Midnight anchors require synchronization. Device handles timing."
+    },
+    {
+      "id": "REG-036",
+      "requirement": "Encode each TX/RX operation mode without confusing digital-output operation with normal serial communication.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 723,
+          "end": 758
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:255",
+        "src/ve_direct/registers/__init__.py:746"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_relay_port_and_display_enums"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-037",
+      "requirement": "Account for TX pulse/PWM/digital modes and their communication/availability restrictions.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 723,
+          "end": 758
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "TX1 emits100ms-low pulse per0.01kWh; TX2/3 are160Hz PWM. Nonzero mode disables periodic Text but temporarily answers a valid HEX request. PWM requires lighting; virtual load>=1.17 on selected models. RX available on small models>=1.17, normal polarity mode3>=1.26, defaults depend on physical load. Hardware waveform behavior is untested."
+    },
+    {
+      "id": "REG-038",
+      "requirement": "Represent restore-default and clear-history commands with an empty ignored payload.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 760,
+          "end": 783
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 310,
+          "end": 331
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 250,
+          "end": 278
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 254,
+          "end": 258
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:167",
+        "src/ve_direct/registers/__init__.py:334"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_phoenix_settings_and_nvm_commands"
+      ],
+      "disposition": "tested",
+      "notes": "Restoration effects and preservation of factory calibration are hardware behavior. This test checks valid command payload encoding; HEX transaction/error tests own reply handling."
+    },
+    {
+      "id": "REG-039",
+      "requirement": "Use history counts and flag04 for empty records, and observe model/firmware/range limits.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 767,
+          "end": 783
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 800,
+          "end": 802
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 319,
+          "end": 331
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "BlueSolar history starts1.16 except old70/15; up to30 backlog days plus today. days_available tells how many to query. RS per-tracker only. Orion newest1070..oldest1098 and cycle count. Empty-history Parameter Error is a device reply, not a host-generated record."
+    },
+    {
+      "id": "REG-040",
+      "requirement": "Decode every non-reserved field of the19-byte1.16 and34-byte>=1.17 total-history layouts.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 785,
+          "end": 811
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1048"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_history_total_both_versions"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-041",
+      "requirement": "Decode all daily-history fields at their documented offsets and units; consumed FFFFFFFF means absent load data.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 812,
+          "end": 837
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1071"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_daily_history_offsets"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-042",
+      "requirement": "Treat day sequence as device-assigned identity that stays fixed in backlog and wraps at365 to0.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 834,
+          "end": 837
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Decoder returns raw sequence, including364/0. Incrementing or rolling the sequence is the device's responsibility; no host daily scheduler required."
+    },
+    {
+      "id": "REG-043",
+      "requirement": "Decode all4 tracker energy/power/Voc fields, sequence and per-field FFFF unavailability in the36-byte record.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 839,
+          "end": 860
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1094"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_tracker_history_offsets_and_absent_trackers"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-044",
+      "requirement": "Record conflicting last MPPT-history register endpoints: overview10BE, detail10BD.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 774,
+          "end": 780
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 839,
+          "end": 860
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:385"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_bluesolar_mppt_history_doc_conflict"
+      ],
+      "disposition": "ambiguous",
+      "notes": "SPEC_EXCEPTIONS follows overview10BE and31-day symmetry. Tests pin both sides. This resolved documentation conflict does not automatically block the finite claim."
+    },
+    {
+      "id": "REG-045",
+      "requirement": "Represent pluggable/internal display enums, booleans and numeric contrast without conflating BMV0x0400.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 861,
+          "end": 885
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 239,
+          "end": 252
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:321",
+        "src/ve_direct/registers/__init__.py:751"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_relay_port_and_display_enums",
+        "test_register_acceptance.RegisterAcceptance.test_boolean_settings",
+        "test_registers.TestRegisters.test_0400_flavor_disambiguation"
+      ],
+      "disposition": "tested",
+      "notes": "Scroll1 and5 are named endpoints, intermediate raw values remain transmissible; the spec does not require assigning them names."
+    },
+    {
+      "id": "REG-046",
+      "requirement": "Limit physical display promises to models with the specified pluggable or RS internal display.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 861,
+          "end": 885
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Pluggable settings primarily for firmware migration; setup lock/temp units>=1.30. Internal display RS-only; contrast unavailable on rectangular white-on-dark panels. Broad ANY metadata intentionally does not assert those physical features."
+    },
+    {
+      "id": "REG-047",
+      "requirement": "Represent all remote register formats, network modes, link state values and remote command values.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 886,
+          "end": 943
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 946,
+          "end": 965
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1043,
+          "end": 1102
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 392,
+          "end": 433
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 480,
+          "end": 537
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:337",
+        "src/ve_direct/registers/__init__.py:762",
+        "src/ve_direct/registers/__init__.py:1010"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_network_mode_info_status_and_state",
+        "test_register_acceptance.RegisterAcceptance.test_remote_control_value_encodings"
+      ],
+      "disposition": "tested",
+      "notes": "Full defined enum/bit values and representative independent scalar bytes. Network-info bit8 contradiction is classified separately."
+    },
+    {
+      "id": "REG-048",
+      "requirement": "Observe remote/synchronized-control firmware and model support and deprecated-register limitations.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 886,
+          "end": 943
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Remote supported>=1.29/VE.Can1.02, synchronized>=1.44 on network-capable SmartSolar. Notes distinguish2000,2007..200C,2013,2018,2027 availability;2014 only1.17 and replaced2015>=1.19. Equalization requires capability support; commands3/4 not used on VE.Direct."
+    },
+    {
+      "id": "REG-049",
+      "requirement": "A network controller must forward master data and maintain slave timing/state, rather than merely set the network bit.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 946,
+          "end": 986
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1022,
+          "end": 1041
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:383",
+        "src/ve_direct/device.py:427"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Set networked+slave bits; forward2001,2007,2008,200B Async values and provide200C,200A. Units fall back after1min without voltage. Group-master gathering not implemented by VE.Direct chargers. Wake-up245 triggers role selection; standby bit6 can hold a node while link data is prepared. Library exposes primitives, not a complete network controller."
+    },
+    {
+      "id": "REG-050",
+      "requirement": "Record the slave-mode overview0x0201 versus detailed charge-state0x200C discrepancy.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 963,
+          "end": 983
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:150",
+        "src/ve_direct/registers/__init__.py:348"
+      ],
+      "tests": [],
+      "disposition": "ambiguous",
+      "notes": "Detailed slave procedure and dedicated link-state table identify200C; current metadata exposes writable200C and read-only0201. No unproven0201-writability failure is imposed."
+    },
+    {
+      "id": "REG-051",
+      "requirement": "When using external/BMS control, keep setpoints alive and account for the device's persistent BMS-present and fallback behavior.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 987,
+          "end": 1020
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 439,
+          "end": 472
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "External mode sets252 only with voltage setpoint on newer firmware; current-only leaves charger algorithm active. After1min communications loss, standalone fallback; with detected BMS present instead stops with67. Morning black-start permits45s Float. Controlling current, voltage or both is allowed. This is caller scheduling/device behavior, not automatic library writes."
+    },
+    {
+      "id": "REG-052",
+      "requirement": "Refresh remote voltage and temperature within60s; send reserved values when unavailable and observe compensation limits.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 918,
+          "end": 922
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1031,
+          "end": 1035
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 408,
+          "end": 412
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 474,
+          "end": 479
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:339",
+        "src/ve_direct/registers/__init__.py:340"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Remote voltage must be within +/-5V of terminal voltage and compensation limited +/-2V. Encodings and sentinels are tested separately. Callers schedule updates; devices enforce limits and timeout."
+    },
+    {
+      "id": "REG-053",
+      "requirement": "Preserve the explicit un8 versus documented standby bit8 conflict for Network info.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 905,
+          "end": 907
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1043,
+          "end": 1056
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 402,
+          "end": 404
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 480,
+          "end": 494
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:349",
+        "src/ve_direct/registers/__init__.py:763"
+      ],
+      "tests": [],
+      "disposition": "ambiguous",
+      "notes": "Both docs type200D asun8 while defining bit8. Current implementation follows width and represents bits0..7. Neither widening nor inventing another byte is mandated. SPEC_EXCEPTIONS records the unresolved wire ambiguity."
+    },
+    {
+      "id": "REG-054",
+      "requirement": "Respect the semantics and producers of absorption time, idle voltage, actual/estimated battery current, injected errors and total input power.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1104,
+          "end": 1143
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 538,
+          "end": 543
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "2008 means available absorption time<=1.39, elapsed time>=1.42, with documented reset conditions. First-starting unit supplies idle voltage. Actual current comes from BMV; estimate sums DC currents. Master injects network errors into2009 and sums EDBC across nodes into2027 on VE.Direct. Tests verify byte formats, not these external calculations."
+    },
+    {
+      "id": "REG-055",
+      "requirement": "Refresh charge-current limit2015 together with network mode200E more than once per minute.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1145,
+          "end": 1152
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 544,
+          "end": 551
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:354",
+        "src/ve_direct/device.py:383"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Device uses min2015,EDF0, or EDF0 when remote limit absent. The prose EFF0 is a documented typo resolved in favor of the battery-table EDF0. A generic register API need not start a hidden periodic task."
+    },
+    {
+      "id": "REG-056",
+      "requirement": "Decode Orion identifier plus24-bit0xHHMMLL firmware structure, including FF release suffix.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 106,
+          "end": 113
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1192",
+        "src/ve_direct/hex.py:80"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_orion_application_version"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-057",
+      "requirement": "Represent Orion engine shutdown, delayed-start, delay and input lockout controls with documented widths/scales.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 231,
+          "end": 258
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:358",
+        "src/ve_direct/registers/__init__.py:533"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance",
+        "test_register_acceptance.RegisterAcceptance.test_boolean_settings",
+        "test_register_acceptance.RegisterAcceptance.test_other_battery_type_tables"
+      ],
+      "disposition": "tested",
+      "notes": "Schema comparison is exhaustive for these rows. Engine behavior and allowed setting combinations are implemented by the device; no algorithm is prescribed in this public section."
+    },
+    {
+      "id": "REG-058",
+      "requirement": "Distinguish Orion unsigned output power/current/voltage from BMV aliases and preserve unavailable battery voltage/temperature.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 268,
+          "end": 284
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:362",
+        "src/ve_direct/registers/__init__.py:535"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_scalar_sentinels",
+        "test_registers.TestRegisters.test_lookup_by_name_and_id",
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance"
+      ],
+      "disposition": "tested",
+      "notes": "The battery sensor needs Smart Battery Sense; estimated temperature is charger temperature. Scalar formats checked against table; physical sensor sourcing is a device obligation."
+    },
+    {
+      "id": "REG-059",
+      "requirement": "Decode both25-byte cumulative user/service history records at every documented field offset.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 344,
+          "end": 366
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1119"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_orion_cumulative_history_offsets"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-060",
+      "requirement": "Decode cycle count, current start sequence and every51-byte cycle-history field, with FF/FFFF/FFFFFFFF unavailable fields.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 334,
+          "end": 343
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 368,
+          "end": 391
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1135",
+        "src/ve_direct/registers/__init__.py:1166"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_orion_cycle_history_offsets_and_sentinels"
+      ],
+      "disposition": "tested",
+      "notes": "Battery type and error remain numeric fields referencing the corresponding tables; returning nested enum names is not required. Version is retained raw; no invented future version format."
+    },
+    {
+      "id": "REG-061",
+      "requirement": "Represent scalar BLE off/on and every published BLE capability bit without treating BLE mode as a bitmask.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 553,
+          "end": 579
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 129,
+          "end": 137
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 289,
+          "end": 295
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 357,
+          "end": 368
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 450,
+          "end": 457
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:704",
+        "src/ve_direct/registers/__init__.py:717"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_capability_bits",
+        "test_register_acceptance.RegisterAcceptance.test_boolean_settings"
+      ],
+      "disposition": "tested",
+      "notes": "BMV/Phoenix define only bits0/1; Orion adds2..8. Shared best-effort labels on reserved bits do not assert those bits are supported. Reserved-on-wire future meanings remain unverified."
+    },
+    {
+      "id": "REG-062",
+      "requirement": "Enforce String20 write payload maximum and decode String32 short/NUL-terminated and full-width product strings.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 115,
+          "end": 126
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1287",
+        "src/ve_direct/registers/__init__.py:1373"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_bmv_string20_write_boundary",
+        "test_register_acceptance.RegisterAcceptance.test_bmv_version_and_string_reads"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F08: the baseline appended NUL to 20 ASCII characters and sent 21 bytes. BMV_DESCRIPTION now limits the encoded payload to 20 bytes including NUL. The boundary test permits explicit rejection rather than requiring an undocumented full-width unterminated string policy."
+    },
+    {
+      "id": "REG-063",
+      "requirement": "Respect BMV712-only product revision/description/BLE features and monitor data availability by model/firmware.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 115,
+          "end": 157
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 181,
+          "end": 181
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 273,
+          "end": 276
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "BMV702/712 required for auxiliary/midpoint/temperature features. Precise current>=4.01 BMV712 or>=3.09 BMV70x. Start synchronized availability differs similarly; DC-monitor mode>=4.07 BMV712. Flavor BMV is broad metadata, not runtime model detection."
+    },
+    {
+      "id": "REG-064",
+      "requirement": "Represent BMV measurements, history, settings, alarms, relay thresholds, display flags and miscellaneous settings with exact table factors.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 138,
+          "end": 278
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance",
+        "test_register_acceptance.RegisterAcceptance.test_boolean_settings",
+        "test_register_acceptance.RegisterAcceptance.test_bmv_monitor_modes_and_signed_measurements",
+        "test_register_acceptance.RegisterAcceptance.test_scalar_sentinels",
+        "test_register_acceptance.RegisterAcceptance.test_relay_port_and_display_enums"
+      ],
+      "disposition": "tested",
+      "notes": "Exhaustive schema rows including all table ranges/IDs; independently tested signed measurements, temperature-disable zero, booleans and enumerated settings. Range/default/step enforcement is device behavior and classified separately."
+    },
+    {
+      "id": "REG-065",
+      "requirement": "Retain the documented engineering-unit ranges/defaults/steps as device constraints; do not confuse field width with a valid setting range.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 184,
+          "end": 278
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 355,
+          "end": 364
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "The table enumerates all battery/alarm/relay/display/shunt ranges and defaults. BMV rejects inconsistent/out-of-range writes with flag04 and may return nearest valid value without committing it. No undocumented requirement to clamp or reject client-side is added. HEX tests own parameter-error handling."
+    },
+    {
+      "id": "REG-066",
+      "requirement": "Encode BMV zero-current, synchronize, history-clear and restore commands; preserve declared write-only access.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 254,
+          "end": 258
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:444"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_phoenix_settings_and_nvm_commands",
+        "test_spec_parsers.TestSpecParsers.test_access_and_product_specific_semantics"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-067",
+      "requirement": "Record the unspecified read semantics of BMV alarm acknowledge031F.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 198,
+          "end": 216
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:478"
+      ],
+      "tests": [
+        "test_registers.TestRegisters.test_bmv_alarm_acknowledge_access"
+      ],
+      "disposition": "ambiguous",
+      "notes": "The Get/Set table omits all type/access cells and does not mark write-only. Current metadata allowsGet+Set and raw payload. Hardware Get response is not defined and is not claimed verified."
+    },
+    {
+      "id": "REG-068",
+      "requirement": "Decode BMV SW version as documented hexadecimal AA.BB.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 261,
+          "end": 261
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1231"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_bmv_version_and_string_reads"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-069",
+      "requirement": "Represent BMV local-change0, epoch timestamps and FFFFFFFF no-modification sentinel; Phoenix treats the shared timestamp as externally managed.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 279,
+          "end": 287
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 437,
+          "end": 448
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:520",
+        "src/ve_direct/registers/__init__.py:848"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_scalar_sentinels"
+      ],
+      "disposition": "tested",
+      "notes": "Raw0 remains0, not None. Setting timestamp does not itself change Phoenix behavior. Who updates it and when is device/application behavior."
+    },
+    {
+      "id": "REG-070",
+      "requirement": "Decode all signed BMV DC monitor modes -9..8 and preserve signed current/power.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 297,
+          "end": 322
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:264",
+        "src/ve_direct/tables.py:354"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_bmv_monitor_modes_and_signed_measurements"
+      ],
+      "disposition": "tested",
+      "notes": "With correct installation production is negative and consumption positive. That physical polarity is not inferred from the name. Future negative sources/positive loads remain raw unknown values."
+    },
+    {
+      "id": "REG-071",
+      "requirement": "Save changed Phoenix user settings explicitly viaEB99=1; frequency changes become effective only afterSave.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 234,
+          "end": 278
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 543,
+          "end": 547
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:398",
+        "src/ve_direct/registers/__init__.py:733",
+        "src/ve_direct/device.py:383"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Changed registers are volatile untilSave, revert at reset otherwise. NvmRevert loads last save; Backup loads second last or reverts after unavailable post-update backup; Default/0004 preserve calibration. Host codecs expose these commands without hiddenSave side effects."
+    },
+    {
+      "id": "REG-072",
+      "requirement": "Encode Phoenix NVM commands0..4 and50/60Hz setting using published numeric values.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 257,
+          "end": 278
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 543,
+          "end": 547
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:733"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_phoenix_settings_and_nvm_commands"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-073",
+      "requirement": "Decode Phoenix product revision as identifier byte0 plus little-endian16-bit revision.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 313,
+          "end": 319
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1219"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_phoenix_product_revision"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-074",
+      "requirement": "Decode Phoenix APP_VER with byte1 minor and byte2 major/software-type bits, independently of Orion24-bit firmware layout.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 287,
+          "end": 291
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 321,
+          "end": 330
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1192",
+        "src/ve_direct/hex.py:80"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_phoenix_application_version"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F11: Phoenix 00174100 means application version 1.17. INV_APP_VER decodes the family-specific byte layout independently of Orion. The table says un32 but details define bytes 0..2 only; the probe uses zero padding without assigning meaning to byte 3."
+    },
+    {
+      "id": "REG-075",
+      "requirement": "Resolve Phoenix BLE-capabilities heading0160 versus table0150 explicitly.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 294,
+          "end": 303
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 357,
+          "end": 368
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:148"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_phoenix_ble_header_typo",
+        "test_spec_parsers.TestSpecParsers.test_typo_evidence_preconditions_hold"
+      ],
+      "disposition": "ambiguous",
+      "notes": "Current choice0150 follows product table and shared protocol usage;0160 is not a separate register. Internal-only write permission is intentionally not exposed as user write access."
+    },
+    {
+      "id": "REG-076",
+      "requirement": "Decode Phoenix warning/alarm bits and distinguish status reason from shutdown-triggering alarm reason.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 373,
+          "end": 431
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:682",
+        "src/ve_direct/registers/__init__.py:566"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_off_reasons_and_warning_bits",
+        "test_register_acceptance.RegisterAcceptance.test_device_state_and_mode_tables"
+      ],
+      "disposition": "tested",
+      "notes": "Bit9 labeldc_ripple is historical shorthand for poorDC connection, which can also be a hot terminal on larger units. Test verifies bit identity, not a claim that ripple is the only cause. Alarms represent the cause that stops inversion."
+    },
+    {
+      "id": "REG-077",
+      "requirement": "Record Phoenix mode3 table versus mode1 prose for multi-compatible DeviceOn.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 460,
+          "end": 468
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:578"
+      ],
+      "tests": [],
+      "disposition": "ambiguous",
+      "notes": "Table says3, Note1 says1 and response2. Existing metadata names3 and accepts raw numeric1. Do not reject raw1 or invent which input is the corrected value without evidence."
+    },
+    {
+      "id": "REG-078",
+      "requirement": "Synchronize communication with Phoenix hibernation wake windows and keepalive requirements.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 469,
+          "end": 474
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:370"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Communication begins after a Text frame at least every30s or user button. Receiving a VE.Direct message every24s prevents hibernation; Bluetooth unaffected. This is caller timing/device behavior, not automatically scheduled by the register codec."
+    },
+    {
+      "id": "REG-079",
+      "requirement": "Observe firmware/capability requirements for lifetime history, AC apparent power, eco detection and threshold limits.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 480,
+          "end": 529
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 532,
+          "end": 547
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "History>=1.17, power>=1.15. Old eco threshold uses current for1.00-1.14; newer apparent-power hysteresis requires Smart or revision>=7. Min/max registers define clamping. CLEAR normally exceeds THRESHOLD; timing and load-dependent hysteresis belong to device/application."
+    },
+    {
+      "id": "REG-080",
+      "requirement": "Represent eco retry as0.25s units and load-detect duration as raw AC period count rather than one hardcoded seconds factor.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 499,
+          "end": 529
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:412"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_phoenix_settings_and_nvm_commands"
+      ],
+      "disposition": "tested",
+      "notes": "SPEC_EXCEPTIONS follows Note4 period counts. Table0.02/0.016s varies with frequency; frequency-aware seconds conversion is optional convenience. Raw count is lossless and is not a conformance failure."
+    },
+    {
+      "id": "REG-081",
+      "requirement": "Respect low-voltage shutdown/warning/restart thresholds, device clamping and dynamic-cutoff override behavior.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 551,
+          "end": 591
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Dynamic enable0 uses fixed threshold;1 uses current-dependent cutoff and overrides2210/0320. Effective voltage readEBB1. Factors have no public algorithm specified; no host simulation is implied. All scalar widths/scales/access are checked by schema."
+    },
+    {
+      "id": "REG-082",
+      "requirement": "Represent Phoenix relay values0,2,3,4,5,6 and control/status0/1 with family-specific meanings.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 596,
+          "end": 623
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:403",
+        "src/ve_direct/registers/__init__.py:616"
+      ],
+      "tests": [
+        "test_register_acceptance.RegisterAcceptance.test_relay_port_and_display_enums",
+        "test_register_acceptance.RegisterAcceptance.test_boolean_settings"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "REG-083",
+      "requirement": "Only Remote relay mode obeys direct control writes; reads always report present contact state.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 596,
+          "end": 623
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:1285",
+        "src/ve_direct/registers/__init__.py:1358"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Other modes ignore control writes. Mode availability requires>=1.15/capability.0meansNOopen/NCclosed,1meansNOclosed/NCopen. Contact behavior, warning-trigger operation and fan tracking require hardware."
+    },
+    {
+      "id": "REG-084",
+      "requirement": "Keep undocumented MultiRS/EDF5 entries outside claims of official register-semantic coverage.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 330,
+          "end": 359
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 234,
+          "end": 624
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:218",
+        "src/ve_direct/registers/__init__.py:267",
+        "src/ve_direct/registers/__init__.py:1467"
+      ],
+      "tests": [],
+      "disposition": "excluded",
+      "notes": "No official row definesEDF5 storage voltage or reverse-engineered MultiRS extensions in the frozen documents. Existing best-effort metadata is not a failure merely because it is additional; behavior of those entries is excluded. No private bootloader registers or VE.Can protocol claims are made."
+    },
+    {
+      "id": "REG-085",
+      "requirement": "Treat broad ANY/flavor availability as declared metadata inclusion, not evidence every family/model responds to every listed ID.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 783,
+          "end": 783
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 861,
+          "end": 885
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 110,
+          "end": 278
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 284,
+          "end": 303
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/registers/__init__.py:47",
+        "src/ve_direct/registers/__init__.py:874",
+        "src/ve_direct/registers/__init__.py:1459"
+      ],
+      "tests": [
+        "test_registers.TestRegisters.test_0400_flavor_disambiguation",
+        "test_registers.TestRegisters.test_relay_bat_scoped_out_of_bmv",
+        "test_registers.TestRegisters.test_capabilities_ble_reserved_best_effort"
+      ],
+      "disposition": "tested",
+      "notes": "Known conflicting wire meanings must resolve correctly by flavor and are tested. Generic extra display/control IDs, single-tracker RS-history exposure and extra reserved-bit names are explicitly best-effort. Hardware availability remains a separate obligation, so these intentional supersets are not manufactured conformance failures."
+    }
+  ],
+  "source_sections": [
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 206,
+      "end": 224,
+      "requirements": [
+        "REG-001",
+        "REG-005",
+        "REG-006",
+        "REG-008"
+      ],
+      "notes": "Product information and identity. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 225,
+      "end": 252,
+      "requirements": [
+        "REG-007",
+        "REG-008"
+      ],
+      "notes": "Capabilities. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 253,
+      "end": 314,
+      "requirements": [
+        "REG-009",
+        "REG-010",
+        "REG-012"
+      ],
+      "notes": "Device control, modes, states, remote enable. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 315,
+      "end": 329,
+      "requirements": [
+        "REG-011"
+      ],
+      "notes": "Off reasons. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 330,
+      "end": 379,
+      "requirements": [
+        "REG-013",
+        "REG-014",
+        "REG-015"
+      ],
+      "notes": "Battery settings and all notes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 380,
+      "end": 415,
+      "requirements": [
+        "REG-016",
+        "REG-017",
+        "REG-018",
+        "REG-019"
+      ],
+      "notes": "Battery chemistry tables and rotary write semantics. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 416,
+      "end": 441,
+      "requirements": [
+        "REG-020",
+        "REG-021"
+      ],
+      "notes": "Battery voltage settings and auto-detection. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 442,
+      "end": 463,
+      "requirements": [
+        "REG-022",
+        "REG-023"
+      ],
+      "notes": "RS two-wire BMS. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 464,
+      "end": 512,
+      "requirements": [
+        "REG-001",
+        "REG-024",
+        "REG-025",
+        "REG-012"
+      ],
+      "notes": "Charger measurements, widths, range and additional state. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 513,
+      "end": 546,
+      "requirements": [
+        "REG-026",
+        "REG-027"
+      ],
+      "notes": "Charger error table and lifecycle notes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 547,
+      "end": 579,
+      "requirements": [
+        "REG-028",
+        "REG-029"
+      ],
+      "notes": "RS DC channel and solar tracker data. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 580,
+      "end": 627,
+      "requirements": [
+        "REG-030",
+        "REG-031"
+      ],
+      "notes": "Load output table and control values. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 628,
+      "end": 642,
+      "requirements": [
+        "REG-030",
+        "REG-031"
+      ],
+      "notes": "Load off reasons. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 643,
+      "end": 669,
+      "requirements": [
+        "REG-032",
+        "REG-033"
+      ],
+      "notes": "Relay settings and modes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 670,
+      "end": 722,
+      "requirements": [
+        "REG-034",
+        "REG-035"
+      ],
+      "notes": "Lighting controller table, timing, anchors. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 723,
+      "end": 759,
+      "requirements": [
+        "REG-036",
+        "REG-037"
+      ],
+      "notes": "VE.Direct alternate ports. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 760,
+      "end": 784,
+      "requirements": [
+        "REG-038",
+        "REG-039"
+      ],
+      "notes": "Restore and history introduction. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 785,
+      "end": 811,
+      "requirements": [
+        "REG-040",
+        "REG-039"
+      ],
+      "notes": "Both total-history record versions. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 812,
+      "end": 838,
+      "requirements": [
+        "REG-041",
+        "REG-042"
+      ],
+      "notes": "Daily history. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 839,
+      "end": 860,
+      "requirements": [
+        "REG-043",
+        "REG-044"
+      ],
+      "notes": "Per-tracker history. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 861,
+      "end": 885,
+      "requirements": [
+        "REG-045",
+        "REG-046",
+        "REG-085"
+      ],
+      "notes": "Pluggable and internal displays. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 886,
+      "end": 945,
+      "requirements": [
+        "REG-047",
+        "REG-048",
+        "REG-052"
+      ],
+      "notes": "Remote control register table, commands and firmware notes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 946,
+      "end": 986,
+      "requirements": [
+        "REG-047",
+        "REG-049",
+        "REG-050"
+      ],
+      "notes": "Network modes and slave procedure. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 987,
+      "end": 1021,
+      "requirements": [
+        "REG-051"
+      ],
+      "notes": "External and BMS control. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1022,
+      "end": 1042,
+      "requirements": [
+        "REG-049",
+        "REG-052"
+      ],
+      "notes": "Charge master, remote sensing and node joining. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1043,
+      "end": 1058,
+      "requirements": [
+        "REG-047",
+        "REG-053"
+      ],
+      "notes": "Network info. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1059,
+      "end": 1103,
+      "requirements": [
+        "REG-047",
+        "REG-012"
+      ],
+      "notes": "Network status and link state. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1104,
+      "end": 1144,
+      "requirements": [
+        "REG-054"
+      ],
+      "notes": "Remote time/current/error/power semantics. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1145,
+      "end": 1152,
+      "requirements": [
+        "REG-055"
+      ],
+      "notes": "Charge current limit refresh and bound. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 88,
+      "end": 105,
+      "requirements": [
+        "REG-002",
+        "REG-005",
+        "REG-006"
+      ],
+      "notes": "Product information and identity. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 106,
+      "end": 115,
+      "requirements": [
+        "REG-056"
+      ],
+      "notes": "Firmware layout. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 116,
+      "end": 148,
+      "requirements": [
+        "REG-007"
+      ],
+      "notes": "Capabilities. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 149,
+      "end": 185,
+      "requirements": [
+        "REG-009"
+      ],
+      "notes": "Device control mode and state. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 186,
+      "end": 199,
+      "requirements": [
+        "REG-011"
+      ],
+      "notes": "Device off reasons. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 200,
+      "end": 230,
+      "requirements": [
+        "REG-013",
+        "REG-014",
+        "REG-015"
+      ],
+      "notes": "Battery settings. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 231,
+      "end": 253,
+      "requirements": [
+        "REG-057"
+      ],
+      "notes": "Engine start and input lockout. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 254,
+      "end": 267,
+      "requirements": [
+        "REG-017",
+        "REG-020"
+      ],
+      "notes": "Battery type and voltage values. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 268,
+      "end": 285,
+      "requirements": [
+        "REG-058",
+        "REG-012"
+      ],
+      "notes": "Charger data and sensing notes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 286,
+      "end": 309,
+      "requirements": [
+        "REG-026"
+      ],
+      "notes": "Charger errors and warnings. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 310,
+      "end": 333,
+      "requirements": [
+        "REG-038",
+        "REG-039"
+      ],
+      "notes": "Defaults and history introduction. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 334,
+      "end": 367,
+      "requirements": [
+        "REG-060",
+        "REG-059"
+      ],
+      "notes": "Cycle count/sequence and cumulative history. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 368,
+      "end": 391,
+      "requirements": [
+        "REG-060"
+      ],
+      "notes": "Cycle history detail. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 392,
+      "end": 414,
+      "requirements": [
+        "REG-002",
+        "REG-047",
+        "REG-052"
+      ],
+      "notes": "Remote control table and sensor notes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 415,
+      "end": 479,
+      "requirements": [
+        "REG-047",
+        "REG-051",
+        "REG-052"
+      ],
+      "notes": "Network modes and external/BMS operation. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 480,
+      "end": 537,
+      "requirements": [
+        "REG-047",
+        "REG-053"
+      ],
+      "notes": "Network info/status and link state. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 538,
+      "end": 552,
+      "requirements": [
+        "REG-054",
+        "REG-055"
+      ],
+      "notes": "Total current and current limit. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 553,
+      "end": 581,
+      "requirements": [
+        "REG-061"
+      ],
+      "notes": "BLE capabilities and mode. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 110,
+      "end": 128,
+      "requirements": [
+        "REG-003",
+        "REG-062",
+        "REG-063"
+      ],
+      "notes": "Product information and String bounds. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 129,
+      "end": 137,
+      "requirements": [
+        "REG-061"
+      ],
+      "notes": "BLE capabilities. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 138,
+      "end": 160,
+      "requirements": [
+        "REG-064",
+        "REG-063"
+      ],
+      "notes": "Monitor measurements and model notes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 161,
+      "end": 181,
+      "requirements": [
+        "REG-064",
+        "REG-063"
+      ],
+      "notes": "Historical statistics. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 182,
+      "end": 197,
+      "requirements": [
+        "REG-064",
+        "REG-065"
+      ],
+      "notes": "Battery settings. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 198,
+      "end": 217,
+      "requirements": [
+        "REG-064",
+        "REG-065",
+        "REG-067"
+      ],
+      "notes": "Alarm settings. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 218,
+      "end": 238,
+      "requirements": [
+        "REG-032",
+        "REG-064",
+        "REG-065"
+      ],
+      "notes": "Relay settings. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 239,
+      "end": 253,
+      "requirements": [
+        "REG-045",
+        "REG-064",
+        "REG-065"
+      ],
+      "notes": "Display settings and toggles. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 254,
+      "end": 259,
+      "requirements": [
+        "REG-066"
+      ],
+      "notes": "Commands. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 260,
+      "end": 278,
+      "requirements": [
+        "REG-064",
+        "REG-068",
+        "REG-063",
+        "REG-065"
+      ],
+      "notes": "Miscellaneous settings and availability notes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 279,
+      "end": 288,
+      "requirements": [
+        "REG-069"
+      ],
+      "notes": "Settings timestamp. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 289,
+      "end": 296,
+      "requirements": [
+        "REG-061"
+      ],
+      "notes": "Bluetooth mode. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 297,
+      "end": 322,
+      "requirements": [
+        "REG-070"
+      ],
+      "notes": "DC monitor modes and polarity. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 234,
+      "end": 282,
+      "requirements": [
+        "REG-004",
+        "REG-071",
+        "REG-072"
+      ],
+      "notes": "Register access and nonvolatile saving. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 283,
+      "end": 304,
+      "requirements": [
+        "REG-004",
+        "REG-008"
+      ],
+      "notes": "Product information table. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 305,
+      "end": 312,
+      "requirements": [
+        "REG-005"
+      ],
+      "notes": "Product ID. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 313,
+      "end": 320,
+      "requirements": [
+        "REG-073"
+      ],
+      "notes": "Product revision. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 321,
+      "end": 333,
+      "requirements": [
+        "REG-074"
+      ],
+      "notes": "Application firmware version. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 334,
+      "end": 356,
+      "requirements": [
+        "REG-007",
+        "REG-008"
+      ],
+      "notes": "Capabilities. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 357,
+      "end": 371,
+      "requirements": [
+        "REG-061",
+        "REG-075"
+      ],
+      "notes": "BLE capabilities and heading discrepancy. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 372,
+      "end": 435,
+      "requirements": [
+        "REG-009",
+        "REG-011",
+        "REG-076",
+        "REG-012"
+      ],
+      "notes": "Device status, state, off reasons, warnings, alarms. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 436,
+      "end": 449,
+      "requirements": [
+        "REG-069",
+        "REG-004"
+      ],
+      "notes": "Device control and timestamp. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 450,
+      "end": 459,
+      "requirements": [
+        "REG-061"
+      ],
+      "notes": "BLE control. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 460,
+      "end": 479,
+      "requirements": [
+        "REG-009",
+        "REG-077",
+        "REG-078"
+      ],
+      "notes": "Device mode and hibernate. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 480,
+      "end": 497,
+      "requirements": [
+        "REG-004",
+        "REG-079"
+      ],
+      "notes": "Operation/history measurements. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 498,
+      "end": 531,
+      "requirements": [
+        "REG-004",
+        "REG-080",
+        "REG-079"
+      ],
+      "notes": "User AC control and eco notes. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 532,
+      "end": 542,
+      "requirements": [
+        "REG-079"
+      ],
+      "notes": "Load-sense hysteresis. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 543,
+      "end": 550,
+      "requirements": [
+        "REG-072",
+        "REG-071"
+      ],
+      "notes": "AC frequency. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 551,
+      "end": 595,
+      "requirements": [
+        "REG-004",
+        "REG-081"
+      ],
+      "notes": "Battery control and dynamic cutoff. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 596,
+      "end": 624,
+      "requirements": [
+        "REG-082",
+        "REG-083"
+      ],
+      "notes": "Relay control modes and contacts. All prose, notes and table rows in this span were reviewed. Table schema coverage is exhaustive; behavioral test versus hardware/caller/ambiguity classification is stated in the linked requirements."
+    }
+  ]
+}

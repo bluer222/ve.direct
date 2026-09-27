@@ -1,0 +1,1564 @@
+{
+  "area": "text",
+  "requirements": [
+    {
+      "id": "TXT-001",
+      "requirement": "Older devices switch between automatic Text and HEX activity; newer devices keep Text active.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 34,
+          "end": 56
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Emission and fallback timing belong to device firmware. TXT-012 tests receiving mixed streams; this consumer does not command a universal Text/HEX mode switch."
+    },
+    {
+      "id": "TXT-002",
+      "requirement": "The serial connection uses 19200 baud, 8 data bits, no parity, one stop bit and no flow control.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 99,
+          "end": 104
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:27",
+        "src/ve_direct/device.py:79"
+      ],
+      "tests": [
+        "test_transport_acceptance.TransportAcceptance.test_serial_defaults",
+        "test_transport_acceptance.TransportAcceptance.test_serial_roundtrip"
+      ],
+      "disposition": "tested",
+      "notes": "Actual configured serial properties are checked by the transport acceptance test. Nondefault user baud is an API override, not the protocol default."
+    },
+    {
+      "id": "TXT-003",
+      "requirement": "Apply the caller-requested DTR and RTS software state for an RS232 adapter.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 109,
+          "end": 118
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:79"
+      ],
+      "tests": [
+        "test_transport_acceptance.TransportAcceptance.test_control_lines"
+      ],
+      "disposition": "tested",
+      "notes": "The host mock checks assignment of requested software control-line state only. DB9 pin wiring, physical signal polarity/inversion, actual high voltage and powering the isolated adapter belong solely to TXT-058, a device obligation."
+    },
+    {
+      "id": "TXT-004",
+      "requirement": "A device emits blocks at one-second intervals.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 126,
+          "end": 128
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "No software timer is required to parse received blocks; cadence depends on the producer and its protocol mode."
+    },
+    {
+      "id": "TXT-005",
+      "requirement": "Parse CRLF + label + TAB + ASCII value records, across arbitrary serial read boundaries.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 130,
+          "end": 139
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:268",
+        "src/ve_direct/text.py:334"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_documented_frame_fixture_and_every_split",
+        "test_transport_acceptance.TransportAcceptance.test_serial_roundtrip"
+      ],
+      "disposition": "tested",
+      "notes": "Uses a literal complete frame from Victron FAQ Q8 with its original D8 checksum, then every two-chunk split. The spec defines byte grammar; chunk partition is a serial API concern."
+    },
+    {
+      "id": "TXT-006",
+      "requirement": "Labels may have arbitrary length and identify separate fields.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 135,
+          "end": 136
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:334"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_unknown_fields_and_arbitrary_label_lengths"
+      ],
+      "disposition": "tested",
+      "notes": "An unknown 25-character label is accepted. This is representative length coverage, not an exhaustive claim over all possible ASCII labels. The separate implementation guideline recommends bounded C buffers."
+    },
+    {
+      "id": "TXT-007",
+      "requirement": "Numeric ASCII values retain their sign and magnitude.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 138,
+          "end": 139
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 320,
+          "end": 322
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:141"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_numeric_units_and_si_conventions_for_all_measurements",
+        "test_text_acceptance.TextAcceptance.test_current_sign_is_preserved"
+      ],
+      "disposition": "tested",
+      "notes": "Every numeric measurement label is exercised through the production parser. Finite representative numbers include positive, negative and zero values; no numeric width beyond the document is imposed."
+    },
+    {
+      "id": "TXT-008",
+      "requirement": "Checksum is the final record and contains one arbitrary byte; all block bytes sum to zero modulo 256.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 142,
+          "end": 146
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:289",
+        "src/ve_direct/text.py:298"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_all_256_binary_checksum_bytes",
+        "test_text_acceptance.TextAcceptance.test_documented_frame_fixture_and_every_split"
+      ],
+      "disposition": "tested",
+      "notes": "Exhaustive over all 256 checksum byte values in complete and bytewise reads. Includes NUL, TAB, CR, LF and colon. Checksum does not become a measurement field."
+    },
+    {
+      "id": "TXT-009",
+      "requirement": "Hold received records until the complete block passes checksum validation.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 707,
+          "end": 713
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:298"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_documented_frame_fixture_and_every_split"
+      ],
+      "disposition": "tested",
+      "notes": "Every incomplete prefix of a published fixture must emit no frame; the last checksum byte releases all records together."
+    },
+    {
+      "id": "TXT-010",
+      "requirement": "Reject the whole block when its checksum is invalid; clear its temporary records.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 143,
+          "end": 145
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 710,
+          "end": 713
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:314"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_corrupted_measurement_rejected_after_known_boundary",
+        "test_text_acceptance.TextAcceptance.test_invalid_block_does_not_contaminate_following_block"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F01: the baseline accepted an invalid block after a single-bit I=100 to I=101 change by finding a checksum-valid suffix. Validate one complete block and discard invalid input through the checksum boundary."
+    },
+    {
+      "id": "TXT-011",
+      "requirement": "Multiple blocks may contain different field sets and must validate independently.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 145,
+          "end": 146
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:298"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_alternating_blocks_stay_independent_at_every_split",
+        "test_text.TestText.test_split_feed_and_history_block"
+      ],
+      "disposition": "tested",
+      "notes": "Three alternating live/history/live blocks are checked at every stream split. No PID field is required in history blocks. The library returns individual blocks and does not invent a merged device snapshot."
+    },
+    {
+      "id": "TXT-012",
+      "requirement": "Recognize asynchronous HEX messages beginning with colon-A and ending with LF among Text traffic.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 41,
+          "end": 51
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:268"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_hex_between_records_and_after_checksum_at_every_split",
+        "test_text.TestText.test_hex_immediately_after_binary_checksum"
+      ],
+      "disposition": "tested",
+      "notes": "Two literal HEX lines are interleaved at a record boundary and directly after binary checksum. Every two-chunk split preserves the Text frame and delivers both HEX lines."
+    },
+    {
+      "id": "TXT-013",
+      "requirement": "Interpret what it means for a HEX message to interrupt a regular Text frame.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 46,
+          "end": 48
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:268"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_hex_midrecord_resume_policy",
+        "test_text.TestText.test_hex_can_interrupt_mid_record"
+      ],
+      "disposition": "ambiguous",
+      "notes": "3.34 does not define byte-level discard/resume semantics. The acceptance test records the existing insertion/resume policy. It does not claim this policy follows uniquely from the document; the FAQ reference resets Text state after HEX."
+    },
+    {
+      "id": "TXT-014",
+      "requirement": "Provide the documented Text field names, units and descriptions.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 152,
+          "end": 154
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 166,
+          "end": 184
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 217,
+          "end": 246
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 267,
+          "end": 303
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:10",
+        "src/ve_direct/text.py:213"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_text_protocol_spec",
+        "test_spec_parsers.TestSpecParsers.test_text_field_units_and_descriptions",
+        "test_text_acceptance.TextAcceptance.test_numeric_units_and_si_conventions_for_all_measurements"
+      ],
+      "disposition": "tested",
+      "notes": "Group coverage: existing independent metadata tests enumerate all 63 field-table rows and their descriptions; the new parser test exercises every numeric measurement label and its unit. CAP_BLE is outside the field table and handled by TXT-037/038. API conversions retain minutes, seconds, degrees C, watts, VA, Ah and kWh; to_si is not a promise of strict SI base units."
+    },
+    {
+      "id": "TXT-015",
+      "requirement": "Availability varies by product, AUX selection, output count and firmware version.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 167,
+          "end": 209
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 217,
+          "end": 259
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 267,
+          "end": 303
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:10"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_text_field_devices"
+      ],
+      "disposition": "device_obligation",
+      "notes": "Covers all field-table product bullets and footnotes 1-7, 9, 13-20 as producer availability obligations. Parser accepts whichever fields arrive and does not manufacture absent ones. Existing metadata test checks all rows have device associations and selected associations exactly; it does not validate every physical product/firmware combination."
+    },
+    {
+      "id": "TXT-016",
+      "requirement": "Early MPPT PID 0x0300 devices expose only PID, SER and FW.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 186,
+          "end": 188
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:124"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_product_id_serial_and_legacy_model",
+        "test_text_acceptance.TextAcceptance.test_unknown_fields_and_arbitrary_label_lengths"
+      ],
+      "disposition": "device_obligation",
+      "notes": "This is a producer restriction. Unknown labels remain available as raw data. SER is a historical spelling in the footnote, whereas the main field table says SER#; the consumer does not reject either spelling."
+    },
+    {
+      "id": "TXT-017",
+      "requirement": "I is positive when charging and negative when discharging; old MPPT firmware measured converter output.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 195,
+          "end": 197
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 320,
+          "end": 322
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:24",
+        "src/ve_direct/text.py:141"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_current_sign_is_preserved"
+      ],
+      "disposition": "tested",
+      "notes": "Host preserves sign and units. Firmware v1.14 and earlier on MPPT 75/15 and 100/15 measured converter output; a host cannot reconstruct battery-only current from that field. Metadata currently uses a generic battery-current description, not a firmware-specific description."
+    },
+    {
+      "id": "TXT-018",
+      "requirement": "T uses --- when no temperature sensor is connected.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 182,
+          "end": 182
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 202,
+          "end": 205
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:128"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_missing_sensor_unsynchronised_and_dc_monitor_fields"
+      ],
+      "disposition": "tested",
+      "notes": "Raw sentinel is retained; typed value and conversion become None."
+    },
+    {
+      "id": "TXT-019",
+      "requirement": "CE, SOC and TTG use --- while the BMV is not synchronised.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 184,
+          "end": 184
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 206,
+          "end": 209
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 219,
+          "end": 220
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:128"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_missing_sensor_unsynchronised_and_dc_monitor_fields"
+      ],
+      "disposition": "tested",
+      "notes": "The parser decodes sentinels it receives; determining when to transmit them belongs to firmware."
+    },
+    {
+      "id": "TXT-020",
+      "requirement": "DC-monitor mode uses --- for fields marked by footnote 11.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 208,
+          "end": 209
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 219,
+          "end": 220
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 225,
+          "end": 238
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:128"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_missing_sensor_unsynchronised_and_dc_monitor_fields"
+      ],
+      "disposition": "tested",
+      "notes": "Exhaustive label set for footnote 11: CE, SOC, TTG, H1-H6, H9 and H10. The implementation also accepts --- on other labels as a permissive extension, not a specification mandate."
+    },
+    {
+      "id": "TXT-021",
+      "requirement": "TTG=-1 represents infinite time-to-go when not discharging.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 250,
+          "end": 251
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:169"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_time_to_go_infinity_preserves_sentinel"
+      ],
+      "disposition": "tested",
+      "notes": "The API retains -1 and adds a human interpretation. It does not substitute floating-point infinity."
+    },
+    {
+      "id": "TXT-022",
+      "requirement": "Decode history H1-H23 in their documented units, preserving counts and the different energy directions.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 225,
+          "end": 246
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 269,
+          "end": 275
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:45",
+        "src/ve_direct/text.py:213"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_numeric_units_and_si_conventions_for_all_measurements",
+        "test_spec_parsers.TestSpecParsers.test_text_field_units_and_descriptions"
+      ],
+      "disposition": "tested",
+      "notes": "Grouped coverage of every H1-H23 row. H17 is discharged/produced energy and H18 is charged/consumed energy according to monitor role; metadata records both meanings. No role-dependent relabelling API is promised."
+    },
+    {
+      "id": "TXT-023",
+      "requirement": "Historical counters reflect deepest/last/average discharge, alarms, yield and maximum power for the reported interval.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 225,
+          "end": 246
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 269,
+          "end": 275
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "The producer calculates history, daily maxima and the user-resettable H19 counter. Text consumer tests validate decoding and units, not the internal battery/history calculation."
+    },
+    {
+      "id": "TXT-024",
+      "requirement": "LOAD reports the ON/OFF load-output state.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 181,
+          "end": 181
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:175"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_alarm_relay_and_load_states"
+      ],
+      "disposition": "tested",
+      "notes": "Uppercase ON/OFF are the specified values. Case-insensitive LOAD is tolerated as a library extension."
+    },
+    {
+      "id": "TXT-025",
+      "requirement": "Alarm and Relay accept ON/OFF and legacy BMV-600 On/Off spelling.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 324,
+          "end": 348
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:175"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_alarm_relay_and_load_states"
+      ],
+      "disposition": "tested",
+      "notes": "Every documented spelling is tested and raw spelling is retained."
+    },
+    {
+      "id": "TXT-026",
+      "requirement": "Alarm reports the active condition, and stays ON until conditions clear even if the buzzer is silenced.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 324,
+          "end": 330
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "The host receives a reported state. It neither infers buzzer audibility nor clears the alarm locally."
+    },
+    {
+      "id": "TXT-027",
+      "requirement": "Relay reports product-specific state: BMV/MPPT alarm operation and Smart Inverter/Charger normal-operation ON.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 332,
+          "end": 344
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "The host exposes ON/OFF directly; it must not reinterpret every ON as a universal alarm condition. The state decoder is tested under TXT-025."
+    },
+    {
+      "id": "TXT-028",
+      "requirement": "FW is a whole-number version; C208 means candidate C for version 2.08.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 350,
+          "end": 353
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:57"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_fw_release_and_candidate_examples",
+        "test_text_acceptance.TextAcceptance.test_documented_frame_fixture_and_every_split"
+      ],
+      "disposition": "tested",
+      "notes": "Exact human output punctuation is an API convention. v2.08-RCC means RC followed by candidate letter C. The fixture also preserves 0307 rather than coercing raw firmware into a measurement."
+    },
+    {
+      "id": "TXT-029",
+      "requirement": "FWE has up to six digits, FF release marker and a beta example 020801.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 355,
+          "end": 358
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:75"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_fwe_documented_examples"
+      ],
+      "disposition": "tested",
+      "notes": "Tests all three literal examples: 0208FF, 208FF and 020801. Human punctuation is an API convention."
+    },
+    {
+      "id": "TXT-030",
+      "requirement": "FWE leading-zero padding is optional, so padded and unpadded encodings must decode equivalently.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 356,
+          "end": 358
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:78"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_fwe_leading_zero_padding_is_optional"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F10: optional leading-zero padding makes 0008FF and 8FF equivalent. The previous five-character minimum and ordinary short-form rejection expectation were removed. This tests the format domain, without claiming a shipping device runs version 0.08."
+    },
+    {
+      "id": "TXT-031",
+      "requirement": "Interpret FWE numeric encoding outside the examples provided.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 355,
+          "end": 358
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:81"
+      ],
+      "tests": [],
+      "disposition": "ambiguous",
+      "notes": "The Text document gives no complete BCD-versus-binary rule for non-decimal major/minor/build bytes. No acceptance claim is made for every possible 24-bit bit pattern. The ordinary padded/unpadded rule is independently testable under TXT-030."
+    },
+    {
+      "id": "TXT-032",
+      "requirement": "AR is a decimal sum of the 14 documented alarm bits.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 366,
+          "end": 386
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:165",
+        "src/ve_direct/tables.py:120"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_all_alarm_and_warning_bits_and_combination"
+      ],
+      "disposition": "tested",
+      "notes": "Every bit 1..8192, zero and the document example 5 are tested through the parser. This is each-bit and representative-combination coverage, not all 16384 combinations."
+    },
+    {
+      "id": "TXT-033",
+      "requirement": "WARN uses the same bit meanings as AR and can contain multiple simultaneous warnings.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 388,
+          "end": 393
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:165",
+        "src/ve_direct/tables.py:136"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_all_alarm_and_warning_bits_and_combination"
+      ],
+      "disposition": "tested",
+      "notes": "Tests every individual bit and the same representative combination independently under WARN."
+    },
+    {
+      "id": "TXT-034",
+      "requirement": "WARN represents current conditions while inverter AR retains the cause of protection shutdown until switched on again.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 389,
+          "end": 393
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Latching and clearing occur in the inverter. The consumer preserves values as received instead of calculating a local latch."
+    },
+    {
+      "id": "TXT-035",
+      "requirement": "OR hexadecimal wire values decode into a numeric off-reason mask.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 395,
+          "end": 405
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:141",
+        "src/ve_direct/text.py:154"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_hexadecimal_off_reason_wire_value"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F07: OR=0x00000010 must become a numeric mask with a human interpretation. The specification uses hex notation; actual wire notation is corroborated by the first-hand capture https://communityarchive.victronenergy.com/questions/272347/vedirect-framehandler-wrong-on-15070.html . This radix rule is not extrapolated to CAP_BLE."
+    },
+    {
+      "id": "TXT-036",
+      "requirement": "OR maps all nine specified bits to their off reasons and permits a combined mask.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 395,
+          "end": 405
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:139",
+        "src/ve_direct/tables.py:385"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_off_reason_map_all_bits"
+      ],
+      "disposition": "tested",
+      "notes": "Tests every documented bit plus 129 and zero, directly against the decoder so the mapping claim is separate from the failing wire conversion."
+    },
+    {
+      "id": "TXT-037",
+      "requirement": "CAP_BLE bit 1 means switch-off supported and bit 2 means switch-off permanent.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 407,
+          "end": 410
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:153",
+        "src/ve_direct/tables.py:396"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_ble_capability_meanings"
+      ],
+      "disposition": "tested",
+      "notes": "Tests the two bit meanings and their combination without choosing a wire radix not explicitly defined in the prose."
+    },
+    {
+      "id": "TXT-038",
+      "requirement": "Resolve the CAP_BLE copied off-reason description, missing field-table row and unspecified wire radix.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 166,
+          "end": 303
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 407,
+          "end": 410
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:153",
+        "src/ve_direct/tables.py:75"
+      ],
+      "tests": [],
+      "disposition": "ambiguous",
+      "notes": "The detailed heading defines BLE capabilities but repeats OR description text, and CAP_BLE is absent from the availability table. The implementation exposes the label; meaning tests do not prove wire radix or product availability."
+    },
+    {
+      "id": "TXT-039",
+      "requirement": "Recognize every PID and product name in the 3.34 PID table, including phased-out models.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 418,
+          "end": 586
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:196"
+      ],
+      "tests": [
+        "test_spec_parsers.TestSpecParsers.test_text_protocol_spec"
+      ],
+      "disposition": "tested",
+      "notes": "Grouped complete metadata comparison for all 153 IDs and names, with the 16 starred phased-out rows checked by the independent spec parser test. Runtime map intentionally contains additional PIDs from other pinned HEX documents. Deprecation is not a reason to reject a PID."
+    },
+    {
+      "id": "TXT-040",
+      "requirement": "Decode PID as a hexadecimal product identity, including 3- and 4-digit examples.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 418,
+          "end": 586
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:136"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_product_id_serial_and_legacy_model",
+        "test_text.TestText.test_bare_hex_pid"
+      ],
+      "disposition": "tested",
+      "notes": "Runtime probes cover 0x203 and newest Text PID 0xA3F1; bare-hex acceptance is a permissive API extension. Unknown PID preservation is covered as forward-compatible library behavior, not an invented documented product."
+    },
+    {
+      "id": "TXT-041",
+      "requirement": "CS decodes all 15 documented operation states.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 594,
+          "end": 612
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:155",
+        "src/ve_direct/tables.py:79"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_all_operation_states",
+        "test_spec_parsers.TestSpecParsers.test_cs_states_full_coverage"
+      ],
+      "disposition": "tested",
+      "notes": "Every code is tested through the wire decoder. Low power is the code-1 name; the document describes inverter operation as load search."
+    },
+    {
+      "id": "TXT-042",
+      "requirement": "CS operation states are available only on the listed producer families; low-power inverter mode means load search.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 596,
+          "end": 612
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Device state transitions and family-specific availability are not generated by the consumer. It returns the reported state without filtering based on an inferred family."
+    },
+    {
+      "id": "TXT-043",
+      "requirement": "ERR decodes all 20 documented error codes, including no-error zero.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 614,
+          "end": 636
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:157",
+        "src/ve_direct/tables.py:98"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_all_error_codes",
+        "test_spec_parsers.TestSpecParsers.test_error_codes_full_coverage"
+      ],
+      "disposition": "tested",
+      "notes": "All codes are tested at runtime using document-derived meaning fragments; existing metadata tests cover the entire code table. Longer diagnostic notes in display strings are allowed."
+    },
+    {
+      "id": "TXT-044",
+      "requirement": "Errors 19 and 21 may be ignored as described, but must remain available to a caller choosing to inspect them.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 637,
+          "end": 641
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:157"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_all_error_codes"
+      ],
+      "disposition": "tested",
+      "notes": "Ignoring error 19 or the first five minutes of error 21 is optional application policy. The consumer preserves both instead of silently suppressing them. ERR relevance in fault state does not require dropping a transmitted value in another state."
+    },
+    {
+      "id": "TXT-045",
+      "requirement": "Firmware v1.15 stops reporting error 19; v1.16 stops nonpersistent error 21 reports.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 637,
+          "end": 641
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "These are firmware emission rules, not host timers or filters."
+    },
+    {
+      "id": "TXT-046",
+      "requirement": "HSDS is an integer day sequence in the range 0..364, with changes observable across blocks.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 283,
+          "end": 283
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 643,
+          "end": 646
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:150"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_day_sequence_full_domain_and_rollover"
+      ],
+      "disposition": "tested",
+      "notes": "Exhaustive over all 365 documented values; a 364-to-0 stream checks rollover transport. Consumer does not calculate history or automatically request HEX history on a change."
+    },
+    {
+      "id": "TXT-047",
+      "requirement": "A changed HSDS indicates a new day and changed history.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 643,
+          "end": 646
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "The device updates HSDS/history and defines day boundaries. The library reports the sequence so an application can choose to refresh history."
+    },
+    {
+      "id": "TXT-048",
+      "requirement": "SER# carries the serial string and BMV carries a legacy textual model description.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 654,
+          "end": 661
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:184"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_product_id_serial_and_legacy_model"
+      ],
+      "disposition": "tested",
+      "notes": "Tests the document serial HQ1328Y6TF6 and legacy model 602S. PID is preferred, but the deprecated BMV string remains available."
+    },
+    {
+      "id": "TXT-049",
+      "requirement": "Interpret the date portion of the serial-number notation.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 655,
+          "end": 657
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:14"
+      ],
+      "tests": [],
+      "disposition": "ambiguous",
+      "notes": "Notation says LLYYMMSSSSS while the explanatory text says YYWW/year-week. The library preserves the serial string and does not expose a parsed date, so neither interpretation is silently imposed."
+    },
+    {
+      "id": "TXT-050",
+      "requirement": "MODE decodes charger, inverter, off, eco and hibernate values.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 663,
+          "end": 671
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:159",
+        "src/ve_direct/tables.py:158"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_modes_trackers_and_dc_monitor_types"
+      ],
+      "disposition": "tested",
+      "notes": "All five enum values are tested. Family restrictions and Smart-only hibernate availability are producer obligations under TXT-015."
+    },
+    {
+      "id": "TXT-051",
+      "requirement": "MPPT decodes off, voltage/current limited and active tracker values.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 673,
+          "end": 677
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:161",
+        "src/ve_direct/tables.py:166"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_modes_trackers_and_dc_monitor_types"
+      ],
+      "disposition": "tested",
+      "notes": "All three documented values are tested through Text parsing."
+    },
+    {
+      "id": "TXT-052",
+      "requirement": "MON decodes all signed source/load/monitor categories from -9 to 8.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 679,
+          "end": 698
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:163",
+        "src/ve_direct/tables.py:172"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_modes_trackers_and_dc_monitor_types"
+      ],
+      "disposition": "tested",
+      "notes": "Every documented code is tested, including zero battery monitor and negative source categories."
+    },
+    {
+      "id": "TXT-053",
+      "requirement": "Support the recommended field capacities and at least 22 temporary records.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 706,
+          "end": 713
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:252",
+        "src/ve_direct/text.py:298"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_recommended_capacity_accepts_22_records"
+      ],
+      "disposition": "tested",
+      "notes": "Tests 22 data records, 8-character labels and 32-character values, covering the C buffer recommendation with terminators. The Python parser permits larger fields and blocks; the spec limit is not treated as a mandate to reject extensions."
+    },
+    {
+      "id": "TXT-054",
+      "requirement": "Use the implementation guideline staging behavior without requiring the exact two-buffer C algorithm.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 707,
+          "end": 713
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:252",
+        "src/ve_direct/text.py:298"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_documented_frame_fixture_and_every_split",
+        "test_text_acceptance.TextAcceptance.test_corrupted_measurement_rejected_after_known_boundary"
+      ],
+      "disposition": "tested",
+      "notes": "Recommended storage mechanics are not observable wire requirements. Python may buffer a full block; validation before publishing and whole invalid-block discard remain obligatory and independently tested."
+    },
+    {
+      "id": "TXT-055",
+      "requirement": "Preserve unknown labels, enum values, PID values and mask bits for forward compatibility.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 135,
+          "end": 139
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 418,
+          "end": 419
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/text.py:124",
+        "src/ve_direct/tables.py:374"
+      ],
+      "tests": [
+        "test_text_acceptance.TextAcceptance.test_unknown_fields_and_arbitrary_label_lengths",
+        "test_text_acceptance.TextAcceptance.test_unknown_enum_and_bit_values_are_preserved",
+        "test_text_acceptance.TextAcceptance.test_product_id_serial_and_legacy_model",
+        "test_text.TestText.test_ar_unknown_bits_not_no_alarm"
+      ],
+      "disposition": "tested",
+      "notes": "Only arbitrary label syntax is specified by 3.34. Unknown-value preservation and human Unknown messages are existing library policy recorded here, not claimed normative spec rules. Out-of-domain numbers are not mislabeled as no alarm."
+    },
+    {
+      "id": "TXT-056",
+      "requirement": "Retain historic BMV-60xS compatibility only to the extent described by the pinned Text field table.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 156,
+          "end": 158
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "excluded",
+      "notes": "The separately linked BMV-60xS Text Protocol is not part of the five pinned document set. Its additional rules, if any, are outside this acceptance contract; the shared field rows and legacy casing remain covered."
+    },
+    {
+      "id": "TXT-057",
+      "requirement": "Treat title, navigation, references, page furniture and document history as nonnormative material.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 1,
+          "end": 25
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 31,
+          "end": 32
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 58,
+          "end": 59
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 787,
+          "end": 895
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "excluded",
+      "notes": "Revision history identifies 3.34 dated 14 April 2025, but does not add requirements beyond the current body. Historical renames and typos such as FEW in the 3.33 history entry do not create extra labels. Repeated company footer lines and blank lines carry no host requirement."
+    },
+    {
+      "id": "TXT-058",
+      "requirement": "Physical connector wiring, electrical power, isolation and cable construction meet the specified interface.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 61,
+          "end": 98
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 109,
+          "end": 118
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 721,
+          "end": 786
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Includes producer TX to consumer RX wiring, the four-pin connector, USB/RS232 adapters, DB9 physical pins, power/polarity, connector mechanical variants and cable geometry. Software-only acceptance cannot establish electrical compliance; TXT-003 checks only requested software control lines."
+    }
+  ],
+  "source_sections": [
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 1,
+      "end": 25,
+      "requirements": [
+        "TXT-057"
+      ],
+      "notes": "Title, contents and page furniture.",
+      "disposition": "excluded"
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 26,
+      "end": 60,
+      "requirements": [
+        "TXT-001",
+        "TXT-012",
+        "TXT-013",
+        "TXT-057"
+      ],
+      "notes": "Introduction and mixed-mode behavior; external references are contextual."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 61,
+      "end": 98,
+      "requirements": [
+        "TXT-058"
+      ],
+      "notes": "Physical interface and adapter descriptions.",
+      "disposition": "device_obligation"
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 99,
+      "end": 108,
+      "requirements": [
+        "TXT-002"
+      ],
+      "notes": "Serial settings and page spacing."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 109,
+      "end": 125,
+      "requirements": [
+        "TXT-003",
+        "TXT-058"
+      ],
+      "notes": "RS232 software controls and physical wiring; footer is nonnormative."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 126,
+      "end": 141,
+      "requirements": [
+        "TXT-004",
+        "TXT-005",
+        "TXT-006",
+        "TXT-007"
+      ],
+      "notes": "Message timing and field grammar."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 142,
+      "end": 151,
+      "requirements": [
+        "TXT-008",
+        "TXT-010",
+        "TXT-011"
+      ],
+      "notes": "Block integrity and FAQ reference."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 152,
+      "end": 165,
+      "requirements": [
+        "TXT-014",
+        "TXT-056"
+      ],
+      "notes": "Wire units introduction and separately scoped BMV-60xS reference."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 166,
+      "end": 216,
+      "requirements": [
+        "TXT-014",
+        "TXT-015",
+        "TXT-016",
+        "TXT-017",
+        "TXT-018",
+        "TXT-019",
+        "TXT-020",
+        "TXT-024"
+      ],
+      "notes": "First field table and footnotes 1-11; repeated footer is nonnormative."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 217,
+      "end": 266,
+      "requirements": [
+        "TXT-014",
+        "TXT-015",
+        "TXT-020",
+        "TXT-021",
+        "TXT-022",
+        "TXT-023"
+      ],
+      "notes": "Second field table, history descriptions and footnotes 12-16."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 267,
+      "end": 318,
+      "requirements": [
+        "TXT-014",
+        "TXT-015",
+        "TXT-022",
+        "TXT-023",
+        "TXT-028",
+        "TXT-029",
+        "TXT-039",
+        "TXT-046",
+        "TXT-048",
+        "TXT-050",
+        "TXT-051",
+        "TXT-052"
+      ],
+      "notes": "Third field table, footnotes 17-20, Table I caption and page furniture."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 319,
+      "end": 323,
+      "requirements": [
+        "TXT-007",
+        "TXT-017"
+      ],
+      "notes": "Detailed current direction."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 324,
+      "end": 331,
+      "requirements": [
+        "TXT-025",
+        "TXT-026"
+      ],
+      "notes": "Alarm condition versus audible buzzer state."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 332,
+      "end": 349,
+      "requirements": [
+        "TXT-025",
+        "TXT-027"
+      ],
+      "notes": "Relay product semantics and legacy case-insensitive comparison."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 350,
+      "end": 354,
+      "requirements": [
+        "TXT-028"
+      ],
+      "notes": "FW examples and availability."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 355,
+      "end": 365,
+      "requirements": [
+        "TXT-029",
+        "TXT-030",
+        "TXT-031"
+      ],
+      "notes": "FWE format and examples; page furniture is nonnormative."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 366,
+      "end": 387,
+      "requirements": [
+        "TXT-032"
+      ],
+      "notes": "Alarm mask decimal notation and complete bit table."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 388,
+      "end": 394,
+      "requirements": [
+        "TXT-033",
+        "TXT-034"
+      ],
+      "notes": "Warnings and inverter alarm latching."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 395,
+      "end": 406,
+      "requirements": [
+        "TXT-035",
+        "TXT-036"
+      ],
+      "notes": "Off-reason mask values."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 407,
+      "end": 417,
+      "requirements": [
+        "TXT-037",
+        "TXT-038"
+      ],
+      "notes": "BLE capability bits and copied description; page furniture is nonnormative."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 418,
+      "end": 593,
+      "requirements": [
+        "TXT-039",
+        "TXT-040",
+        "TXT-055"
+      ],
+      "notes": "Entire PID table, phased-out note and page furniture."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 594,
+      "end": 613,
+      "requirements": [
+        "TXT-041",
+        "TXT-042"
+      ],
+      "notes": "State-of-operation table and load-search footnote."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 614,
+      "end": 642,
+      "requirements": [
+        "TXT-043",
+        "TXT-044",
+        "TXT-045"
+      ],
+      "notes": "Error table and transient-error notes."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 643,
+      "end": 653,
+      "requirements": [
+        "TXT-046",
+        "TXT-047"
+      ],
+      "notes": "Day sequence, availability and page furniture."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 654,
+      "end": 658,
+      "requirements": [
+        "TXT-048",
+        "TXT-049"
+      ],
+      "notes": "Serial-number description and conflicting date notation."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 659,
+      "end": 662,
+      "requirements": [
+        "TXT-048"
+      ],
+      "notes": "Deprecated legacy model string."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 663,
+      "end": 672,
+      "requirements": [
+        "TXT-015",
+        "TXT-050"
+      ],
+      "notes": "Device-mode enum and Smart-only hibernate footnote."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 673,
+      "end": 678,
+      "requirements": [
+        "TXT-051"
+      ],
+      "notes": "Tracker-state enum."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 679,
+      "end": 705,
+      "requirements": [
+        "TXT-052"
+      ],
+      "notes": "Complete DC-monitor enum and page furniture."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 706,
+      "end": 720,
+      "requirements": [
+        "TXT-009",
+        "TXT-010",
+        "TXT-053",
+        "TXT-054"
+      ],
+      "notes": "Implementation recommendations and block commit/discard requirements."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 721,
+      "end": 771,
+      "requirements": [
+        "TXT-058"
+      ],
+      "notes": "Connector mechanics and part references.",
+      "disposition": "device_obligation"
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 772,
+      "end": 786,
+      "requirements": [
+        "TXT-058"
+      ],
+      "notes": "Molded cable variants.",
+      "disposition": "device_obligation"
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 787,
+      "end": 895,
+      "requirements": [
+        "TXT-057"
+      ],
+      "notes": "Complete revision history and final page furniture.",
+      "disposition": "excluded"
+    }
+  ]
+}

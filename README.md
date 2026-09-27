@@ -33,7 +33,8 @@ async with await AsyncVEDirect.from_port("/dev/ttyUSB0") as dev:
 
 - `tools/fetch_specs.py` — Downloads all 5 official Victron Energy PDF specifications and extracts layout text for continuous verification.
 - `tools/spec_parser.py` — Automated specification parsers for BlueSolar, Orion-XS, BMV-7xx, Phoenix Inverter, and Text Mode specs.
-- `tests/test_spec_parsers.py` — 100% schema compliance test suite asserting register coverage, scale factors, data types, units, and aliased register disambiguation.
+- `tests/test_spec_parsers.py` — Table coverage and metadata checks for register IDs, scale factors, data types, units, and aliased registers.
+- `conformance/` — [Finite acceptance scope](conformance/SCOPE.md), [audit findings](conformance/FINDINGS.md), requirement-to-test ledgers, and independent behavioral tests. Run `python3 conformance/run.py` with the serial extra installed on a POSIX host; [the generated report](conformance/RESULTS.md) records failures and evidence gaps. Table coverage alone does not establish protocol correctness.
 
 ## Layout
 
@@ -64,13 +65,20 @@ stdlib-only: `python3 -m unittest discover -s tests`.
   bytes undecoded); `hex_get()`/`hex_set()` require a documented register name.
   `WRITE_ONLY` (e.g. `RESTORE_DEFAULTS 0x0004`, `CLEAR_HISTORY 0x1030`,
   `REMOTE_COMMAND 0x2004`) raises on `hex_get`, allowed on `hex_set`.
-  Flavors form a hierarchy (`MPPT->CHG`, `MPPT_RS->MPPT`, `MULTI_RS->INV+MPPT_RS`,
+  Flavors form a hierarchy (`MPPT->CHG`, `MPPT_SMALL/MPPT_RS->MPPT`, `MULTI_RS->INV+MPPT_RS`,
   `BMV71->BMV`, `ORION->CHG`; see `docs/HEX_REGISTERS.md`).
-- Product ID command replies are family-specific: BMV/Phoenix use the
-  documented two-byte form; MPPT/Orion use the standardized four-byte form.
-  Set `flavor` so the client can interpret a two-byte response safely.
+- Product ID command replies carry a two-byte little-endian ID for all
+  documented families, with no flavor needed. Register `0x0100` has separate
+  version-dependent layout rules, including its four-byte form.
 - VE.Direct has no transaction IDs. Requests are serialized. After a request
   timeout or cancellation, the client fails closed to prevent a late response
   being attributed to a newer request; reset the link/device and call
   `reset_hex_state()` before issuing another HEX request.
 - Command `0` boot entry is rejected for BMV devices, where it is reserved.
+- `restart()` leaves HEX routing disabled until stale host input has been
+  drained and `reset_hex_state()` is called. Text reception continues.
+- `boot(timeout=0.2)` observes incoming traffic for boot failure during that
+  interval. A failure raises `RegisterError`; silence does not confirm boot
+  entry. Later boot failures are logged when read and cannot fail another command.
+- Select `flavor="MPPT_SMALL"` for 10A/15A/20A MPPT models without a rotary
+  switch so typed battery settings use the small-model table.

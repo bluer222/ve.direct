@@ -313,13 +313,74 @@ class TestRegisters(unittest.TestCase):
         self.assertEqual(R.lookup(0x2211, flavor="INV").name, "VOLTAGE_RANGE_MIN")
 
     def test_bat_type_generic_uses_large_charger_map(self):
-        # Includes former test_bat_type_small_charger_limitation: model-specific
-        # helper values differ, while the generic register uses the large map.
-        # A small charger needs decode_bat_type(raw, "small") for its own table.
+        # The generic register retains the large-model table. Small chargers
+        # select MPPT_SMALL, or use the standalone decoding helper.
         self.assertEqual(R.decode_bat_type(1, "small"), "type_2")
         self.assertEqual(R.decode_bat_type(1, "large"), "type_1")
         self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\x01"), "type_1")
         self.assertEqual(R.decode_value(R.lookup("BAT_TYPE"), b"\xFF"), "user")
+
+    def test_mppt_small_battery_type_and_inherited_registers(self):
+        small = R.lookup(0xEDF1, flavor="MPPT_SMALL")
+        self.assertEqual(small.name, "MPPT_SMALL_BAT_TYPE")
+        self.assertEqual(R.lookup("BAT_TYPE", flavor="mppt_small"), small)
+        self.assertEqual(R.decode_value(small, b"\x01"), "type_2")
+        self.assertEqual(R.encode_value(small, "type_2"), b"\x01")
+        self.assertEqual(R.decode_value(small, b"\xFF"), "user")
+        self.assertEqual(R.encode_value(small, "user"), b"\xFF")
+        self.assertEqual(R.decode_value(small, b"\x02"), "unknown(2)")
+        with self.assertRaises(ValueError):
+            R.encode_value(small, "type_1")
+        # The small variant still exposes inherited MPPT, CHG and ANY data.
+        visible = R.for_flavor("MPPT_SMALL")
+        for name in ("MPPT_SMALL_BAT_TYPE", "PANEL_VOLTAGE",
+                     "BAT_ABSORPTION_VOLTAGE", "PRODUCT_ID"):
+            self.assertIn(name, visible)
+            R.lookup(name, flavor="MPPT_SMALL")
+        self.assertEqual(R.decode_value(R.lookup(0xEDF1, flavor="MPPT"), b"\x01"), "type_1")
+        self.assertEqual(R.decode_value(R.lookup(0xEDF1, flavor="MPPT_RS"), b"\x01"), "agm_normal")
+        self.assertEqual(R.decode_value(R.lookup(0xEDF1, flavor="ORION"), b"\x01"), "lifepo4")
+
+    def test_bmv_description_string20_wire_limit(self):
+        reg = R.lookup("BMV_DESCRIPTION", flavor="BMV71")
+        self.assertEqual(reg.max_length, 20)
+        self.assertEqual(R.encode_value(reg, ""), b"\0")
+        self.assertEqual(R.encode_value(reg, "x" * 19), b"x" * 19 + b"\0")
+        for value in ("x" * 20, "x" * 21):
+            with self.subTest(characters=len(value)):
+                with self.assertRaisesRegex(ValueError, "20 ASCII bytes"):
+                    R.encode_value(reg, value)
+        # Strings are ASCII on this interface, so a multibyte Unicode value
+        # cannot bypass the wire-byte bound or get silently truncated.
+        with self.assertRaises(UnicodeEncodeError):
+            R.encode_value(reg, "\u00e9" * 10)
+
+    def test_phoenix_app_version_is_family_specific(self):
+        from ve_direct.exceptions import AmbiguousRegisterError
+        inv = R.lookup("APP_VER", flavor="INV")
+        self.assertEqual(inv.name, "INV_APP_VER")
+        self.assertEqual(R.lookup(0x0102, flavor="INV"), inv)
+        for software_type, name in enumerate(("bootloader", "application", "tester", "release_candidate")):
+            raw = bytes([0, 0x17, 1 | software_type << 6, 0])
+            with self.subTest(software_type=name):
+                self.assertEqual(R.decode_value(inv, raw), {
+                    "version": "1.17", "type": name, "raw": raw.hex().upper(),
+                })
+        # Only bits6..7 are software type in the register's Phoenix layout.
+        self.assertEqual(R.decode_value(inv, bytes.fromhex("00175100"))["version"], "17.17")
+        self.assertEqual(R.decode_value(inv, bytes.fromhex("001741"))["version"], "1.17")
+        # The fourth byte has no published meaning; keep it in raw only.
+        self.assertEqual(R.decode_value(inv, bytes.fromhex("001741FE")), {
+            "version": "1.17", "type": "application", "raw": "001741FE",
+        })
+        for raw in (b"", b"\0", b"\0\x17", bytes.fromhex("01174100"), bytes.fromhex("0017410000")):
+            with self.subTest(raw=raw):
+                self.assertIsNone(R.decode_value(inv, raw)["version"])
+        orion = R.lookup(0x0102, flavor="ORION")
+        self.assertEqual(R.decode_value(orion, bytes.fromhex("00FF1201"))["version"], "1.12")
+        self.assertEqual(R.decode_value(orion, bytes.fromhex("00FF1201"))["type"], "release")
+        with self.assertRaises(AmbiguousRegisterError):
+            R.lookup(0x0102)
 
     # --- 0x200C LINK map has no 250 (absent from both 0x200C tables) ---
     def test_link_device_state_no_250(self):

@@ -97,9 +97,23 @@ class TestText(unittest.TestCase):
         good = make_text_block({"PID": "0x204", "V": "123"})
         self.assertEqual(TextParser().feed(b"garbage" + good)[0]["V"].value, 123)
         corrupt_without_marker = b"\r\nPID\t0x204\r\nV\t999\r\n"
-        frames = TextParser().feed(corrupt_without_marker + good)
+        parser = TextParser()
+        # A missing marker loses the boundary. Do not salvage an apparently
+        # valid suffix: discard through the next checksum and resume there.
+        self.assertEqual(parser.feed(corrupt_without_marker + good), [])
+        frames = parser.feed(good)
         self.assertEqual(len(frames), 1)
         self.assertEqual(frames[0]["V"].value, 123)
+
+    def test_invalid_suffix_is_not_accepted_at_startup_or_after_truncation(self):
+        good = make_text_block({"PID": "0xA04A", "V": "10069", "I": "100"})
+        bad = good.replace(b"I\t100", b"I\t101")
+        self.assertFalse(verify_block_checksum(bad))
+        self.assertEqual(TextParser().feed(bad), [])
+        parser = TextParser()
+        self.assertEqual(parser.feed(b"\r\nX\t" + b"x" * 9000), [])
+        self.assertEqual(parser.feed(good), [])
+        self.assertEqual(parser.feed(good)[0]["I"].value, 100)
 
     def test_firmware_semantics_and_si_conversions(self):
         blk = make_text_block({
@@ -161,14 +175,26 @@ class TestText(unittest.TestCase):
         f3 = TextParser().feed(make_text_block({"PID": "0xA04A", "T": "---"}))[0]
         self.assertIsNone(f3["T"].value)
 
-    def test_fwe_short_rejected(self):
-        f = TextParser().feed(make_text_block({"FWE": "FF"}))[0]
-        self.assertIsNone(f["FWE"].human)
-        # Short-but-valid 5-char form still decodes (208FF -> 0208FF).
-        f2 = TextParser().feed(make_text_block({"FWE": "208FF"}))[0]
-        self.assertEqual(f2["FWE"].human, "v2.08")
-        f3 = TextParser().feed(make_text_block({"FWE": "020801"}))[0]
-        self.assertIn("beta", f3["FWE"].human)
+    def test_fwe_optional_padding_and_invalid_input(self):
+        for raw, human in (
+            ("FF", "v0.00"), ("8FF", "v0.08"), ("0008FF", "v0.08"),
+            ("208FF", "v2.08"), ("020801", "v2.08-beta.01"),
+            ("1", "v0.00-beta.01"),
+        ):
+            with self.subTest(raw=raw):
+                frame = TextParser().feed(make_text_block({"FWE": raw}))[0]
+                self.assertEqual(frame["FWE"].human, human)
+        for raw in ("", "0208FFF", "ZZ", "+12345", "12_345"):
+            with self.subTest(raw=raw):
+                frame = TextParser().feed(make_text_block({"FWE": raw}))[0]
+                self.assertIsNone(frame["FWE"].human)
+
+    def test_or_hex_and_decimal_masks(self):
+        for raw in ("0x00000081", "0X00000081", "129", "000129"):
+            with self.subTest(raw=raw):
+                frame = TextParser().feed(make_text_block({"OR": raw}))[0]
+                self.assertEqual(frame["OR"].value, 129)
+                self.assertEqual(frame["OR"].human, "No input power, Engine shutdown detection")
 
     def test_ttg_minus_one_infinite(self):
         f = TextParser().feed(make_text_block({"TTG": "-1"}))[0]

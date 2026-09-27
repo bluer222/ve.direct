@@ -87,23 +87,25 @@ class TestDevice(unittest.TestCase):
     def test_handle_hex_rejects_invalid(self):
         from ve_direct import hex as _H
         from ve_direct.exceptions import ChecksumError
-        dev, _ = self._dev()
-        bad = _H.decode_line(_H.build_get(0x0201))
-        object.__setattr__(bad, "valid", False)
-        with self.assertRaises(ChecksumError):
-            dev._handle_hex(bad)
+
+        async def go():
+            dev, _ = self._dev()
+            bad = _H.decode_line(_H.build_get(0x0201))
+            object.__setattr__(bad, "valid", False)
+            with self.assertRaises(ChecksumError):
+                dev._handle_hex(bad)
+        run(go())
 
     def test_product_id_rejects_malformed_shape(self):
-        # Includes test_product_id_legacy_and_shape's malformed 4-byte PID
-        # checks: wrong prefix, wrong suffix, and short payload all fail.
+        # Command :4 requires exactly two bytes. Even a valid four-byte
+        # register 0x0100 structure is not a command reply.
         import asyncio as _aio
         from ve_direct import hex as _H
         from ve_direct.exceptions import RegisterError
 
         async def go():
             loop = _aio.get_running_loop()
-            # Malformed 4-byte shape rejected (want 00 <PID> FF).
-            for badhex in ("0142A0FF", "0042A000", "0042A0"):
+            for badhex in ("", "42", "0142A0FF", "0042A000", "0042A0", "0042A0FF"):
                 dev2 = AsyncVEDirect(
                     lambda n: _aio.sleep(10), lambda d: None, flavor="MPPT")
                 f = loop.create_future()
@@ -141,13 +143,15 @@ class TestDevice(unittest.TestCase):
                 _H.CMD_ERROR, bytes.fromhex("AAAA"))))
             with self.assertRaises(ChecksumError):
                 fut.result()
-            # :4 with payload 0 (unable to enter bootloader) -> RegisterError
+            # Payload zero belongs to boot entry, not a register request.
             fut2 = loop.create_future()
-            dev._register_waiter = (0xEDBB, _H.CMD_GET, fut2)
+            dev._register_waiter = None
+            dev._boot_waiter = fut2
             dev._handle_hex(_H.decode_line(_H.encode_frame(
                 _H.CMD_ERROR, b"\x00")))
             with self.assertRaises(RegisterError):
                 fut2.result()
+            dev._boot_waiter = None
             # :2AAAA (Orion checksum error) -> ChecksumError
             fut3 = loop.create_future()
             dev._register_waiter = (0xEDBB, _H.CMD_GET, fut3)
@@ -283,7 +287,7 @@ class TestDevice(unittest.TestCase):
         run(go())
 
     def test_get_product_id(self):
-        """Verify family-specific 2-byte and standardized 4-byte PID replies."""
+        """Command :4 uses two bytes independently of the product family."""
         import asyncio as _aio
         from ve_direct import hex as _H
         from ve_direct.exceptions import RegisterError
@@ -292,28 +296,28 @@ class TestDevice(unittest.TestCase):
             dev = AsyncVEDirect(lambda n: _aio.sleep(10), lambda d: None)
             loop = _aio.get_running_loop()
 
-            # 2-byte form rejected
+            # No family selection is needed to decode a command reply.
             fut = loop.create_future()
             fut.set_result(_H.decode_line(_H.encode_frame(_H.CMD_DONE, bytes.fromhex("42A0"))))
             dev._command_transact = lambda cmd, expected, t: fut
-            with self.assertRaises(RegisterError):
-                await dev.get_product_id(timeout=0.1)
+            self.assertEqual(await dev.get_product_id(timeout=0.1), 0xA042)
 
             # BMV/Phoenix officially use a two-byte command-4 payload.
             dev.flavor = "BMV"
             self.assertEqual(await dev.get_product_id(timeout=0.1), 0xA042)
 
-            # 4-byte form accepted
+            # The four-byte form belongs to Get register 0x0100.
             dev.flavor = "MPPT"
             fut2 = loop.create_future()
             fut2.set_result(_H.decode_line(_H.encode_frame(_H.CMD_DONE, bytes.fromhex("0042A0FF"))))
             dev._command_transact = lambda cmd, expected, t: fut2
-            self.assertEqual(await dev.get_product_id(timeout=0.1), 0xA042)
+            with self.assertRaises(RegisterError):
+                await dev.get_product_id(timeout=0.1)
         run(go())
 
     def test_simulated_product_id_shapes(self):
         async def go():
-            for flavor in ("MPPT", "ORION", "BMV", "INV"):
+            for flavor in ("MPPT", "MPPT_SMALL", "MPPT_RS", "ORION", "BMV", "INV"):
                 sim = SimulatedTransport(
                     text_chunks=[], product_id=0xA381, flavor=flavor)
                 dev = AsyncVEDirect(
@@ -404,14 +408,16 @@ class TestDevice(unittest.TestCase):
     def test_typed_async_notification(self):
         from ve_direct import hex as _H
 
-        dev, _ = self._dev()
-        frame = _H.decode_line(_H.encode_frame(
-            _H.CMD_ASYNC,
-            bytes.fromhex("BBED00") + struct.pack("<H", 3130),
-        ))
-        decoded = dev.decode_async_frame(frame, flavor="MPPT")
-        self.assertEqual(decoded["name"], "PANEL_VOLTAGE")
-        self.assertAlmostEqual(decoded["value"], 31.3)
+        async def go():
+            dev, _ = self._dev()
+            frame = _H.decode_line(_H.encode_frame(
+                _H.CMD_ASYNC,
+                bytes.fromhex("BBED00") + struct.pack("<H", 3130),
+            ))
+            decoded = dev.decode_async_frame(frame, flavor="MPPT")
+            self.assertEqual(decoded["name"], "PANEL_VOLTAGE")
+            self.assertAlmostEqual(decoded["value"], 31.3)
+        run(go())
 
     def test_boot_command(self):
         """Boot sends the documented :0 frame."""
@@ -420,7 +426,7 @@ class TestDevice(unittest.TestCase):
         async def go():
             sent = []
             dev = AsyncVEDirect(lambda n: asyncio.sleep(10), lambda d: sent.append(d))
-            await dev.boot()
+            await dev.boot(timeout=0.01)
             self.assertEqual(sent, [bytes.fromhex("3A30353146413531464135314641353146413531464144450A")])
         run(go())
         import inspect
@@ -446,6 +452,104 @@ class TestDevice(unittest.TestCase):
             frame = _H.decode_line(bytes(sim2._pending_out))
             self.assertEqual(frame.cmd, _H.CMD_ERROR)
             self.assertEqual(bytes(frame.data), b"\x00")
+        run(go())
+
+    def test_boot_failure_reaches_boot_call_and_late_failure_is_logged(self):
+        from ve_direct.exceptions import RegisterError
+
+        async def go():
+            sim = SimulatedTransport(boot_fails=True)
+            dev = AsyncVEDirect(sim.read_chunk, sim.write, flavor="MPPT")
+            with self.assertRaisesRegex(RegisterError, "could not enter bootloader"):
+                await dev.boot(timeout=0.1)
+            self.assertEqual((await dev.ping(timeout=0.1)).data, b"\x16\x41")
+
+            # Silence ends the observation window. A later boot error has a
+            # specific meaning and must not be assigned to the next Ping.
+            sim2 = SimulatedTransport()
+            dev2 = AsyncVEDirect(sim2.read_chunk, sim2.write, flavor="MPPT")
+            await dev2.boot(timeout=0.01)
+            sim2.inject_raw(b":40051\n")
+            with self.assertLogs("ve_direct.device", level="WARNING") as logged:
+                self.assertEqual((await dev2.ping(timeout=0.1)).data, b"\x16\x41")
+            self.assertIn("late or unsolicited boot failure", logged.output[0])
+        run(go())
+
+    def test_boot_cancellation_and_write_failure_leave_hex_closed(self):
+        from ve_direct.exceptions import TransportError
+
+        async def go():
+            for phase in ("write", "read", "write_error"):
+                with self.subTest(phase=phase):
+                    started = asyncio.Event()
+
+                    async def read(n):
+                        started.set()
+                        await asyncio.Event().wait()
+
+                    async def write(data):
+                        if phase == "write_error":
+                            raise OSError("partial serial write")
+                        if phase == "write":
+                            started.set()
+                            await asyncio.Event().wait()
+
+                    dev = AsyncVEDirect(read, write, flavor="MPPT")
+                    task = asyncio.create_task(dev.boot(timeout=1))
+                    if phase == "write_error":
+                        with self.assertRaises(OSError):
+                            await task
+                    else:
+                        await started.wait()
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await task
+                    with self.assertRaises(TransportError):
+                        await dev.ping(timeout=0.1)
+        run(go())
+
+    def test_restart_disables_hex_until_reset_and_preserves_text(self):
+        from ve_direct.exceptions import TransportError
+
+        async def go():
+            sim = SimulatedTransport(text_chunks=[make_text_block({"V": "12000"})])
+            dev = AsyncVEDirect(sim.read_chunk, sim.write, flavor="MPPT")
+            await dev.restart()
+            with self.assertRaises(TransportError):
+                await dev.ping(timeout=0.1)
+            self.assertEqual((await dev.read_one(timeout=0.1))["V"].value, 12000)
+            # This fixture has no pre-restart reply or remaining input.
+            self.assertFalse(sim._stream or sim._pending_out)
+            dev.reset_hex_state()
+            self.assertEqual((await dev.ping(timeout=0.1)).data, b"\x16\x41")
+        run(go())
+
+    def test_reset_discards_partial_reply_but_keeps_queued_frames(self):
+        from ve_direct.exceptions import TimeoutError
+
+        async def go():
+            incoming = asyncio.Queue()
+
+            async def read(n):
+                return await incoming.get()
+
+            dev = AsyncVEDirect(read, lambda data: None, flavor="MPPT")
+            # The timed-out transaction has already consumed complete Text
+            # and Async data, followed by a partial Get response.
+            incoming.put_nowait(make_text_block({"V": "12000"})
+                                + b":A0102000543\n:7F0ED0096")
+            with self.assertRaises(TimeoutError):
+                await dev.hex_get_raw(0xEDF0, timeout=0.01)
+            await dev.restart()
+            self.assertTrue(incoming.empty())
+            dev.reset_hex_state()
+            # A suffix after reset cannot complete the discarded old prefix.
+            incoming.put_nowait(b"00DB\n:7F0ED0064000D\n")
+            reply = await dev.hex_get_raw(0xEDF0, timeout=0.1)
+            self.assertEqual(reply.value_bytes, b"\x64\x00")
+            self.assertEqual((await dev.read_one(timeout=0.1))["V"].value, 12000)
+            notification = dev.async_frames.get_nowait()
+            self.assertEqual(notification.value_bytes, b"\x05")
         run(go())
 
     def test_sim_parameter_error_round_trip(self):
@@ -487,11 +591,14 @@ class TestDevice(unittest.TestCase):
         """Truncated :A (id only, no flags/value) raises RegisterError."""
         from ve_direct import hex as _H
         from ve_direct.exceptions import RegisterError
-        dev, _ = self._dev()
-        for payload in (bytes.fromhex("0102"), bytes.fromhex("01")):
-            frame = _H.decode_line(_H.encode_frame(_H.CMD_ASYNC, payload))
-            with self.assertRaises(RegisterError, msg=payload.hex()):
-                dev.decode_async_frame(frame, flavor="MPPT")
+
+        async def go():
+            dev, _ = self._dev()
+            for payload in (bytes.fromhex("0102"), bytes.fromhex("01")):
+                frame = _H.decode_line(_H.encode_frame(_H.CMD_ASYNC, payload))
+                with self.assertRaises(RegisterError, msg=payload.hex()):
+                    dev.decode_async_frame(frame, flavor="MPPT")
+        run(go())
 
     def test_truncated_get_set_does_not_resolve(self):
         """2-byte id-only Get/Set (e.g. id 0xEDBB) must not resolve waiter."""
@@ -563,13 +670,10 @@ class TestDevice(unittest.TestCase):
                 await dev2.ping(timeout=0.1)
         run(go())
 
-    def test_product_id_rs_rejects_two_byte(self):
-        """MPPT_RS/ORION 2-byte PID rejected (BlueSolar §1.1: ignore)."""
-        # Includes test_product_id_legacy_and_shape's pre-1.30 MPPT case:
-        # the same 2-byte PID rejected by RS and Orion is accepted by MPPT.
+    def test_product_id_rs_accepts_two_byte_command_reply(self):
+        """BlueSolar/Orion's four-byte rule is specific to Get 0x0100."""
         import asyncio as _aio
         from ve_direct import hex as _H
-        from ve_direct.exceptions import RegisterError
 
         async def go():
             loop = _aio.get_running_loop()
@@ -579,13 +683,9 @@ class TestDevice(unittest.TestCase):
             fut.set_result(_H.decode_line(
                 _H.encode_frame(_H.CMD_DONE, bytes.fromhex("42A0"))))
             dev._command_transact = lambda cmd, expected, t: fut
-            for flavor in ("MPPT_RS", "MULTI_RS", "ORION"):
+            for flavor in ("MPPT_RS", "MPPT_SMALL", "MULTI_RS", "ORION", "MPPT", None):
                 dev.flavor = flavor
-                with self.assertRaises(RegisterError, msg=flavor):
-                    await dev.get_product_id(timeout=0.1)
-            # MPPT 2-byte legacy still accepted.
-            dev.flavor = "MPPT"
-            self.assertEqual(await dev.get_product_id(timeout=0.1), 0xA042)
+                self.assertEqual(await dev.get_product_id(timeout=0.1), 0xA042)
         run(go())
 
     def test_close_flag(self):
@@ -629,10 +729,7 @@ class TestDevice(unittest.TestCase):
         async def go():
             transport = MockTransport()
             def make_text_frame(v):
-                body = f"PID\t0xA042\r\nV\t{v}\r\nChecksum\t"
-                s = sum(body.encode("ascii"))
-                cs = (256 - (s % 256)) % 256
-                return body.encode("ascii") + bytes([cs])
+                return make_text_block({"PID": "0xA042", "V": str(v)})
 
             dev = AsyncVEDirect(transport.read, transport.write, flavor="MPPT")
 
@@ -660,7 +757,7 @@ class TestDevice(unittest.TestCase):
                 await dev.hex_set(0x0200, 1, timeout=0.2)
                 await asyncio.sleep(0.01)
 
-            await reader_task
+            await asyncio.wait_for(reader_task, 1)
             feeder_task.cancel()
             transport.close()
             await dev.close()

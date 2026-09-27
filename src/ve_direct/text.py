@@ -74,18 +74,10 @@ def _decode_fw(raw: str) -> str | None:
 def _decode_fwe(raw: str) -> str | None:
     """Format Text FWE ``HHMMLL`` values, where FF denotes release."""
     s_raw = raw.strip().upper()
-    # Spec examples are 0208FF/208FF (5-6 chars) and 020801 (beta). A 2-char
-    # input like "FF" would zfill(6) to "0000FF" -> v0.00; reject
-    # implausibly short values (need >=3 version digits + 2 build digits).
-    if len(s_raw) < 5:
+    # All leading zeroes are optional, including those in versions below 1.00.
+    if not 1 <= len(s_raw) <= 6 or any(c not in "0123456789ABCDEF" for c in s_raw):
         return None
     s = s_raw.zfill(6)
-    if len(s) != 6:
-        return None
-    try:
-        int(s, 16)
-    except ValueError:
-        return None
     major = int(s[:2], 16)
     minor = s[2:4]
     build = s[4:6]
@@ -146,7 +138,12 @@ def _decode_label(label: str, raw: str) -> TypedValue:
             # "0xA04A" and bare "A04A"; int(x, 16) handles the 0x prefix.
             value = int(raw.strip(), 16)
             human = pid_name(value)  # type: ignore[arg-type]
-        elif label in ("CS", "ERR", "MODE", "MPPT", "MON", "AR", "WARN", "OR",
+        elif label == "OR":
+            # Devices send a 0x-prefixed mask. Keep accepting decimal values
+            # used by callers and older recordings of this library.
+            value = int(raw, 16 if raw.lower().startswith("0x") else 10)
+            human = ", ".join(decode_or(value))
+        elif label in ("CS", "ERR", "MODE", "MPPT", "MON", "AR", "WARN",
                        "H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9",
                        "H10", "H11", "H12", "H13", "H14", "H15", "H16",
                        "H17", "H18", "H19", "H20", "H21", "H22", "H23",
@@ -167,8 +164,6 @@ def _decode_label(label: str, raw: str) -> TypedValue:
                 human = MON_MAP.get(value, f"Unknown monitor ({value})")
             elif label in ("AR", "WARN"):
                 human = ", ".join(decode_ar(value))
-            elif label == "OR":
-                human = ", ".join(decode_or(value))
             elif label == "CAP_BLE":
                 human = ", ".join(decode_cap_ble(value))
             elif label == "TTG" and value == -1:
@@ -257,6 +252,8 @@ class TextParser:
     def __init__(self) -> None:
         self._buf = bytearray()
         self._hex_buf: bytearray | None = None
+        self._seen_checksum = False
+        self._discard_block = False
 
     def feed(self, data: bytes) -> list[Frame]:
         """Feed a mixed VE.Direct stream and return validated Text frames.
@@ -309,31 +306,29 @@ class TextParser:
                 break
 
             candidate = bytes(self._buf[: cs_pos + 1])
-            # Normally the candidate starts at byte zero.  If capture began in
-            # the middle of a block, or a corrupt block lost its Checksum tag,
-            # try every CRLF record boundary and retain the first suffix whose
-            # checksum is valid.  This prevents damaged input from consuming
-            # the following valid block.
-            starts = [0]
-            starts.extend(i for i in range(1, len(candidate) - 1)
-                          if candidate[i:i + 2] == b"\r\n")
-            valid_block: bytes | None = None
-            for start in starts:
-                block = candidate[start:]
-                if b"\t" in block and verify_block_checksum(block):
-                    valid_block = block
-                    break
-
-            if valid_block is not None:
-                frames.append(self._parse_block(valid_block))
-                del self._buf[: cs_pos + 1]
-            else:
-                del self._buf[: cs_pos + 1]
+            if not self._seen_checksum:
+                # A capture may start with bytes before the first record.
+                # Only this initial prefix can be discarded; trying later
+                # record boundaries can make corrupted measurements appear
+                # checksum-valid by dropping part of their block.
+                start = candidate.find(b"\r\n")
+                candidate = candidate[start:] if start >= 0 else b""
+            if (not self._discard_block and candidate.startswith(b"\r\n")
+                    and verify_block_checksum(candidate)):
+                frames.append(self._parse_block(candidate))
+            # Even an invalid block establishes where the next block starts.
+            # If a checksum marker was lost, drop through the next marker.
+            self._seen_checksum = True
+            self._discard_block = False
+            del self._buf[: cs_pos + 1]
 
         if len(self._buf) > 8192:
             # Preserve the most recent record boundary where possible.
             cut = self._buf.rfind(b"\r\n", 0, len(self._buf) - 4096)
             del self._buf[: cut if cut >= 0 else len(self._buf) - 4096]
+            # Truncated bytes still belong to the current block. Never
+            # validate a suffix after losing its checksum contribution.
+            self._discard_block = True
         return frames
 
     def _parse_block(self, block: bytes) -> Frame:

@@ -44,15 +44,11 @@ source) vs reverse-engineering. Code references are `file:line` (approx).
   Orion-XS-HEX §1 (`src/ve_direct/hex.py:54-68,132-166`).
 - Done/Get/Set/Unknown/Error/Ping response codes + `0xAAAA` framing error:
   BlueSolar-HEX §1 (`src/ve_direct/hex.py:17-51`).
-- Product-id command responses are family-specific: BlueSolar/Orion use the
-  standardized 4-byte `instance+pid+reserved` form; BMV Rev 7 and Phoenix Rev 5
-  document 2-byte little-endian command responses.
-  (`src/ve_direct/device.py:342-354`).
-  Orion doc-internal tension (no behavior change): Orion-XS-HEX §1.3 examples
-  answer `:451` with a 2-byte reply (`:1F0A3C1`), but the normative §1.1
-  product-id text says the 2-byte form "should be ignored" (incorrect
-  endianness on some builds). The code follows the normative text and rejects
-  2-byte replies for ORION; see the `get_product_id` docstring reasoning.
+- Product-id command `:451` returns a two-byte little-endian ID for all
+  documented families, including Orion's literal `:1F0A3C1` example.
+  The four-byte `instance+pid+reserved` layout and warning about older
+  two-byte endianness belong to Get register `0x0100`, not command `:4`.
+  Command decoding therefore requires no family hint.
 - App-version 2-byte (top 2 bits fw type, minor hex digits) vs Orion 24-bit:
   BlueSolar-HEX §1 + Orion-XS-HEX §1 Note 1
   (`src/ve_direct/hex.py:54-73`, `decode_app_version`).
@@ -266,11 +262,10 @@ no wire-behavior contradiction:
   (load §), `TX_PORT_MODE`/`RX_PORT_MODE` (ports §), `REMOTE_COMMAND`/
   `NETWORK_INFO`/`NETWORK_MODE`/`LINK_DEVICE_STATE` (networking §),
   `DEVICE_FUNCTION` (Orion), `TIMER_ANCHOR` (lighting §),
-   `BAT_TYPE_SMALL/LARGE/ORION/RS` + `decode_bat_type()` (product-specific
-   battery-type tables; limitation: no small-charger flavor exists, so the
-   generic `BAT_TYPE` register binds the large table — value 1 on 10/15/20A
-   models reads `type_1` via `hex_get` instead of the documented `type_2`,
-   use `decode_bat_type(v, charger="small")` there),
+  `BAT_TYPE_SMALL/LARGE/ORION/RS` + `decode_bat_type()` for product-specific
+  battery tables. Select `flavor="MPPT_SMALL"` for 10A/15A/20A models without
+  a rotary switch. Typed reads and writes then use the small table, including
+  raw 1 for `type_2`; generic `MPPT` retains the large table.
   `CAPABILITIES` full bits 9-15/18-20/25-26 (BlueSolar capabilities §),
   Orion error/warning additions (120, 150/151, 160-162),
   Phoenix `0x0207` off-reason bits 0/2/3/4/5 (HEX Rev 5 §2.3.2).
@@ -300,7 +295,7 @@ no wire-behavior contradiction:
   `0xFF`/`0xFFFF`/`0xFFFFFFFF` per-field.
 - Flavor hierarchy from `ve_reg_flavor.h`
   (`MPPT->CHG`, `MPPT_RS->MPPT`, `MULTI_RS->INV+MPPT_RS`, `BMV71->BMV`;
-  `ORION->CHG` extension is ours): `for_flavor()` in
+  `ORION->CHG` and `MPPT_SMALL->MPPT` extensions are ours): `for_flavor()` in
   `src/ve_direct/registers/__init__.py`.
 
 ## Resolved Specifications & Implemented Features
@@ -319,16 +314,11 @@ The following items from the independent audit and official specifications have 
 - `CLEAR_HISTORY 0x1030` and VE.Smart networking registers `0x2000..0x2015` are accessible under the `ORION` flavor.
 - Serial: `from_port()` configures `dtr=True, rts=False` for VE.Direct cable power.
 - Device: `device.boot()` wrapper sends `:0<51FA*5>`.
-- Product ID: 2-byte command replies are accepted for BMV/BMV71/INV and for
-  MPPT (legacy pre-1.30 path: BlueSolar-HEX §1.1 Note 1 says product info is
-  2-byte since fw 1.12 and 4-byte only since fw 1.30, and §1.3 shows 2-byte
-  Done replies, so pre-1.30 MPPTs can never return the 4-byte form);
-  ORION/MULTI_RS/MPPT_RS require the standardized 4-byte representation
-  (Orion-XS §1.1 carries the same "should be ignored" note for the 2-byte
-  form). Unflavored 2-byte replies are rejected as unsafe without a flavor
-  (`src/ve_direct/device.py:get_product_id`).
-- Firmware Version: 24-bit Orion firmware version is decoded via `decode_app_version_24` and register `0x0102`.
-- Phoenix-Inverter-HEX Rev 5 and BMV-7xx-HEX Rev 7 are independently parsed and 100% verified via `tools/spec_parser.py` and `tests/test_spec_parsers.py`.
+- Product ID command replies use two-byte little-endian IDs, independently
+  of family. Product information register `0x0100` retains its separate
+  firmware-dependent representation.
+- Firmware version: Orion register `0x0102` uses its 24-bit layout. Phoenix uses its own minor byte and major/software-type byte through the `INV` register override.
+- Phoenix-Inverter-HEX Rev 5 and BMV-7xx-HEX Rev 7 tables are checked by `tools/spec_parser.py` and `tests/test_spec_parsers.py`. The frozen behavioral acceptance gate and its limits are documented in `conformance/SCOPE.md`.
 - Shared-wire parsing is byte-state based and tested for bytewise reads,
   coalesced Text+HEX, mid-record Async insertion, corrupt blocks and recovery.
 - HEX transactions are serialized. Timeout/cancellation intentionally marks

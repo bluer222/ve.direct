@@ -1,0 +1,2071 @@
+{
+  "area": "hex",
+  "requirements": [
+    {
+      "id": "HEX-001",
+      "requirement": "Emit colon, one command nibble, paired uppercase hex payload/checksum bytes and terminating LF; no byte escaping.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 30,
+          "end": 39
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 14,
+          "end": 22
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 31,
+          "end": 44
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 40,
+          "end": 51
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:177"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_all_byte_values_use_uppercase_hex_and_modulo_checksum",
+        "test_hex_acceptance.HexWireAcceptance.test_every_literal_example_encodes_and_decodes"
+      ],
+      "disposition": "tested",
+      "notes": "Exercises command nibble domain, all payload octets, long carry-producing payloads and every distinct valid literal in the four example sections. Permissive reception of lowercase or surrounding whitespace is not treated as a protocol violation."
+    },
+    {
+      "id": "HEX-002",
+      "requirement": "The binary command, data and checksum sum to 0x55 modulo 256.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 30,
+          "end": 39
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 14,
+          "end": 22
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 31,
+          "end": 44
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 40,
+          "end": 51
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1178,
+          "end": 1202
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 586,
+          "end": 616
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 322,
+          "end": 364
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 197,
+          "end": 221
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:168",
+        "src/ve_direct/hex.py:173"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_all_byte_values_use_uppercase_hex_and_modulo_checksum",
+        "test_hex_acceptance.HexWireAcceptance.test_every_literal_example_encodes_and_decodes",
+        "test_hex_acceptance.HexWireAcceptance.test_bad_checksums_and_unparseable_lines"
+      ],
+      "disposition": "tested",
+      "notes": "The prose says data bytes; the command contribution is settled by :154 and the other literal examples. Expected wire bytes are independent of the implementation encoder."
+    },
+    {
+      "id": "HEX-003",
+      "requirement": "Get sends command 7, a little-endian uint16 register identifier and zero uint8 request flags.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 52,
+          "end": 54
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 37,
+          "end": 39
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 66,
+          "end": 68
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 65,
+          "end": 67
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:266",
+        "src/ve_direct/device.py:362"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_get_and_set_envelopes_use_little_endian_and_zero_flags",
+        "test_hex_acceptance.HexClientAcceptance.test_request_response_examples"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-004",
+      "requirement": "Set sends command 8, a little-endian uint16 identifier, zero uint8 flags and the caller-encoded register value.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 55,
+          "end": 59
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 40,
+          "end": 44
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 69,
+          "end": 73
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 68,
+          "end": 72
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:272",
+        "src/ve_direct/device.py:366"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_get_and_set_envelopes_use_little_endian_and_zero_flags",
+        "test_hex_acceptance.HexClientAcceptance.test_request_response_examples"
+      ],
+      "disposition": "tested",
+      "notes": "Register-specific scalar widths, scales and structures belong to the register ledger. This row verifies the transport envelope and preservation of supplied value bytes."
+    },
+    {
+      "id": "HEX-005",
+      "requirement": "Ping sends :154 and consumes response code 5; response code 1 is not a Ping reply.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 42,
+          "end": 44
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 25,
+          "end": 27
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 46,
+          "end": 48
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 55,
+          "end": 57
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:278",
+        "src/ve_direct/device.py:464"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_fixed_command_builders",
+        "test_hex_acceptance.HexClientAcceptance.test_request_response_examples",
+        "test_hex_acceptance.HexClientAcceptance.test_reply_routing_requires_operation_and_register"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-006",
+      "requirement": "For 16-bit firmware families, AppVersion sends :352 and receives firmware bytes in Done response code 1.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 45,
+          "end": 47
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 49,
+          "end": 51
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 58,
+          "end": 60
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:283",
+        "src/ve_direct/device.py:472"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_fixed_command_builders",
+        "test_hex_acceptance.HexClientAcceptance.test_request_response_examples"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-007",
+      "requirement": "Decode documented 16-bit firmware version examples, the top two firmware-type bits and release-candidate C/D/E/F labels.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 72,
+          "end": 82
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 87,
+          "end": 97
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 91,
+          "end": 101
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:113",
+        "src/ve_direct/hex.py:145"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_version_types_and_release_candidate_letters"
+      ],
+      "disposition": "tested",
+      "notes": "The test exercises the four firmware types, all four RC labels and published 1.16/4.01 examples. The public documents do not supply a complete admissible firmware-number domain."
+    },
+    {
+      "id": "HEX-008",
+      "requirement": "Orion Ping encodes firmware type in 0x3FFF/0x7FFF/0xBFFF/0xFFFF and carries no version.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 25,
+          "end": 27
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 60,
+          "end": 74
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 588,
+          "end": 591
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:145",
+        "src/ve_direct/device.py:464"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_orion_ping_types_have_no_version",
+        "test_hex_acceptance.HexClientAcceptance.test_request_response_examples"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-009",
+      "requirement": "Orion AppVersion is deprecated and a supported request must report its Unknown response as failure.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 70,
+          "end": 74
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 593,
+          "end": 596
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:267",
+        "src/ve_direct/device.py:472"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_unknown_and_framing_errors_fail_current_request"
+      ],
+      "disposition": "tested",
+      "notes": "The host consumes Unknown; firmware is responsible for returning it. The literal printed Unknown checksum is tracked separately in HEX-027."
+    },
+    {
+      "id": "HEX-010",
+      "requirement": "Get Orion firmware via register 0x0102, with identifier byte 0 and little-endian 24-bit HHMMLL; LL=0xFF denotes a release.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 70,
+          "end": 74
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 106,
+          "end": 112
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 603,
+          "end": 607
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:81",
+        "src/ve_direct/device.py:485"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_orion_24_bit_release_example",
+        "test_hex_acceptance.HexClientAcceptance.test_orion_version_uses_register_not_deprecated_command"
+      ],
+      "disposition": "tested",
+      "notes": "Only the documented release representation is certified; undocumented LL encodings are tracked in HEX-028."
+    },
+    {
+      "id": "HEX-011",
+      "requirement": "ProductId command :451 returns a two-byte little-endian PID in Done for the documented families, including Orion and MPPT RS, without requiring a family to parse the reply.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 48,
+          "end": 50
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 218,
+          "end": 223
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 33,
+          "end": 35
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 99,
+          "end": 104
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 598,
+          "end": 601
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 52,
+          "end": 64
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 335,
+          "end": 338
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 61,
+          "end": 63
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 209,
+          "end": 212
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:503",
+        "src/ve_direct/device.py:512",
+        "src/ve_direct/transport.py:211"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_product_id_command_accepts_documented_two_byte_reply",
+        "test_hex_acceptance.HexWireAcceptance.test_fixed_command_builders"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F04: accept the literal Orion :1F0A3C1 reply and valid two-byte replies for MPPT_RS and unspecified flavor. Four-byte instance/PID/reserved encoding belongs to Get register 0x0100. Ordinary tests enforcing rejection were corrected. The BMV 0xFFFF no-valid-application sentinel remains an integer."
+    },
+    {
+      "id": "HEX-012",
+      "requirement": "Keep the product-information register 0x0100 layout separate from ProductId command :4.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 207,
+          "end": 223
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 89,
+          "end": 104
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:503",
+        "src/ve_direct/device.py:511"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_product_id_command_accepts_documented_two_byte_reply"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F04: command :4 decoding is separate from register 0x0100 width/endianness rules. The register ledger owns register decoding. Firmware 1.12/1.30 register availability remains a device obligation."
+    },
+    {
+      "id": "HEX-013",
+      "requirement": "Restart sends :64F and does not wait for a response.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 51,
+          "end": 51
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 36,
+          "end": 36
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 65,
+          "end": 65
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 64,
+          "end": 64
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:293",
+        "src/ve_direct/device.py:568"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_fixed_command_builders",
+        "test_hex_acceptance.HexClientAcceptance.test_restart_is_transmitted_without_waiting_for_a_reply"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-014",
+      "requirement": "Boot entry for MPPT, Phoenix and Orion uses command 0 carrying the documented ten-byte magic; basic frame shape and checksum must be valid.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 41,
+          "end": 41
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 24,
+          "end": 24
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 54,
+          "end": 54
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:30",
+        "src/ve_direct/hex.py:298",
+        "src/ve_direct/device.py:517"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_boot_command_contains_documented_magic_without_assuming_byte_order"
+      ],
+      "disposition": "tested",
+      "notes": "This test checks the unambiguous command, length, byte content and checksum. Exact magic order is deliberately not settled by this row; see HEX-029. Successful firmware mode change requires hardware and is not certified."
+    },
+    {
+      "id": "HEX-015",
+      "requirement": "Do not send boot command 0 for BMV, where it is reserved.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 79,
+          "end": 81
+        },
+        {
+          "file": "README.md",
+          "start": 76,
+          "end": 76
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:525"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_bmv_reserved_boot_command_is_not_transmitted"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-016",
+      "requirement": "Get, Set and Async responses expose a little-endian uint16 id, uint8 flags and remaining value bytes; other response data must not be interpreted as register ids.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 66,
+          "end": 94
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 51,
+          "end": 81
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 82,
+          "end": 109
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 84,
+          "end": 113
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 40,
+          "end": 65
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 23,
+          "end": 50
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 45,
+          "end": 81
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 53,
+          "end": 78
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:207",
+        "src/ve_direct/hex.py:221",
+        "src/ve_direct/hex.py:227"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_direction_specific_names_and_register_envelopes",
+        "test_hex_acceptance.HexClientAcceptance.test_request_response_examples"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-017",
+      "requirement": "A nonzero Get/Set response flag must report failure: Unknown Id=1, Not Supported=2, Parameter Error=4.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 90,
+          "end": 94
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 77,
+          "end": 81
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 105,
+          "end": 109
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 109,
+          "end": 113
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:33",
+        "src/ve_direct/device.py:228"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_each_get_set_error_flag_is_an_error_not_a_value",
+        "test_hex_acceptance.HexClientAcceptance.test_bmv_parameter_error_example_never_returns_nearest_value_as_success"
+      ],
+      "disposition": "tested",
+      "notes": "Covers each flag and a combination in both Get and Set responses. BMV example returns a nearest valid value with flag 4; that value must not be presented as a successful write."
+    },
+    {
+      "id": "HEX-018",
+      "requirement": "Unknown response code 3 indicates the requested command is unsupported; request/response meanings of nibbles 3 and 4 remain distinct.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 45,
+          "end": 50
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 70,
+          "end": 71
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 28,
+          "end": 35
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 57,
+          "end": 59
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 49,
+          "end": 64
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 86,
+          "end": 86
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 58,
+          "end": 63
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 88,
+          "end": 90
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:39",
+        "src/ve_direct/hex.py:75",
+        "src/ve_direct/device.py:267"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_direction_specific_names_and_register_envelopes",
+        "test_hex_acceptance.HexClientAcceptance.test_unknown_and_framing_errors_fail_current_request"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-019",
+      "requirement": "Error response code 4 with payload 0xAAAA reports a framing error, distinct from boot failure payload 0.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 38,
+          "end": 39
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 71,
+          "end": 71
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 21,
+          "end": 22
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 58,
+          "end": 59
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 50,
+          "end": 51
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 89,
+          "end": 90
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:286"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_unknown_and_framing_errors_fail_current_request",
+        "test_hex_acceptance.HexClientAcceptance.test_boot_failure_is_not_assigned_to_next_command"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F06: payload 0xAAAA is a framing error; payload 0 is specifically boot failure and cannot reject an unrelated request. See HEX-021 for the command-routing scenario."
+    },
+    {
+      "id": "HEX-020",
+      "requirement": "Orion response code 2 with payload 0xAAAA is a checksum/framing error.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 55,
+          "end": 56
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 606,
+          "end": 609
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:19",
+        "src/ve_direct/device.py:286"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_unknown_and_framing_errors_fail_current_request",
+        "test_hex_acceptance.HexWireAcceptance.test_every_literal_example_encodes_and_decodes"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-021",
+      "requirement": "A failed boot entry must not cause an unrelated later request to receive its Error response.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 71,
+          "end": 71
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 58,
+          "end": 59
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 89,
+          "end": 90
+        },
+        {
+          "file": "README.md",
+          "start": 46,
+          "end": 47
+        },
+        {
+          "file": "README.md",
+          "start": 72,
+          "end": 75
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 9,
+          "end": 13
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:286",
+        "src/ve_direct/device.py:517"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_boot_failure_is_not_assigned_to_next_command"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F06: the baseline left immediate :40051 pending, causing the following valid Ping to fail with the boot error. The scenario permits an explicit boot exception or separate handling and requires correct association of the next reply."
+    },
+    {
+      "id": "HEX-022",
+      "requirement": "Receive unsolicited Async code A using the Get envelope and do not reply to it.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 60,
+          "end": 64
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 45,
+          "end": 49
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 583,
+          "end": 585
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 74,
+          "end": 78
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 73,
+          "end": 77
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:210",
+        "src/ve_direct/device.py:395",
+        "src/ve_direct/device.py:427"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_async_alone_is_typed_and_never_acknowledged",
+        "test_hex_acceptance.HexLifecycleAcceptance.test_text_async_and_reply_survive_every_chunk_boundary"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-023",
+      "requirement": "Do not publish corrupt-checksum, unparseable or truncated response payloads as successful results; permit later valid HEX traffic to continue.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 30,
+          "end": 39
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 14,
+          "end": 22
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 31,
+          "end": 44
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 40,
+          "end": 51
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 66,
+          "end": 94
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 51,
+          "end": 81
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 82,
+          "end": 109
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 84,
+          "end": 113
+        },
+        {
+          "file": "src/ve_direct/hex.py",
+          "start": 235,
+          "end": 241
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:235",
+        "src/ve_direct/device.py:157",
+        "src/ve_direct/device.py:214",
+        "src/ve_direct/device.py:245"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_bad_checksums_and_unparseable_lines",
+        "test_hex_acceptance.HexClientAcceptance.test_corrupt_or_truncated_response_does_not_publish_a_value",
+        "test_hex_acceptance.HexClientAcceptance.test_empty_done_and_ping_cannot_report_success"
+      ],
+      "disposition": "tested",
+      "notes": "Strictness follows explicit frame shape and checksum rules plus the advertised strict decoding behavior. Accepting extra whitespace/lowercase is not tested as an error. Fixed-width register values are covered in the register ledger."
+    },
+    {
+      "id": "HEX-024",
+      "requirement": "Demultiplex Text, HEX replies and unsolicited notifications across arbitrary input chunk boundaries, including an Async interruption inside a Text record.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 34,
+          "end": 54
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 9,
+          "end": 12
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1171,
+          "end": 1174
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 9,
+          "end": 13
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:157",
+        "src/ve_direct/text.py:291"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_text_async_and_reply_survive_every_chunk_boundary",
+        "test_hex_acceptance.HexLifecycleAcceptance.test_text_consumer_can_pump_a_pending_hex_reply"
+      ],
+      "disposition": "tested",
+      "notes": "Every two-chunk split of one mixed byte stream is exercised, including reply adjacency to a binary Text checksum. Full Text grammar/corruption acceptance belongs to the Text ledger."
+    },
+    {
+      "id": "HEX-025",
+      "requirement": "Device-specific Text suppression and cadence are firmware behavior, not a host command requirement.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1171,
+          "end": 1174
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1203,
+          "end": 1208
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 9,
+          "end": 12
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 365,
+          "end": 368
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 226,
+          "end": 229
+        },
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 39,
+          "end": 54
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:157"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "BlueSolar <=1.52 suppresses Text during HEX interaction; >=1.53 always transmits Text every two seconds and defers HEX replies until Text completes. Orion always interleaves periodic Text. BMV/Phoenix describe Text when there are no queries. The host must accept received ordering, tested in HEX-024; this gate cannot prove device cadence or firmware switching."
+    },
+    {
+      "id": "HEX-026",
+      "requirement": "BlueSolar asynchronous register selection, activation and two-minute inactivity timeout are device behavior.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1153,
+          "end": 1174
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:427"
+      ],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Records firmware <=1.15 no Async, 1.16 history totals/today changes, 1.17 broader changes after queries until two minutes idle, 1.26 added registers and sense-unavailable values. Generic incoming Async support is HEX-022. Automatic keepalive scheduling is outside the frozen host scope; applications can issue documented requests."
+    },
+    {
+      "id": "HEX-027",
+      "requirement": "Resolve the Orion Unknown example checksum conflict explicitly instead of accepting invalid arithmetic.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 14,
+          "end": 22
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 593,
+          "end": 596
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:177"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_orion_unknown_example_conflicts_with_checksum_rule"
+      ],
+      "disposition": "ambiguous",
+      "notes": "The example prints :30300F4, whose binary sum is 0xFA rather than 0x55. The normative checksum calculation yields :303004F. Acceptance prefers the arithmetic rule and rejects the printed checksum; the source conflict remains visible."
+    },
+    {
+      "id": "HEX-028",
+      "requirement": "Only LL=0xFF is specified as a release in Orion 24-bit version encoding.",
+      "sources": [
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 106,
+          "end": 112
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:81"
+      ],
+      "tests": [],
+      "disposition": "ambiguous",
+      "notes": "The document does not define non-FF LL labels or development-version semantics. No beta/RC interpretation is certified. The current decoder reports unknown for those values; this is a conservative policy, not an extra specification requirement."
+    },
+    {
+      "id": "HEX-029",
+      "requirement": "The exact byte order of boot-entry magic is not resolved by a literal wire example in the pinned documents.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 38,
+          "end": 41
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 21,
+          "end": 24
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 50,
+          "end": 54
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:30",
+        "src/ve_direct/hex.py:298"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_boot_command_contains_documented_magic_without_assuming_byte_order"
+      ],
+      "disposition": "ambiguous",
+      "notes": "Tables write 0x51FA51FA51FA51FA51FA as payload while the common framing paragraph says numbers are little endian. The sources do not state whether this magic is an integer or literal byte sequence and provide no boot example. The implementation sends repeated 51 FA. The test accepts either order only for the unresolved bytes and proves the remaining envelope/checksum rules; a hardware trace or authoritative clarification is needed to certify exact order."
+    },
+    {
+      "id": "HEX-030",
+      "requirement": "Requests sharing one wire are serialized across register and untagged command transactions.",
+      "sources": [
+        {
+          "file": "README.md",
+          "start": 46,
+          "end": 47
+        },
+        {
+          "file": "README.md",
+          "start": 72,
+          "end": 75
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 9,
+          "end": 13
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:337",
+        "src/ve_direct/device.py:438"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_transactions_are_serialized_across_command_and_register_calls"
+      ],
+      "disposition": "tested",
+      "notes": "Finite transition matrix covers Get/Get, Get/Ping, Ping/Get and Ping/Ping. No second request is written before the first receives its matching response."
+    },
+    {
+      "id": "HEX-031",
+      "requirement": "After reply timeout or cancellation after transmission, later HEX requests fail closed until synchronization is explicitly restored.",
+      "sources": [
+        {
+          "file": "README.md",
+          "start": 72,
+          "end": 75
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 169,
+          "end": 176
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:351",
+        "src/ve_direct/device.py:453"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_timeout_and_cancellation_after_write_fail_closed"
+      ],
+      "disposition": "tested",
+      "notes": "Matrix covers command/register operations and timeout/cancellation while waiting for a reply. The during-write transition has separate regression evidence for F02."
+    },
+    {
+      "id": "HEX-032",
+      "requirement": "Cancellation while an async write/drain is suspended must fail closed if request bytes may already have been transmitted.",
+      "sources": [
+        {
+          "file": "README.md",
+          "start": 72,
+          "end": 75
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 60,
+          "end": 64
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:344",
+        "src/ve_direct/device.py:349",
+        "src/ve_direct/device.py:354",
+        "src/ve_direct/device.py:446",
+        "src/ve_direct/device.py:451",
+        "src/ve_direct/device.py:456"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_cancellation_during_write_must_also_fail_closed"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F02, covering register and command transactions. Transmission may precede completion of awaited write/drain, so cancellation in drain must leave routing disabled. The fixture queues an old response before suspending the write."
+    },
+    {
+      "id": "HEX-033",
+      "requirement": "Cancelling an unsent transaction queued behind another must not cancel or desynchronize the active transaction.",
+      "sources": [
+        {
+          "file": "README.md",
+          "start": 46,
+          "end": 47
+        },
+        {
+          "file": "README.md",
+          "start": 72,
+          "end": 75
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 9,
+          "end": 13
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:339",
+        "src/ve_direct/device.py:441"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_cancelling_a_queued_transaction_preserves_active_transaction"
+      ],
+      "disposition": "tested",
+      "notes": "Queued command is cancelled before obtaining the transaction lock; active Get and the next Ping both complete, and only those two requests are written."
+    },
+    {
+      "id": "HEX-034",
+      "requirement": "reset_hex_state re-enables requests after the caller actually resets/drains stale input.",
+      "sources": [
+        {
+          "file": "README.md",
+          "start": 72,
+          "end": 75
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 169,
+          "end": 176
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:181"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_reset_after_external_input_drain_reenables_transactions"
+      ],
+      "disposition": "tested",
+      "notes": "This test drains transport input before calling reset and therefore satisfies the documented precondition. It does not claim reset alone discards stale bytes."
+    },
+    {
+      "id": "HEX-035",
+      "requirement": "Restart must not mark response routing safe while pre-restart bytes remain buffered on the host.",
+      "sources": [
+        {
+          "file": "README.md",
+          "start": 72,
+          "end": 75
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 169,
+          "end": 176
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 51,
+          "end": 51
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 36,
+          "end": 36
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:568",
+        "src/ve_direct/device.py:570"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_restart_cannot_make_buffered_stale_replies_safe"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F03, covering a whole reply in the transport and one split between parser and transport. Restart cannot prove that stale host input is gone. Continued fail-closed state is acceptable until the caller drains/resets the link and explicitly resets routing."
+    },
+    {
+      "id": "HEX-036",
+      "requirement": "A reply must match the active register identifier and operation; unrelated Done/Get/Set traffic must not resolve it.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 66,
+          "end": 94
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 51,
+          "end": 81
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 82,
+          "end": 109
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 84,
+          "end": 113
+        },
+        {
+          "file": "README.md",
+          "start": 46,
+          "end": 47
+        },
+        {
+          "file": "README.md",
+          "start": 72,
+          "end": 75
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 9,
+          "end": 13
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:214",
+        "src/ve_direct/device.py:245"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_reply_routing_requires_operation_and_register"
+      ],
+      "disposition": "tested",
+      "notes": "Covers wrong operation, wrong id and untagged Done before a correct Get, plus Done before a correct Ping. No transaction identifier exists, so timeout ambiguity requires the separate fail-closed rules."
+    },
+    {
+      "id": "HEX-037",
+      "requirement": "Typed async_notifications must deliver an event another reader already queued without requiring additional serial bytes.",
+      "sources": [
+        {
+          "file": "README.md",
+          "start": 46,
+          "end": 47
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 9,
+          "end": 13
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 393,
+          "end": 402
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:117",
+        "src/ve_direct/device.py:427"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_async_waiting_behind_text_reader_uses_already_queued_notification"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F05: a Text reader holds the read lock while a notification consumer queues behind it. One read queues both a notification and Text. The notification consumer must recheck its queue under the lock and return without more input."
+    },
+    {
+      "id": "HEX-038",
+      "requirement": "Competing Text consumers use already queued frames, and Text consumers can resolve concurrent HEX transactions.",
+      "sources": [
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 9,
+          "end": 13
+        },
+        {
+          "file": "README.md",
+          "start": 46,
+          "end": 47
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:117",
+        "src/ve_direct/device.py:138",
+        "src/ve_direct/device.py:149",
+        "src/ve_direct/device.py:302"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_competing_text_readers_recheck_already_queued_frames",
+        "test_hex_acceptance.HexLifecycleAcceptance.test_text_consumer_can_pump_a_pending_hex_reply"
+      ],
+      "disposition": "tested",
+      "notes": ""
+    },
+    {
+      "id": "HEX-039",
+      "requirement": "Unknown raw register identifiers and their value bytes remain available through the raw request API.",
+      "sources": [
+        {
+          "file": "README.md",
+          "start": 63,
+          "end": 64
+        },
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 52,
+          "end": 59
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:362",
+        "src/ve_direct/device.py:366"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_raw_unknown_register_payload_remains_available"
+      ],
+      "disposition": "tested",
+      "notes": "The raw API is not limited to the current register database. A device may still reject an unknown id with flag 1, covered separately."
+    },
+    {
+      "id": "HEX-040",
+      "requirement": "EOF and operations on a closed transport report TransportError rather than successful protocol data.",
+      "sources": [
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 86,
+          "end": 103
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 120,
+          "end": 122
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 292,
+          "end": 294
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:93",
+        "src/ve_direct/device.py:108",
+        "src/ve_direct/device.py:326"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexLifecycleAcceptance.test_eof_and_closed_connection_are_transport_errors"
+      ],
+      "disposition": "tested",
+      "notes": "This is a client lifecycle contract, not a firmware protocol clause. The finite test covers Text/Ping EOF and a later request after close; it does not assert cancellation semantics for arbitrary third-party transport implementations."
+    },
+    {
+      "id": "HEX-041",
+      "requirement": "The serial constructor selects the specified 19200 baud rate and applies configured control-line defaults.",
+      "sources": [
+        {
+          "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+          "start": 100,
+          "end": 104
+        },
+        {
+          "file": "src/ve_direct/device.py",
+          "start": 69,
+          "end": 85
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/device.py:76"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_serial_constructor_uses_19200_and_configurable_control_lines"
+      ],
+      "disposition": "tested",
+      "notes": "This stdlib constructor test verifies baud and control-line arguments only. Actual 8N1/no-flow-control configuration and serial stream I/O are covered by the root transport acceptance tests; voltage levels and electrical behavior require hardware."
+    },
+    {
+      "id": "HEX-042",
+      "requirement": "The documented in-memory simulator must emit ProductId command replies matching the independent published examples.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1178,
+          "end": 1202
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 586,
+          "end": 616
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 322,
+          "end": 364
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 197,
+          "end": 221
+        },
+        {
+          "file": "src/ve_direct/transport.py",
+          "start": 19,
+          "end": 21
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/transport.py:211"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexClientAcceptance.test_simulator_product_id_responses_follow_command_examples"
+      ],
+      "disposition": "tested",
+      "notes": "Regression for F04: simulator command :4 replies must use the two-byte command layout, not the four-byte register 0x0100 layout. Expectations use independent published examples. Simulator setting-range/charging behavior is not claimed as device emulation."
+    },
+    {
+      "id": "HEX-043",
+      "requirement": "Metadata recognizes all product ids listed for supported MPPT/RS, Orion, Phoenix and BMV7xx families.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 96,
+          "end": 193
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 83,
+          "end": 87
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 61,
+          "end": 64
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 119,
+          "end": 191
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:195"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_catalogued_product_ids_are_available"
+      ],
+      "disposition": "tested",
+      "notes": "Checks bounded source tables directly, independent of tools/spec_parser.py. This row certifies numeric ID presence, not electrical ratings, firmware compatibility or spelling of display names. BMV600-only labels are explicitly outside the frozen BMV7xx/SmartShunt HEX scope."
+    },
+    {
+      "id": "HEX-044",
+      "requirement": "BMV600S, BMV602S and BMV600HS HEX product labels are outside the supported BMV7xx/SmartShunt HEX scope.",
+      "sources": [
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 57,
+          "end": 60
+        },
+        {
+          "file": "README.md",
+          "start": 15,
+          "end": 17
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/tables.py:195"
+      ],
+      "tests": [],
+      "disposition": "excluded",
+      "notes": "IDs 0x0200/0x0201/0x0202 are listed for earlier BMV600 devices. The frozen scope is BMV7xx/SmartShunt HEX; their absence from current HEX display metadata is not a blocker. BMV6 Text compatibility is separately reviewed in the Text ledger."
+    },
+    {
+      "id": "HEX-045",
+      "requirement": "Product catalog electrical ratings, PV-only operation, Bluetooth multiplexing, obsolete status and physical firmware compatibility describe devices.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 96,
+          "end": 205
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 83,
+          "end": 87
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 119,
+          "end": 191
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Host-side product-id recognition is HEX-043. Rated voltages/currents, night-time power availability, synchronized-network support, Bluetooth multiplexing and PID compatibility with firmware cannot be certified by host parser tests. Firmware image transfer is outside scope."
+    },
+    {
+      "id": "HEX-046",
+      "requirement": "Reserved command nibbles do not acquire invented host command semantics.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 65,
+          "end": 65
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 50,
+          "end": 50
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 79,
+          "end": 81
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 78,
+          "end": 78
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:49",
+        "src/ve_direct/hex.py:61",
+        "src/ve_direct/hex.py:75"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_direction_specific_names_and_register_envelopes",
+        "test_hex_acceptance.HexClientAcceptance.test_bmv_reserved_boot_command_is_not_transmitted"
+      ],
+      "disposition": "tested",
+      "notes": "The raw encoder can represent all nibbles for diagnostics; no high-level API for reserved operations is claimed. A response nibble may have meaning even when the same command nibble is reserved, e.g. Orion response 2."
+    },
+    {
+      "id": "HEX-047",
+      "requirement": "Every distinct valid literal in the four published message-example sections remains an executable wire fixture.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 1178,
+          "end": 1202
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 586,
+          "end": 616
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 322,
+          "end": 364
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 197,
+          "end": 221
+        }
+      ],
+      "implementation": [
+        "src/ve_direct/hex.py:177",
+        "src/ve_direct/hex.py:235"
+      ],
+      "tests": [
+        "test_hex_acceptance.HexWireAcceptance.test_every_literal_example_encodes_and_decodes"
+      ],
+      "disposition": "tested",
+      "notes": "Includes BMV invalid-setting response payload, all documented Ping/PID examples, Orion firmware read, generic Unknown, Async and framing error replies. Deliberately invalid :452 and inconsistent :30300F4 are covered in HEX-023/027. Phoenix examples use BlueSolar model/register names; they certify common wire format only, not those registers being valid on Phoenix hardware."
+    },
+    {
+      "id": "HEX-048",
+      "requirement": "Successful boot entry and firmware-header selection for PID/version are device obligations.",
+      "sources": [
+        {
+          "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+          "start": 41,
+          "end": 50
+        },
+        {
+          "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+          "start": 24,
+          "end": 35
+        },
+        {
+          "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+          "start": 52,
+          "end": 55
+        },
+        {
+          "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+          "start": 54,
+          "end": 63
+        }
+      ],
+      "implementation": [],
+      "tests": [],
+      "disposition": "device_obligation",
+      "notes": "Host request/response handling is tested separately. Tests cannot prove an actual reboot into bootloader, select a firmware image, or verify which device header was used. BMV 0xFFFF is preserved by the host PID matrix when firmware reports no previously booted valid application."
+    }
+  ],
+  "source_sections": [
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 30,
+      "end": 39,
+      "requirements": [
+        "HEX-001",
+        "HEX-002",
+        "HEX-023"
+      ],
+      "notes": "Common wire syntax, uppercase encoding, checksum and little endian."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 40,
+      "end": 65,
+      "requirements": [
+        "HEX-003",
+        "HEX-004",
+        "HEX-005",
+        "HEX-006",
+        "HEX-011",
+        "HEX-013",
+        "HEX-014",
+        "HEX-015",
+        "HEX-022",
+        "HEX-029",
+        "HEX-046",
+        "HEX-048"
+      ],
+      "notes": "Complete command table including boot, restart, Async and reserved nibbles."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 66,
+      "end": 94,
+      "requirements": [
+        "HEX-007",
+        "HEX-016",
+        "HEX-017",
+        "HEX-018",
+        "HEX-019",
+        "HEX-021",
+        "HEX-023",
+        "HEX-036"
+      ],
+      "notes": "Complete response table, firmware-type interpretation and flags."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 96,
+      "end": 205,
+      "requirements": [
+        "HEX-043",
+        "HEX-045"
+      ],
+      "notes": "Full product-id catalog and all four model/electrical notes."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 218,
+      "end": 223,
+      "requirements": [
+        "HEX-011",
+        "HEX-012"
+      ],
+      "notes": "Register 0x0100 versus command :4 clarification; register definitions are owned by the register ledger."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1153,
+      "end": 1174,
+      "requirements": [
+        "HEX-022",
+        "HEX-025",
+        "HEX-026"
+      ],
+      "notes": "All Async-version behavior and firmware-dependent Text/response scheduling."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1178,
+      "end": 1202,
+      "requirements": [
+        "HEX-002",
+        "HEX-003",
+        "HEX-004",
+        "HEX-005",
+        "HEX-006",
+        "HEX-011",
+        "HEX-013",
+        "HEX-017",
+        "HEX-018",
+        "HEX-019",
+        "HEX-022",
+        "HEX-042",
+        "HEX-047"
+      ],
+      "notes": "All message examples, including deliberately bad checksum :452."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1203,
+      "end": 1208,
+      "requirements": [
+        "HEX-025"
+      ],
+      "notes": "Text suppression/availability by firmware version."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 8,
+      "end": 22,
+      "requirements": [
+        "HEX-001",
+        "HEX-002",
+        "HEX-023",
+        "HEX-024",
+        "HEX-025"
+      ],
+      "notes": "Orion persistent Text traffic and common wire syntax."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 23,
+      "end": 50,
+      "requirements": [
+        "HEX-003",
+        "HEX-004",
+        "HEX-005",
+        "HEX-008",
+        "HEX-009",
+        "HEX-011",
+        "HEX-013",
+        "HEX-014",
+        "HEX-022",
+        "HEX-029",
+        "HEX-046",
+        "HEX-048"
+      ],
+      "notes": "Complete Orion command table."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 51,
+      "end": 81,
+      "requirements": [
+        "HEX-008",
+        "HEX-009",
+        "HEX-010",
+        "HEX-016",
+        "HEX-017",
+        "HEX-018",
+        "HEX-019",
+        "HEX-020",
+        "HEX-021",
+        "HEX-023",
+        "HEX-036"
+      ],
+      "notes": "Complete Orion response table, deprecated AppVersion note and flags."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 83,
+      "end": 87,
+      "requirements": [
+        "HEX-043",
+        "HEX-045"
+      ],
+      "notes": "Entire Orion product catalog."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 99,
+      "end": 112,
+      "requirements": [
+        "HEX-010",
+        "HEX-011",
+        "HEX-012",
+        "HEX-028"
+      ],
+      "notes": "PID register warning and 24-bit version representation; register declarations are reviewed by the register ledger."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 583,
+      "end": 585,
+      "requirements": [
+        "HEX-022"
+      ],
+      "notes": "Async format."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 586,
+      "end": 616,
+      "requirements": [
+        "HEX-002",
+        "HEX-003",
+        "HEX-004",
+        "HEX-005",
+        "HEX-008",
+        "HEX-009",
+        "HEX-010",
+        "HEX-011",
+        "HEX-013",
+        "HEX-018",
+        "HEX-020",
+        "HEX-022",
+        "HEX-027",
+        "HEX-042",
+        "HEX-047"
+      ],
+      "notes": "Every Orion message example, including conflicting Unknown checksum."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 31,
+      "end": 44,
+      "requirements": [
+        "HEX-001",
+        "HEX-002",
+        "HEX-023"
+      ],
+      "notes": "Common wire syntax and framing-error payload rule."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 45,
+      "end": 56,
+      "requirements": [
+        "HEX-005",
+        "HEX-006",
+        "HEX-011",
+        "HEX-048"
+      ],
+      "notes": "Ping/AppVersion/ProductId commands including no-valid-application sentinel."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 57,
+      "end": 60,
+      "requirements": [
+        "HEX-044"
+      ],
+      "notes": "BMV600-only IDs explicitly outside frozen BMV7xx/SmartShunt HEX scope."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 61,
+      "end": 64,
+      "requirements": [
+        "HEX-011",
+        "HEX-043"
+      ],
+      "notes": "Supported BMV7xx product IDs."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 65,
+      "end": 81,
+      "requirements": [
+        "HEX-003",
+        "HEX-004",
+        "HEX-013",
+        "HEX-015",
+        "HEX-022",
+        "HEX-046"
+      ],
+      "notes": "Restart/Get/Set/Async and reserved command 0."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 82,
+      "end": 109,
+      "requirements": [
+        "HEX-007",
+        "HEX-016",
+        "HEX-017",
+        "HEX-018",
+        "HEX-023",
+        "HEX-036"
+      ],
+      "notes": "Complete response table, version interpretation and flag definitions."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 322,
+      "end": 364,
+      "requirements": [
+        "HEX-002",
+        "HEX-003",
+        "HEX-004",
+        "HEX-005",
+        "HEX-006",
+        "HEX-011",
+        "HEX-013",
+        "HEX-017",
+        "HEX-042",
+        "HEX-047"
+      ],
+      "notes": "Every BMV example including invalid capacity request and nearest-value error response."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 365,
+      "end": 368,
+      "requirements": [
+        "HEX-025"
+      ],
+      "notes": "BMV Text suppression behavior."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 40,
+      "end": 51,
+      "requirements": [
+        "HEX-001",
+        "HEX-002",
+        "HEX-023"
+      ],
+      "notes": "Common wire syntax."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 53,
+      "end": 78,
+      "requirements": [
+        "HEX-003",
+        "HEX-004",
+        "HEX-005",
+        "HEX-006",
+        "HEX-011",
+        "HEX-013",
+        "HEX-014",
+        "HEX-022",
+        "HEX-029",
+        "HEX-046",
+        "HEX-048"
+      ],
+      "notes": "Complete Phoenix command table."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 80,
+      "end": 118,
+      "requirements": [
+        "HEX-007",
+        "HEX-016",
+        "HEX-017",
+        "HEX-018",
+        "HEX-019",
+        "HEX-021",
+        "HEX-023",
+        "HEX-036"
+      ],
+      "notes": "Complete Phoenix response/flags page including page-number formatting."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 119,
+      "end": 196,
+      "requirements": [
+        "HEX-043",
+        "HEX-045"
+      ],
+      "notes": "Entire Phoenix product-id catalog and physical model notes."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 197,
+      "end": 225,
+      "requirements": [
+        "HEX-002",
+        "HEX-003",
+        "HEX-004",
+        "HEX-005",
+        "HEX-006",
+        "HEX-011",
+        "HEX-013",
+        "HEX-017",
+        "HEX-018",
+        "HEX-019",
+        "HEX-022",
+        "HEX-042",
+        "HEX-047"
+      ],
+      "notes": "Every Phoenix message example. Examples inherited from BlueSolar only establish common framing."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 226,
+      "end": 234,
+      "requirements": [
+        "HEX-025"
+      ],
+      "notes": "Phoenix Text suppression paragraph and page-number formatting."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 34,
+      "end": 54,
+      "requirements": [
+        "HEX-024",
+        "HEX-025"
+      ],
+      "notes": "Cross-document mixed Text/HEX requirements; full source coverage remains in Text ledger."
+    },
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "start": 100,
+      "end": 104,
+      "requirements": [
+        "HEX-041"
+      ],
+      "notes": "Cross-document serial configuration; physical transport checks are in root transport acceptance."
+    }
+  ]
+}

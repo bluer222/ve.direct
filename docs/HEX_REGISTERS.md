@@ -2,7 +2,7 @@
 
 Source: Victron official docs — BlueSolar-HEX Rev 18, Orion-XS-HEX,
 Phoenix-Inverter-HEX Rev 5 and BMV-7xx-HEX Rev 7, with Text 3.34 for
-product hints. The database contains 427 names / 394 wire IDs; 14 Multi RS
+product hints. The database contains 429 names / 394 wire IDs; 14 Multi RS
 entries are observational and separately exposed as
 `EXPERIMENTAL_MULTI_RS_REGISTERS`. Unlisted IDs remain available through
 `hex_get_raw()` / `hex_set_raw()`.
@@ -13,18 +13,21 @@ Same-ID aliases: For registers sharing wire IDs with device-specific names, scal
 
 Per-flavor enum overrides share a wire ID with the generic entry but decode with family-documented value names: 0x0200/0x0201 (`ORION_DEVICE_MODE/STATE`, `INV_DEVICE_MODE/STATE` vs generic `DEVICE_MODE/STATE`), 0x031C/0x031E (`INV_WARNING/ALARM_REASON` vs generic, Phoenix Rev 5 §2.3.3 bits only), 0x034F (`BMV_RELAY_MODE` 0..2 DFLT/CHRG/REM, `INV_RELAY_MODE` without value 1; no generic entry — no official doc gives 0x034F to MPPT). A flavor-qualified lookup selects the override; no other family's decode changes.
 
+Use `flavor="MPPT_SMALL"` for 10A/15A/20A MPPT chargers without a rotary switch. Their typed `BAT_TYPE` reads and writes use the small table, where raw 1 means `type_2`. Generic `MPPT` keeps the large-model table. Phoenix `INV` selects its own `APP_VER` decoder for register `0x0102`.
+
 Flavor tags are deliberately liberal (a superset of strict doc provenance): e.g. pluggable-display 0x0401-0x0404 (BlueSolar-HEX: LCD models only), per-tracker history 0x10A0-0x10BE (BlueSolar-HEX Note 2: multi-tracker/MPPT RS only, also listed under MPPT), and generic ANY control/status IDs visible in the BMV view though absent from BMV-7xx-HEX. They are not narrowed because that would break `for_flavor()` consumers with no wire-behavior contradiction; strict provenance is tracked in `SOURCES.md`. Exceptions: 0x0400 collides (BlueSolar-HEX Display backlight mode ENUM vs BMV Rev 7 Backlight Always On BOOLEAN), so `DISPLAY_BACKLIGHT_MODE` is scoped to BlueSolar/SmartSolar MPPT + MPPT RS and only `BMV_BACKLIGHT_ALWAYS_ON` is visible to BMV/BMV71; 0x0350-0x0353 collide (BlueSolar-HEX relay battery 0.01V vs BMV Rev 7 relay 0.1V), so generic `RELAY_BAT_*` is scoped to BlueSolar/SmartSolar MPPT + MPPT RS and only `BMV_RELAY_*` is visible to BMV/BMV71.
 
-STRUCT registers decode to dict (history, timer events, voltage range, load control, network status); encode accepts the same dict (histories are read-only — pass raw bytes to encode). Sentinels decode as None: BAT_TEMPERATURE/TIME_OF_DAY/BATTERY_VOLTAGE_SENSE 0xFFFF, BATTERY_TEMPERATURE_SENSE 0x7FFF, ORION_BATTERY_VOLTAGE 0x7FFFFFFF, LOW_TEMP_CHARGE_CURRENT 0xFFFF (=use max), SETTINGS_CHANGED_TIMESTAMP 0xEC41 0xFFFFFFFF (=Invalid/no settings ever modified, BMV Rev 7 p8), BMV alarm/relay temperature 0x032A-0x032D/0x035A-0x035D 0x0000 (=disabled, valid 174..372 K); history 0xFF/0xFFFF/0xFFFFFFFF per-field. BAT_VOLTAGE 0xEDEF raw 0 decodes as None (=Auto per the shared Battery-voltage-setting values table with 0xEDEA; readback normally returns the operational voltage). BAT_TYPE tables differ per charger (see decode_bat_type(charger="small"|"large"|"rs")); the BAT_TYPE register binds BAT_TYPE_LARGE, while ENUM_MAPS["BAT_TYPE"] ({0xFF:user}) is only a back-compat stub bound to no register. YIELD_TODAY/YIELD_YESTERDAY are un32 on fw<=1.12, un16 above (BlueSolar-HEX Note 4); the DB accepts both reply widths.
+STRUCT registers decode to dict (history, timer events, voltage range, load control, network status); encode accepts the same dict (histories are read-only — pass raw bytes to encode). Sentinels decode as None: BAT_TEMPERATURE/TIME_OF_DAY/BATTERY_VOLTAGE_SENSE 0xFFFF, BATTERY_TEMPERATURE_SENSE 0x7FFF, ORION_BATTERY_VOLTAGE 0x7FFFFFFF, LOW_TEMP_CHARGE_CURRENT 0xFFFF (=use max), SETTINGS_CHANGED_TIMESTAMP 0xEC41 0xFFFFFFFF (=Invalid/no settings ever modified, BMV Rev 7 p8), BMV alarm/relay temperature 0x032A-0x032D/0x035A-0x035D 0x0000 (=disabled, valid 174..372 K); history 0xFF/0xFFFF/0xFFFFFFFF per-field. BAT_VOLTAGE 0xEDEF raw 0 decodes as None (=Auto per the shared Battery-voltage-setting values table with 0xEDEA; readback normally returns the operational voltage). BAT_TYPE tables differ per charger (see decode_bat_type(charger="small"|"large"|"rs")); generic MPPT binds BAT_TYPE_LARGE and MPPT_SMALL selects BAT_TYPE_SMALL, while ENUM_MAPS["BAT_TYPE"] ({0xFF:user}) is only a back-compat stub bound to no register. YIELD_TODAY/YIELD_YESTERDAY are un32 on fw<=1.12, un16 above (BlueSolar-HEX Note 4); the DB accepts both reply widths.
 
-Framing: ":<cmd><hex><check>\n", `(cmd+sum(data)+check)&0xFF==0x55`. Commands: ping `:154`, app-version `:352` (decode via decode_app_version), product-id `:451`, restart `:64F` (no reply), get `:7<id>00`, set `:8<id>00<val>` (e.g. `:8F0ED0064000C`), boot `:0<51FA*5>`. Replies Done/Get/Set carry flags byte (nonzero = `RegisterError`); Async `:A` queued in `dev.async_frames`. `decode_line(..., strict=True)` raises `ChecksumError`; streaming defaults to `valid=False`.
+Framing: ":<cmd><hex><check>\n", `(cmd+sum(data)+check)&0xFF==0x55`. Commands: ping `:154`, app-version `:352` (decode via decode_app_version), product-id `:451`, restart `:64F` (no reply), get `:7<id>00`, set `:8<id>00<val>` (e.g. `:8F0ED0064000C`), boot `:0<51FA*5>`. Get/Set register replies carry a flags byte (nonzero = `RegisterError`); command Done replies carry their command-specific payload; Async `:A` queued in `dev.async_frames`. `decode_line(..., strict=True)` raises `ChecksumError`; streaming defaults to `valid=False`.
 
-## Device families (Flavors, hierarchy: MPPT->CHG, MPPT_RS->MPPT, MULTI_RS->INV+MPPT_RS, BMV71->BMV, ORION->CHG)
+## Device families (Flavors, hierarchy: MPPT->CHG, MPPT_SMALL/MPPT_RS->MPPT, MULTI_RS->INV+MPPT_RS, BMV71->BMV, ORION->CHG)
 
 | Flavor | Devices | Text labels hint |
 |---|---|---|
 | ANY | All devices | PID, FW, SER# |
 | MPPT | BlueSolar / SmartSolar MPPT solar chargers (incl. CHG battery/charger regs) | V, I, VPV, PPV, CS, MPPT, H19..H23, HSDS |
+| MPPT_SMALL | 10A/15A/20A MPPT without rotary switch (incl. MPPT) | Small-model BAT_TYPE table |
 | INV | Phoenix / Smart inverters | AC_OUT_V/I/S, MODE, WARN |
 | CHG | Phoenix / Smart chargers, Smart BuckBoost | V/I per channel, MODE |
 | ORION | Orion XS DC-DC (incl. CHG) | V, I, P, DC_IN_V/I/P, CS, OR, ERR, MODE |
@@ -35,6 +38,8 @@ Framing: ":<cmd><hex><check>\n", `(cmd+sum(data)+check)&0xFF==0x55`. Commands: p
 
 In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 
+`BMV_DESCRIPTION` is String20, including its terminating NUL. Typed writes accept up to 19 ASCII characters and reject longer inputs rather than exceeding the wire width.
+
 ## hex_get — all readable registers (READ_ONLY + READ_WRITE + CONSTANT)
 
 | Name | ID | Class | Access | Type | Unit | Scale | Devices | Enum |
@@ -42,7 +47,8 @@ In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 | BLE_MODE | 0x0090 | ENUM | READ_WRITE | uint8_t | — | 1.0 | All devices | BLE_MODE |
 | PRODUCT_ID | 0x0100 | STRUCT | CONSTANT | uint32_t | — | 1.0 | All devices | PRODUCT_ID |
 | PRODUCT_REVISION | 0x0101 | STRUCT | READ_ONLY | uint24_t | — | 1.0 | All devices | PRODUCT_REVISION |
-| APP_VER | 0x0102 | STRUCT | CONSTANT | uint32_t | — | 1.0 | All devices | APP_VERSION |
+| APP_VER | 0x0102 | STRUCT | CONSTANT | uint32_t | — | 1.0 | Generic, Orion | APP_VERSION |
+| INV_APP_VER | 0x0102 | STRUCT | CONSTANT | uint32_t | — | 1.0 | Phoenix inverter | APP_VERSION_INV |
 | GROUP_ID | 0x0104 | NUMERIC | READ_ONLY | uint8_t | — | 1.0 | All devices | — |
 | SERIAL_NUMBER | 0x010A | STRING | CONSTANT | — | — | 1.0 | All devices | — |
 | MODEL_NAME | 0x010B | STRING | CONSTANT | — | — | 1.0 | All devices | — |

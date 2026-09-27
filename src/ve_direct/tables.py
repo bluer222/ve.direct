@@ -35,7 +35,7 @@ LABEL_INFO: dict[str, dict[str, str | None]] = {
     "Relay": {"unit": None, "desc": "Relay state (ON/OFF)"},
     "AR": {"unit": None, "desc": "Alarm reason (bitmask sum, decimal)"},
     "WARN": {"unit": None, "desc": "Warning reason, live (inverter only, same bits as AR)"},
-    "OR": {"unit": None, "desc": "Off reason (bitmask, decimal)"},
+    "OR": {"unit": None, "desc": "Off reason (hexadecimal bitmask)"},
     "CS": {"unit": None, "desc": "State of operation"},
     "ERR": {"unit": None, "desc": "Error code"},
     "MODE": {"unit": None, "desc": "Device mode"},
@@ -135,7 +135,7 @@ AR_MAP: dict[int, str] = {
 }
 WARN_MAP = AR_MAP
 
-# Bitmask value -> name (OR text value is decimal, compare numerically).
+# Bitmask value -> name (OR text value is hexadecimal, compare numerically).
 OR_MAP: dict[int, str] = {
     0x00000001: "No input power",
     0x00000002: "Switched off (power switch)",

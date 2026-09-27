@@ -12,7 +12,8 @@ Sources (checked online):
   itself extracted from those docs) — INV/CHG/BMV generic + RS extensions.
 - VE.Direct-Protocol-3.34 (Text) for flavor hints only.
 
-Each entry: name -> HexRegister(id, cls, access, dtype, unit, scale, flavors, enum).
+Each entry: name -> HexRegister(id, cls, access, dtype, unit, scale, flavors,
+enum, max_length). String max_length includes the terminating NUL byte.
 
 Access: READ_ONLY | READ_WRITE | CONSTANT | WRITE_ONLY (write-only:
 hex_get() raises RegisterError, hex_set()/hex_set_raw() allowed).
@@ -36,6 +37,12 @@ entry: no official doc gives 0x034F to MPPT, see note at removal site).
 A flavor-qualified lookup (or hex_get/hex_set on a flavored device)
 selects the override; unflavored lookup(int) on these IDs raises
 AmbiguousRegisterError.
+
+MPPT_SMALL inherits MPPT and selects the 10A/15A/20A battery-type table.
+The ordinary MPPT flavor retains the large rotary-switch charger table.
+Phoenix APP_VER uses its own struct decoder through INV_APP_VER; Orion keeps
+the identifier plus 24-bit version layout. Numeric 0x0102 lookup therefore
+requires a flavor, as with other family-specific aliases.
 
 Flavor policy (deliberately liberal): flavor tags are a superset of the
 strict doc provenance. Registers documented for one family stay visible
@@ -85,9 +92,11 @@ class HexRegister:
     scale: float = 1.0
     flavors: frozenset[str] = frozenset({"ANY"})
     enum: str | None = None
+    max_length: int | None = None  # Maximum STRING wire bytes, including NUL.
 
 
-def _r(name, id, cls, access, dtype="", unit="", scale=1.0, flavors=("ANY",), enum=None):
+def _r(name, id, cls, access, dtype="", unit="", scale=1.0, flavors=("ANY",), enum=None,
+       max_length=None):
     if not dtype:
         if cls == "ENUM":
             dtype = "int16_t" if id == 0xEEB8 else "uint8_t"
@@ -103,7 +112,8 @@ def _r(name, id, cls, access, dtype="", unit="", scale=1.0, flavors=("ANY",), en
             dtype = "uint16_t"
         elif id in (0xEDAB, 0x200F):
             dtype = "uint8_t"
-    return HexRegister(name, id, cls, access, dtype, unit, scale, frozenset(flavors), enum)
+    return HexRegister(name, id, cls, access, dtype, unit, scale, frozenset(flavors), enum,
+                       max_length)
 
 
 REGISTERS: dict[str, HexRegister] = {}
@@ -200,12 +210,9 @@ for _reg in [
     _r("BAT_VOLTAGE", 0xEDEF, "NUMERIC", "READ_WRITE", "uint8_t", "V", 1.0, ("CHG",)),
     _r("BAT_MAX_CURRENT", 0xEDF0, "NUMERIC", "READ_WRITE", "uint16_t", "A", 0.1, ("CHG",)),
     _r("BAT_TYPE", 0xEDF1, "ENUM", "READ_WRITE", flavors=("CHG",), enum="BAT_TYPE_LARGE"),
-    # Small-charger limitation (BlueSolar-HEX Battery-type-values table):
-    # 10A/15A/20A models (no rotary) define value 1 as TYPE_2, but there is
-    # no small-charger flavor, so this register binds the large (30A+ rotary)
-    # table where 1 is TYPE_1. Value 1 read via hex_get() on a 10/15/20A
-    # model is therefore misread as type_1 — use
-    # decode_bat_type(value, charger="small") for those models.
+    # The generic MPPT entry retains the large rotary-switch table. The
+    # MPPT_SMALL override below selects TYPE_2 for raw 1 on 10A/15A/20A
+    # models without a rotary switch.
     _r("BAT_TEMPERATURE_COMPENSATION", 0xEDF2, "NUMERIC", "READ_WRITE", "int16_t", "mV/K", 0.01, ("CHG",)),
     _r("BAT_EQUALISATION_VOLTAGE", 0xEDF4, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("CHG",)),
     # Provenance: ABSENT from the BlueSolar-HEX Rev 18 §1.1 battery-settings
@@ -510,7 +517,7 @@ for _reg in [
     _r("BMV_AUXILIARY_INPUT", 0xEEF8, "ENUM", "READ_WRITE", flavors=("BMV",), enum="BMV_AUXILIARY_INPUT"),
     _r("BMV_START_SYNCHRONIZED", 0x0FFD, "BOOLEAN", "READ_WRITE", flavors=("BMV",)),
     _r("SETTINGS_CHANGED_TIMESTAMP", 0xEC41, "NUMERIC", "READ_WRITE", "uint32_t", "s", 1.0, ("ANY",)),
-    _r("BMV_DESCRIPTION", 0x010C, "STRING", "READ_WRITE", "string", "", 1.0, ("BMV",)),
+    _r("BMV_DESCRIPTION", 0x010C, "STRING", "READ_WRITE", "string", "", 1.0, ("BMV",), max_length=20),
     _r("DEVICE_UPTIME", 0x0120, "NUMERIC", "READ_ONLY", "uint32_t", "s", 1.0, ("ANY",)),
     _r("BMV_DEEPEST_DISCHARGE", 0x0300, "NUMERIC", "READ_ONLY", "int32_t", "Ah", 0.1, ("BMV",)),
     _r("BMV_MIDPOINT_VOLTAGE", 0x0382, "NUMERIC", "READ_ONLY", "uint16_t", "V", 0.01, ("BMV",)),
@@ -535,6 +542,10 @@ _add_alias(_r("OUTPUT_POWER", 0xED8E, "NUMERIC", "READ_ONLY", "uint32_t", "W", 0
 _add_alias(_r("ORION_DEVICE_OFF_REASON", 0x0207, "BITMASK", "READ_ONLY", "uint32_t", flavors=("ORION",), enum="OFF_REASON_ORION"))
 _add_alias(_r("ORION_BAT_TYPE", 0xEDF1, "ENUM", "READ_WRITE", flavors=("ORION",), enum="BAT_TYPE_ORION"))
 _add_alias(_r("MPPT_RS_BAT_TYPE", 0xEDF1, "ENUM", "READ_WRITE", flavors=("MPPT_RS",), enum="BAT_TYPE_RS"))
+_add_alias(_r("MPPT_SMALL_BAT_TYPE", 0xEDF1, "ENUM", "READ_WRITE", flavors=("MPPT_SMALL",), enum="BAT_TYPE_SMALL"))
+# Phoenix 2.2.3 puts the minor version and software-type/major byte after
+# identifier 0, unlike Orion's 0xHHMMLL version in the same register ID.
+_add_alias(_r("INV_APP_VER", 0x0102, "STRUCT", "CONSTANT", "uint32_t", flavors=("INV",), enum="APP_VERSION_INV"))
 
 # --- Flavor-specific enum overrides (same wire ID, family-documented names).
 # A flavor-qualified lookup resolves to these instead of the generic entry,
@@ -1187,6 +1198,24 @@ def decode_app_version_register(raw: bytes) -> dict:
     return decode_app_version(b)
 
 
+def decode_inverter_app_version(raw: bytes) -> dict:
+    """Phoenix 2.2.3: identifier, minor, major with two software-type bits.
+
+    The register table specifies un32, while the detail defines only bytes
+    0..2. Accept that three-byte prefix or a four-byte value and retain the
+    unspecified fourth byte in raw rather than treating it as Orion data.
+    """
+    b = bytes(raw)
+    result = {"version": None, "type": "unknown", "raw": b.hex().upper()}
+    if len(b) not in (3, 4) or b[0] != 0:
+        return result
+    major = b[2] & 0x3F
+    result["version"] = f"{major}.{b[1]:02X}"
+    result["type"] = {0: "bootloader", 1: "application", 2: "tester",
+                      3: "release_candidate"}[b[2] >> 6]
+    return result
+
+
 def decode_product_revision(raw: bytes) -> dict:
     """Phoenix product revision: zero identifier followed by LE un16."""
     b = bytes(raw)
@@ -1238,6 +1267,7 @@ _STRUCT_DECODERS = {
     "PRODUCT_ID": decode_product_id,
     "BMV_SW_VERSION": decode_bmv_sw_version,
     "APP_VERSION": decode_app_version_register,
+    "APP_VERSION_INV": decode_inverter_app_version,
     "PRODUCT_REVISION": decode_product_revision,
     "HISTORY_TOTAL": decode_history_total,
     "HISTORY_DAY": decode_history_day,
@@ -1341,7 +1371,12 @@ def encode_value(reg: HexRegister, value: float | int | str | bool | list[str] |
     if reg.cls == "BOOLEAN":
         return bytes([1 if value else 0])
     if reg.cls == "STRING":
-        return str(value).encode("ascii") + b"\x00"
+        raw = str(value).encode("ascii") + b"\x00"
+        if reg.max_length is not None and len(raw) > reg.max_length:
+            raise ValueError(
+                f"{reg.name} allows at most {reg.max_length} ASCII bytes including the terminating NUL"
+            )
+        return raw
     if reg.cls == "STRUCT":
         kind = reg.enum or ""
         if isinstance(value, (bytes, bytearray)):
@@ -1405,10 +1440,12 @@ def encode_value(reg: HexRegister, value: float | int | str | bool | list[str] |
 
 
 # Flavor hierarchy (upstream ve_reg_flavor.h): MPPT->CHG, MPPT_RS->MPPT,
+# plus the model-specific MPPT_SMALL->MPPT extension.
 # MULTI_RS->INV+MPPT_RS, BMV71->BMV, ORION->CHG, any CHG/INV/BMV->ANY.
 _FLAVOR_EXPAND: dict[str, set[str]] = {
     "ANY": {"ANY"},
     "MPPT": {"MPPT", "CHG", "ANY"},
+    "MPPT_SMALL": {"MPPT_SMALL", "MPPT", "CHG", "ANY"},
     "CHG": {"CHG", "ANY"},
     "ORION": {"ORION", "CHG", "ANY"},
     "INV": {"INV", "ANY"},

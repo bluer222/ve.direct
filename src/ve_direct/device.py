@@ -39,6 +39,7 @@ class AsyncVEDirect:
         self._text = TextParser()
         self._register_waiter: tuple[int, int, asyncio.Future] | None = None
         self._command_waiter: tuple[int, asyncio.Future] | None = None
+        self._boot_waiter: asyncio.Future | None = None
         self._text_queue: asyncio.Queue[Frame] = asyncio.Queue()
         self.async_frames: asyncio.Queue[HexFrame] = asyncio.Queue()
         self._write_lock = asyncio.Lock()
@@ -49,9 +50,15 @@ class AsyncVEDirect:
         self._closed = False
 
     async def _do_write(self, payload: bytes) -> None:
-        res = self._write(payload)
-        if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
-            await res
+        try:
+            res = self._write(payload)
+            if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                await res
+        except (Exception, asyncio.CancelledError):
+            # A transport may send bytes before drain() fails or is cancelled.
+            # Its eventual reply cannot safely belong to a later transaction.
+            self._hex_synchronized = False
+            raise
 
     # ---- construction ----
     @classmethod
@@ -105,16 +112,19 @@ class AsyncVEDirect:
             raise TransportError("device is closed")
 
     # ---- shared read pump (single reader for the shared wire) ----
-    async def _pump_once(self, *, require_text: bool = False) -> None:
+    async def _pump_once(self, *, require_text: bool = False,
+                         require_async: bool = False) -> None:
         """Read one chunk (under the read lock), demux HEX/Text.
 
         Text frames are queued for frames()/read_one(); HEX replies resolve
         penders even when someone else drives the reads.
         """
         async with self._read_lock:
-            # Another reader may have queued Text while this coroutine waited
-            # for the lock.  Do not block on another serial read in that case.
+            # Another reader may have filled this consumer's queue while it
+            # waited for the lock. Recheck before blocking on more wire data.
             if require_text and not self._text_queue.empty():
+                return
+            if require_async and not self.async_frames.empty():
                 return
             self._check_open()
             chunk = await self._read_chunk(self._read_size)
@@ -160,6 +170,8 @@ class AsyncVEDirect:
 
     # ---- HEX ----
     def _active_future(self) -> asyncio.Future | None:
+        if self._boot_waiter is not None:
+            return self._boot_waiter
         if self._register_waiter is not None:
             return self._register_waiter[2]
         if self._command_waiter is not None:
@@ -172,20 +184,25 @@ class AsyncVEDirect:
         A timed-out request cannot be safely distinguished from a later reply
         because VE.Direct has no transaction identifier.  The client therefore
         fails closed after timeout/cancellation.  Call this only after the
-        device/link has been reset or stale input has otherwise been drained.
+        device/link has been reset and stale host input has been drained.
+        A restart command alone cannot remove buffered host input.
+        Discard partial parser state from the old connection; already queued
+        complete Text frames and notifications remain available.
         """
         fut = self._active_future()
         if fut is not None and not fut.done():
             fut.cancel()
         self._register_waiter = None
         self._command_waiter = None
+        self._boot_waiter = None
+        self._text = TextParser()
         self._hex_synchronized = True
 
     def _check_hex_synchronized(self) -> None:
         if not self._hex_synchronized:
             raise TransportError(
-                "HEX response routing is desynchronized after a timeout or "
-                "cancellation; reset the device/link, then call reset_hex_state()"
+                "HEX response routing is desynchronized; reset the device/link, "
+                "drain stale host input, then call reset_hex_state()"
             )
 
     def _handle_hex(self, frame: HexFrame) -> None:
@@ -250,6 +267,19 @@ class AsyncVEDirect:
                     f"device reports Unknown (unsupported): {frame.raw!r}"))
             return
         if frame.cmd in (_hex.CMD_ERROR, _hex.CMD_CHECKSUM_ERROR):
+            if (frame.cmd == _hex.CMD_ERROR
+                    and frame.data in (b"\x00", b"\x00\x00")):
+                # Payload zero specifically means boot entry failed. It can
+                # arrive after boot's observation window, so it must never
+                # reject a later Get, Set, Ping or other unrelated command.
+                exc = RegisterError(
+                    f"device could not enter bootloader: {frame.raw!r}")
+                fut = self._boot_waiter
+                if fut is not None and not fut.done():
+                    fut.set_exception(exc)
+                else:
+                    _LOG.warning("late or unsolicited boot failure: %s", exc)
+                return
             fut = self._active_future()
             if fut is not None and not fut.done():
                 # BlueSolar-HEX §1 / Orion-XS-HEX §1 response 4 carries two
@@ -275,12 +305,16 @@ class AsyncVEDirect:
                     # Another coroutine (e.g. frames()) is holding the read lock and pumping.
                     # Wait for fut to complete or for a data pump cycle.
                     pump_wait_task = asyncio.create_task(self._data_pumped.wait())
-                    done, _ = await asyncio.wait(
-                        [fut, pump_wait_task],
-                        timeout=0.05,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    pump_wait_task.cancel()
+                    try:
+                        await asyncio.wait(
+                            [fut, pump_wait_task],
+                            timeout=0.05,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        pump_wait_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await pump_wait_task
                     if fut.done():
                         break
                     continue
@@ -311,8 +345,8 @@ class AsyncVEDirect:
             try:
                 async with self._write_lock:
                     self._check_open()
-                    await self._do_write(payload)
                     wrote = True
+                    await self._do_write(payload)
                 return await self._wait_future(fut, timeout)
             except asyncio.TimeoutError as e:
                 self._hex_synchronized = False
@@ -397,7 +431,7 @@ class AsyncVEDirect:
             try:
                 frame = self.async_frames.get_nowait()
             except asyncio.QueueEmpty:
-                await self._pump_once()
+                await self._pump_once(require_async=True)
                 continue
             yield self.decode_async_frame(frame, flavor=flavor)
 
@@ -413,8 +447,8 @@ class AsyncVEDirect:
             try:
                 async with self._write_lock:
                     self._check_open()
-                    await self._do_write(payload)
                     wrote = True
+                    await self._do_write(payload)
                 return await self._wait_future(fut, timeout)
             except asyncio.TimeoutError as e:
                 self._hex_synchronized = False
@@ -464,62 +498,75 @@ class AsyncVEDirect:
         return _hex.decode_app_version(raw)
 
     async def get_product_id(self, timeout: float = 2.0) -> int:
-        """``:451`` — returns product id as int.
+        """``:451`` — decode the two-byte little-endian Done payload.
 
-        Primary path is the standardized 4-byte Done form (BlueSolar-HEX
-        §1.1 / Orion-XS-HEX §1.1: byte0 instance 0x00, bytes1-2 PID,
-        byte3 reserved 0xFF); malformed 4-byte payloads are rejected.
-        Legacy fallback: BlueSolar-HEX §1.1 Note 1 says product info is
-        2-byte since fw 1.12 and 4-byte only since fw 1.30, and §1.3 shows
-        2-byte Done replies (e.g. ``:1000351``). Pre-1.30 MPPTs can never
-        return the 4-byte form, so a 2-byte reply is accepted as the PID
-        for MPPT (and BMV/INV, whose specs use 2-byte LE). MPPT_RS is
-        excluded: RS content needs much newer fw than 1.30 so real RS
-        hardware can never send pre-1.30 2-byte, and §1.1 says the
-        2-byte form "should be ignored". ORION/MULTI_RS likewise excluded
-        (Orion-XS §1.1 carries the same "should be ignored" note).
+        Command :4 uses this form in every published family example,
+        including Orion XS :1F0A3C1. The four-byte instance/PID/reserved
+        layout and legacy endianness warning apply to register 0x0100,
+        not this command. No flavor is needed to interpret the reply.
         """
-        import struct as _s
         frame = await self._command_transact(
             _hex.build_product_id(), _hex.CMD_DONE, timeout)
         data = bytes(frame.data)
-        if len(data) == 4:
-            if data[0] != 0x00 or data[3] != 0xFF:
-                raise RegisterError(
-                    f"malformed 4-byte product-id reply (want 00 <PID LE> FF): "
-                    f"{frame.raw!r}")
-            return _s.unpack("<H", data[1:3])[0]
-        if len(data) == 2 and self.flavor in (
-                "BMV", "BMV71", "INV", "MPPT"):
-            return _s.unpack("<H", data)[0]
-        if len(data) == 2 and self.flavor is None:
-            raise RegisterError(
-                "2-byte product-id reply is valid for BMV/Phoenix and legacy "
-                "pre-1.30 MPPT but unsafe without a flavor; set flavor")
+        if len(data) == 2:
+            return int.from_bytes(data, "little")
         raise RegisterError(
-            f"invalid product-id reply for flavor {self.flavor!r}: {frame.raw!r}"
+            f"invalid product-id command reply, want 2 bytes: {frame.raw!r}"
         )
 
-    async def boot(self) -> None:
+    async def boot(self, timeout: float = 0.2) -> None:
         """Send the bootloader entry command (:0<51FA*5>).
 
-        Puts the device into bootloader mode for firmware updates.
-        Like restart, the device immediately reboots and sends no HEX reply.
+        Observe incoming traffic for up to ``timeout`` seconds to catch a
+        boot failure and raise RegisterError. Successful entry has no reply;
+        silence does not confirm the device's mode. Boot failures received
+        after this observation window are logged when the stream is read.
         """
         if self.flavor in ("BMV", "BMV71"):
             raise RegisterError("boot command 0 is reserved on BMV devices")
+        if timeout < 0:
+            raise ValueError("boot observation timeout must be nonnegative")
         async with self._transaction_lock:
-            async with self._write_lock:
-                self._check_open()
-                await self._do_write(_hex.build_boot())
+            self._check_hex_synchronized()
+            fut = asyncio.get_running_loop().create_future()
+            self._boot_waiter = fut
+            wrote = False
+            try:
+                async with self._write_lock:
+                    self._check_open()
+                    wrote = True
+                    await self._do_write(_hex.build_boot())
+                try:
+                    await self._wait_future(fut, timeout)
+                except asyncio.TimeoutError:
+                    # There is no success response for this command.
+                    pass
+            except asyncio.CancelledError:
+                if wrote:
+                    self._hex_synchronized = False
+                raise
+            except Exception:
+                if wrote and not fut.done():
+                    self._hex_synchronized = False
+                raise
+            finally:
+                if self._boot_waiter is fut:
+                    self._boot_waiter = None
+                if not fut.done():
+                    fut.cancel()
 
     async def restart(self) -> None:
-        """``:64F`` — restart device (no response is sent)."""
+        """Send ``:64F`` without waiting for a reply.
+
+        HEX routing stays disabled until the caller resets/drains the link
+        and calls reset_hex_state(). Restart cannot clear stale host input.
+        Text reception continues while HEX routing is disabled.
+        """
         async with self._transaction_lock:
             async with self._write_lock:
                 self._check_open()
+                self._hex_synchronized = False
                 await self._do_write(_hex.build_restart())
-            self.reset_hex_state()
 
 
 def decode_hex_value(name_or_id: str | int, raw: bytes,

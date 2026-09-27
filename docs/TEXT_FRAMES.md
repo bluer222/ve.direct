@@ -12,7 +12,7 @@ BMV/SmartShunt sends alternating PID-block + history-block. In code: frame[label
 |---|---|---|---|---|
 | PID | — | — | BMV-70x, BMV-71x/SmartShunt, MPPT, Inverter, Charger, OrionXS/BuckBoost (no BMV-60x) | Product ID (hex, e.g. 0xA04A) |
 | FW | — | — | BMV/SmartShunt (60x, 70x, 71x), MPPT, Inverter (Charger/BuckBoost use FWE) | Firmware version 16-bit (208 = v2.08, C208 = RC) |
-| FWE | — | — | Charger, OrionXS/BuckBoost | Firmware version 24-bit (e.g. 0208FF = v2.08 release) |
+| FWE | — | — | Charger, OrionXS/BuckBoost | Firmware version 24-bit, optional leading zeros (0208FF or 208FF = v2.08 release) |
 | SER# | — | — | MPPT, Inverter, Charger, OrionXS/BuckBoost | Serial number (LLYYMMSSSSS) |
 | BMV | — | — | BMV/SmartShunt | Model description (deprecated, use PID) |
 | V | mV | V ÷1000 | MPPT, Inverter, Charger, BMV/SmartShunt, OrionXS/BuckBoost | Main / channel 1 (battery) voltage |
@@ -37,7 +37,7 @@ BMV/SmartShunt sends alternating PID-block + history-block. In code: frame[label
 | Relay | — | — | MPPT, Inverter, Charger, BMV/SmartShunt | Relay state (ON/OFF) |
 | AR | — | — | BMV/SmartShunt, Inverter | Alarm reason (bitmask sum, decimal) |
 | WARN | — | — | Inverter | Warning reason, live (inverters only, same bits as AR) |
-| OR | — | — | MPPT, Inverter, OrionXS/BuckBoost | Off reason (bitmask, decimal) |
+| OR | — | — | MPPT, Inverter, OrionXS/BuckBoost | Off reason (hexadecimal bitmask, e.g. 0x00000010) |
 | CS | — | — | MPPT, Inverter, Charger, OrionXS/BuckBoost | State of operation |
 | ERR | — | — | MPPT, Charger, OrionXS/BuckBoost | Error code |
 | MODE | — | — | Inverter, Charger, OrionXS/BuckBoost | Device mode |

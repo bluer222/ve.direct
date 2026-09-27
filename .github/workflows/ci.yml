@@ -33,6 +33,9 @@ jobs:
       - name: Install package with serial extra
         run: pip install -e ".[serial]"
 
+      - name: Run frozen conformance gate
+        run: python conformance/run.py --output /tmp/ve-direct-conformance.md
+
       # Includes the live spec-freshness gate (needs network): fails when a
       # Victron doc revision, register ID set, or decoded value genuinely
       # drifts from tests/specs/*.txt. Re-uploads without content change

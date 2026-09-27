@@ -209,10 +209,9 @@ class SimulatedTransport:
                 self._pending_out += reply
             elif frame.cmd == self._hex.CMD_PRODUCT_ID and not frame.data:
                 import struct as _s
-                if self.flavor in ("BMV", "BMV71", "INV"):
-                    payload = _s.pack("<H", self.product_id)
-                else:
-                    payload = b"\x00" + _s.pack("<H", self.product_id) + b"\xFF"
+                # Command :4 has a two-byte LE PID in every family. The
+                # instance/PID/reserved structure belongs to Get 0x0100.
+                payload = _s.pack("<H", self.product_id)
                 reply = self._hex.encode_frame(
                     self._hex.CMD_DONE, payload)
                 self._pending_out += reply

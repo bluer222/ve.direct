@@ -1,0 +1,133 @@
+{
+  "scope_id": "public-host-2026-09-27",
+  "claim": "Public VE.Direct host Text reception, HEX commands and documented register codecs for the pinned document set; advertised async request and delivery contracts.",
+  "documents": [
+    {
+      "file": "tests/specs/VE.Direct-Protocol-3.34.txt",
+      "revision": "Text 3.34",
+      "url": "https://www.victronenergy.com/upload/documents/VE.Direct-Protocol-3.34.pdf",
+      "sha256": "1d309bc89c7f06863c13c735e083dd97e409ae48a2ccb9686066995285a56971",
+      "pdf_sha256": "07e2878acda139a3b6c5f7d9f99e450b1d374da5f04073c15a4c17096d3f7e0c",
+      "online_content_verified_on": "2026-09-27",
+      "comparison": "pdftotext -layout output, whitespace-normalized exact match"
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "revision": "BlueSolar HEX revision 18",
+      "url": "https://www.victronenergy.com/upload/documents/BlueSolar-HEX-protocol.pdf",
+      "sha256": "a51833d5064242c384038d7ed4c82840780a4f4c16240bcaf0ca99d4890843b9",
+      "pdf_sha256": "66db9edd2fcf939bda4d2a82e31cb16da9185b13e10ad36de95f3dcf199d60c5",
+      "online_content_verified_on": "2026-09-27",
+      "comparison": "pdftotext -layout output, whitespace-normalized exact match"
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "revision": "Orion XS initial version 2025-06-16",
+      "url": "https://www.victronenergy.com/upload/documents/Orion-XS-HEX-protocol.pdf",
+      "sha256": "ff7717524f75d29b94d4c2f136d6f28cea91ee7d52a711099465109e881bf1ff",
+      "pdf_sha256": "f3497301b4ab2340c59d414da5a4b000760ca4d27d4d9354b4256a608cebeebc",
+      "online_content_verified_on": "2026-09-27",
+      "comparison": "pdftotext -layout output, whitespace-normalized exact match"
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "revision": "BMV HEX revision 7",
+      "url": "https://www.victronenergy.com/upload/documents/BMV-7xx-HEX-Protocol.pdf",
+      "sha256": "359267eb1951583731e794ae30d2a6aa3b851fcbb748b375c6450b21fcf42314",
+      "pdf_sha256": "54e4d7bd45fc1d07a66703782ff1860d1ea5495416ea94590ec1fe03f83ba7b1",
+      "online_content_verified_on": "2026-09-27",
+      "comparison": "pdftotext -layout output, whitespace-normalized exact match"
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "revision": "Phoenix HEX revision 5",
+      "url": "https://www.victronenergy.com/upload/documents/VE.Direct-HEX-Protocol-Phoenix-Inverter.pdf",
+      "sha256": "e0645ca97fa2f6b4974f841f5ec53e9b34520294c965e77c41cf5ba1c03304f8",
+      "pdf_sha256": "0c6e5b2cd0940ac632bdf5ac498aa9693f5835fcdc3cf3aefe4368dc9ab456e1",
+      "online_content_verified_on": "2026-09-27",
+      "comparison": "pdftotext -layout output, whitespace-normalized exact match"
+    }
+  ],
+  "exclusions": [
+    "Electrical correctness and physical device timing",
+    "Device firmware enforcement of setting ranges, persistence, charging algorithms and register availability",
+    "Firmware image transfer, private bootloader commands, VE.Can framing",
+    "Undocumented and experimental Multi RS register meanings",
+    "Optional convenience automation such as scheduled external-control keepalives"
+  ],
+  "source_exclusions": [
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1,
+      "end": 29,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Title, contents and publisher contact information."
+    },
+    {
+      "file": "tests/specs/BlueSolar-HEX-protocol.txt",
+      "start": 1209,
+      "end": 1418,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Revision history; current requirements are reviewed in the normative body."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 1,
+      "end": 7,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Title and table of contents."
+    },
+    {
+      "file": "tests/specs/Orion-XS-HEX-protocol.txt",
+      "start": 617,
+      "end": 621,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Revision history."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 1,
+      "end": 30,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Title, contents and publisher contact information."
+    },
+    {
+      "file": "tests/specs/BMV-7xx-HEX-Protocol.txt",
+      "start": 369,
+      "end": 397,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Revision history; current requirements are reviewed in the normative body."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 1,
+      "end": 39,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Title, contents and publisher contact information."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 629,
+      "end": 656,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Revision history; current requirements are reviewed in the normative body."
+    },
+    {
+      "file": "tests/specs/VE.Direct-HEX-Protocol-Phoenix-Inverter.txt",
+      "start": 628,
+      "end": 628,
+      "disposition": "excluded",
+      "requirements": [],
+      "notes": "Printed page number 16; not a protocol requirement."
+    }
+  ],
+  "requirement_inventory_sha256": "2b6de534e3c11a1e90dbaf1aea5e65e61e1a9374d7579c4263ec3acc224eec4d"
+}
