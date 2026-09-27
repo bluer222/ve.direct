@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Weekly Victron doc watch: the suite's spec-freshness gate downloads
+    # the five official PDFs and fails on real revisions, so a green
+    # scheduled run means the snapshots (and the code) are still current.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the floor claimed in pyproject.toml; 3.14 is the dev env.
+        python-version: ["3.9", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # pdftotext enables the full-text spec content gate in
+      # tests/test_spec_parsers.py; without it that stage skips loudly.
+      - name: Install poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
+      - name: Install package with serial extra
+        run: pip install -e ".[serial]"
+
+      # Includes the live spec-freshness gate (needs network): fails when a
+      # Victron doc revision, register ID set, or decoded value genuinely
+      # drifts from tests/specs/*.txt. Re-uploads without content change
+      # stay green by design (content-based, not header-based).
+      - name: Run test suite
+        run: python -m unittest discover -s tests
