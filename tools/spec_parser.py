@@ -209,8 +209,21 @@ def _extract_sentinel_annotations(*cells: Optional[str]) -> Set[int]:
 #: no "0XHHHH"/"XHHHH" occurrence in any current snapshot, so no prose
 #: false positives; a future uppercase row is now rescued instead of
 #: missed by both sides while counts stay green.
-_ID_TOKEN_RE = re.compile(r"^0[xX][0-9A-Fa-f]{4}$")
-_ID_TOKEN_BARE_X_RE = re.compile(r"^[xX][0-9A-Fa-f]{4}$")
+#: Exact 3/4-hex bound (``{3,4}``): a 3-hex ID (e.g. future "0xABC") is a
+#: VALID 16-bit ID with leading zeros omitted (0xABC == 0x0ABC, packable as
+#: "<H" — unlike the pinned-impossible 5-hex at
+#: test_hex_register_id_16bit_bound_pinned), so typed table rows, section
+#: pre-filters, BMV/Phoenix loops, and detail mentions accept it wherever
+#: the table-row guards below already apply (dtype anchors for typed rows,
+#: history-region context for ID-only rows, "register(s) 0x..." for detail
+#: prose — bare "(0xABC)" hex without those guards never matches here).
+#: The ``^...$`` token anchors keep the exact bound (a 5-hex token never
+#: prefix-matches). Zero-diff: the only 3-hex tokens in any snapshot are
+#: BlueSolar "0x200x" (placeholder; detail path already owns 0x0200) and
+#: "0x300" product prose (no dtype tail, "=" guard, non-table — all paths
+#: below still exclude it; verified no new parsed IDs).
+_ID_TOKEN_RE = re.compile(r"^0[xX][0-9A-Fa-f]{3,4}$")
+_ID_TOKEN_BARE_X_RE = re.compile(r"^[xX][0-9A-Fa-f]{3,4}$")
 
 #: Split-typo ID "0x HHHH" (space inside the token, cf. the "0 xHHHH"
 #: spaced typo and the "xHHHH" missing-0 typo): after whitespace-splitting
@@ -224,8 +237,11 @@ _ID_TOKEN_BARE_X_RE = re.compile(r"^[xX][0-9A-Fa-f]{4}$")
 #: rescued instead of missed by all sides. Prose "(register 0x...)"
 #: mentions and ".." range headers keep the glued shape (pinned by the
 #: typo-evidence test); only single-row table paths rescue the split form.
+#: Second run accepts 3-4 hex (``{3,4}``): a split "0x ABC" for 0xABC is the
+#: same leading-zero-omitted valid ID as above; zero-diff (no snapshot
+#: "0x HHH" occurrence, verified).
 _ID_TOKEN_SPLIT_PREFIXES = ("0x", "0X")
-_HEX4_RE = re.compile(r"^[0-9A-Fa-f]{4}$")
+_HEX4_RE = re.compile(r"^[0-9A-Fa-f]{3,4}$")
 
 #: Mid-token split "0xED E0" (layout glitch splitting the hex run itself,
 #: cf. the "0x HHHH" prefix split above): after whitespace-splitting this
@@ -242,8 +258,16 @@ _HEX4_RE = re.compile(r"^[0-9A-Fa-f]{4}$")
 #: fix; enforced on the raw line since token-split collapses gaps; probe
 #: ``0xED\tE0`` was likewise missed before its rescue), runs of 1-3 hex
 #: digits each rejoining to
-#: exactly 4, line-leading table-row shape, and the scale/dtype anchors
+#: exactly 3-4 (4 for current "0xED E0" docs, 3 for a leading-zero-omitted
+#: "0xA BC" future row — same valid-ID justification as _ID_TOKEN_RE
+#: above), line-leading table-row shape, and the scale/dtype anchors
 #: below as the table-row guard (prose never carries a dtype tail).
+#: Dtype-LESS history rows ("0xED E0 Future history record", no scale/dtype
+#: columns) need a different guard and are rescued separately in the
+#: BlueSolar/Orion history ID-only handlers plus both test-side scrapers
+#: and the live matcher (history-region context there, same as the
+#: existing ID-only handling — this typed path still requires its
+#: scale/dtype anchors and keeps missing them by design).
 #: Verified zero-diff: no "0xHH HHHH" mid-split occurrence in any current
 #: snapshot (single- or double-spaced — verified zero ``\s+`` rejoin-4 hits
 #: with a dtype tail — and no tab-split IDs — verified zero ``\t`` in ID
@@ -307,7 +331,44 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
         return None
     idtok = tokens[0]
     typo = False
-    if _ID_TOKEN_RE.match(idtok):
+    if _ID_TOKEN_RE.match(idtok) and len(idtok) == 6:
+        # Glued 4-hex ID (unambiguous: a 4-hex token can never be a
+        # mid-split head, whose run after 0x is 1-3 hex — checked first so
+        # the normal form keeps priority where no ambiguity exists).
+        rid = int(idtok, 16)
+        rest = tokens[1:]
+    elif (
+        len(tokens) >= 4
+        and _MID_SPLIT_HEAD_RE.match(idtok)
+        and _MID_SPLIT_TAIL_RE.match(tokens[1])
+        and len(idtok[2:]) + len(tokens[1]) in (3, 4)
+        and _MID_SPLIT_LINE_RE.search(line)
+    ):
+        # Layout glitch splitting the hex run itself ("0xED E0" for
+        # 0xEDE0, double-space "0xED  E0" and tab ``0xED\tE0`` same): two
+        # tokens rejoining to 3-4 hex digits. Checked BEFORE the glued
+        # 3-hex form below: "0xEDE 0 ..." is ambiguous (0x0EDE + desc "0"
+        # vs mid-split 0xEDE0), and the established variant probes pin the
+        # mid-split reading ("0xE DE0", "0xEDE 0" rescue as 0xEDE0), so the
+        # split reading wins when the tail is pure hex. A genuine 3-hex
+        # row whose description starts with a 1-3-hex token would
+        # mis-rescue here instead (no snapshot row does — verified zero
+        # 3-hex typed rows — so the ambiguity is future-only and pinned by
+        # the variant test). ``\s+`` in
+        # _MID_SPLIT_LINE_RE is the shape (space/tab/column-gap all rescue;
+        # token-split collapses gaps, so the raw-line check plus the rejoin
+        # keep the rescue to true mid-token splits). The
+        # scale/dtype anchors below are the table-row guard: prose never
+        # reaches here with a dtype tail. Typo-flagged like the prefix
+        # rescues; the remainder starts at tokens[2:].
+        rid = int(idtok[2:] + tokens[1], 16)
+        typo = True
+        rest = tokens[2:]
+    elif _ID_TOKEN_RE.match(idtok):
+        # Glued 3-hex ID (leading zeros omitted — valid 16-bit ID, same
+        # justification as above; reached only when the mid-split shape
+        # above misses, e.g. "0xABC Future ..." whose second token is not
+        # pure hex).
         rid = int(idtok, 16)
         rest = tokens[1:]
     elif allow_bare_x_prefix and _ID_TOKEN_BARE_X_RE.match(idtok):
@@ -326,25 +387,6 @@ def _split_typed_row(line: str, allow_bare_x_prefix: bool = False, unknown_sink:
         # single-token rescues above never fire; the remainder starts at
         # tokens[2:]. Typo-flagged like the xEDE0 rescue.
         rid = int(tokens[1], 16)
-        typo = True
-        rest = tokens[2:]
-    elif (
-        len(tokens) >= 4
-        and _MID_SPLIT_HEAD_RE.match(idtok)
-        and _MID_SPLIT_TAIL_RE.match(tokens[1])
-        and len(idtok[2:]) + len(tokens[1]) == 4
-        and _MID_SPLIT_LINE_RE.search(line)
-    ):
-        # Layout glitch splitting the hex run itself ("0xED E0" for
-        # 0xEDE0, double-space "0xED  E0" and tab ``0xED\tE0`` same): two
-        # tokens rejoining to exactly 4 hex digits. ``\s+`` in
-        # _MID_SPLIT_LINE_RE is the shape (space/tab/column-gap all rescue;
-        # token-split collapses gaps, so the raw-line check plus the exact-4
-        # rejoin keep the rescue to true mid-token splits). The
-        # scale/dtype anchors below are the table-row guard: prose never
-        # reaches here with a dtype tail. Typo-flagged like the prefix
-        # rescues; the remainder starts at tokens[2:].
-        rid = int(idtok[2:] + tokens[1], 16)
         typo = True
         rest = tokens[2:]
     else:
@@ -499,7 +541,7 @@ class BlueSolarHEXParser:
             # bare-x line-start in the BlueSolar snapshot (verified), so no
             # prose false positives; the 0x prose-note guards below are
             # unaffected (bare-x lines never match them).
-            if not re.match(r"^\s*(?:0[xX](?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,3} [0-9A-Fa-f]{1,3}|\s+[0-9A-Fa-f]{4})|[xX][0-9A-Fa-f]{4})\b", line):
+            if not re.match(r"^\s*(?:0[xX](?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{1,3} [0-9A-Fa-f]{1,3}|\s+[0-9A-Fa-f]{3,4})|[xX][0-9A-Fa-f]{3,4})\b", line):
                 continue
             # Skip known prose-note lines that happen to start with a
             # register-looking ID. Each pattern is anchored to its exact note
@@ -603,9 +645,11 @@ class BlueSolarHEXParser:
             # §1 ":7F0ED0071"), so a 5-hex-digit endpoint is
             # protocol-impossible and must not prefix-expand a range (a
             # "0x12345..0x12346" line yields nothing instead of silently
-            # expanding 0x1234..0x1234). Zero-diff: no snapshot range
-            # endpoint carries 5+ hex digits (verified).
-            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", line):
+            # expanding 0x1234..0x1234). Endpoints accept 3-4 hex (a 3-hex
+            # endpoint is the same valid omitted-zero ID as _ID_TOKEN_RE).
+            # Zero-diff: no snapshot range
+            # endpoint carries 3-hex or 5+ hex digits (verified).
+            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", line):
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
                 # Only register-listing contexts (history/timer/cycle/vreg
                 # headers); never settings Range columns.
@@ -669,11 +713,11 @@ class BlueSolarHEXParser:
                             source="BlueSolar-HEX",
                             notes=f"range-expanded decimal {a}..{b}; byte-field layout, no single wire type",
                         )
-            m = re.match(r"^\s*0[xX]([0-9A-Fa-f]{4})\s*\.\.\.\s*$", line)
+            m = re.match(r"^\s*0[xX]([0-9A-Fa-f]{3,4})\s*\.\.\.\s*$", line)
             if m:
                 a = int(m.group(1), 16)
                 for j in range(i + 1, min(i + 4, len(lines))):
-                    m2 = re.match(r"^\s*0[xX]([0-9A-Fa-f]{4})\s*$", lines[j])
+                    m2 = re.match(r"^\s*0[xX]([0-9A-Fa-f]{3,4})\s*$", lines[j])
                     if m2:
                         b = int(m2.group(1), 16)
                         kind = "Timer event" if 0xEDA0 <= a <= b <= 0xEDA5 else "History record"
@@ -733,13 +777,13 @@ class BlueSolarHEXParser:
         inherit scale/dtype/unit from the referenced base register."""
         for line in self.text.splitlines():
             m = re.match(
-                r"^\s*([A-Za-z][A-Za-z0-9 _\-/()]*?)\(see\s+(0[xX][0-9A-Fa-f]{4})\)\s+((?:0[xX][0-9A-Fa-f]{4}\s*)+)\s*$",
+                r"^\s*([A-Za-z][A-Za-z0-9 _\-/()]*?)\(see\s+(0[xX][0-9A-Fa-f]{3,4})\)\s+((?:0[xX][0-9A-Fa-f]{3,4}\s*)+)\s*$",
                 line,
             )
             if not m:
                 continue
             base_id = int(m.group(2), 16)
-            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}", m.group(3))]
+            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{3,4}", m.group(3))]
             base = regs.get(base_id)
             for idx, rid in enumerate(ids, start=1):
                 if rid in regs:
@@ -806,8 +850,28 @@ class BlueSolarHEXParser:
             # with a symbol (verified — every such line starts with a
             # letter or is a "..." range), so only letter-start rows match
             # today and all are already parsed (rid-in-regs skips them).
-            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+(\S.*?)\s*$", line)
+            # Mid-token split dtype-LESS rows ("0xED E0 Future history
+            # record", layout glitch splitting the hex run with NO
+            # scale/dtype columns): the typed _split_typed_row rescue above
+            # requires its scale/dtype anchors and keeps missing them while
+            # counts stay green (reproduced synthetically before the fix:
+            # BlueSolar parser + both scrapers + live matcher all missed
+            # the probe while the "0x EDF0" prefix control parsed). Third
+            # alternative below rejoins 1-3+1-3 hex runs to 3-4 (same
+            # valid-ID justification as _ID_TOKEN_RE) with the history
+            # REGION itself as the table-row guard (mirroring how dtype-less
+            # rows are recognized at all: this loop scans ONLY the history
+            # region, and prose "(register 0xED E0)" mentions live outside
+            # it — plus the ... / .. / | / = skips, device-word guard, and
+            # DOC_TYPO/rid-in-regs below). Zero-diff: no snapshot
+            # history-region line matches the mid-split shape (verified).
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{3,4}|\s+[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{1,3}\s+[0-9A-Fa-f]{1,3}))\s+(\S.*?)\s*$", line)
             dm = None
+            if m and len(m.group(1).replace(" ", "")[2:]) not in (3, 4):
+                # Mid-split runs rejoining to other than 3-4 hex digits
+                # (e.g. "0x1 2"): not a valid ID shape — fall through to
+                # the decimal branch below (which misses it too, by design).
+                m = None
             if m:
                 rid = int(m.group(1).replace(" ", ""), 16)
                 desc = m.group(2).strip()
@@ -867,14 +931,29 @@ class BlueSolarHEXParser:
                 # same as the spaced ``60961 = Future`` control — loud, not
                 # agreed-missing). Zero-diff: no snapshot history-region
                 # line carries ``,``/``:``/``;``/``=`` after its decimal ID
-                # (verified), so current rows parse identically. ``-`` NOT
-                # accepted (pinned): hyphen is the decimal-range separator
-                # (``60961-60999``), so ``60961- Future`` would be
-                # range-ambiguous; a hyphen-spelled ID row stays missed on
-                # all sides by design. Year guard
+                # (verified), so current rows parse identically.
+                # Trailing-hyphen separator (probe ``60961- Future history
+                # record``: hyphen followed by SPACE, no second number —
+                # unambiguous, unlike the ``60961-60999`` range where the
+                # hyphen is followed by digits): missed by parsers + scans
+                # (``[\s,;:=]+`` excludes ``-``) while counts stayed green —
+                # reproduced synthetically before the fix. The separator
+                # below accepts ``-\s+`` (hyphen + whitespace) alongside the
+                # existing class, so the hyphen-spelled row parses honestly
+                # on every side. Shape guards (explicit, justified):
+                # ``-\s+`` requires whitespace AFTER the hyphen, so
+                # ``60961-60999`` (hyphen + digits) still misses the ID-row
+                # shape and still expands via the decimal-range branches;
+                # ``--`` never matches (second hyphen is not ``\s``);
+                # hyphenated dates (``15-11-2021``, ``2021-09-06``) miss it
+                # (``-`` after digits is followed by digits, not space);
+                # bare years miss it (no description). Zero-diff: no
+                # snapshot history-region line carries a trailing hyphen
+                # after its decimal ID (verified), so current rows parse
+                # identically. Year guard
                 # below (``rid <= 255`` + region scoping) still excludes
                 # ``2021, ...`` prose outside regions (verified).
-                dm = re.match(r"^\s*(\d{3,7})[\s,;:=]+(\S.*?)\s*$", line)
+                dm = re.match(r"^\s*(\d{3,7})(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
@@ -901,17 +980,24 @@ class BlueSolarHEXParser:
     def _parse_detail_mentions(self, regs: Dict[int, ParsedRegister]) -> None:
         """Collect IDs referenced as ``(register 0xXXXX)`` detail headers so
         nothing described outside the 1.1 table is silently dropped."""
-        # Exact-4 bound on every ID (outer and inner): the HEX Get/Set
+        # Exact-3/4 bound on every ID (outer and inner): the HEX Get/Set
         # framing carries the register ID as a 2-byte little-endian field
         # (src/ve_direct/hex.py "<H"; BlueSolar-HEX §1 ":7F0ED0071"), so a
         # 5-hex-digit mention is protocol-impossible and must not
-        # prefix-collect ``0x1234`` out of "register 0x12345". Zero-diff:
-        # no snapshot detail mention carries 5+ hex digits (verified).
+        # prefix-collect ``0x1234`` out of "register 0x12345" (the
+        # ``(?![0-9A-Fa-f])`` bound rejects it on both widths — backtracking
+        # from 4 to 3 still lands on a hex char, so no prefix-catch).
+        # A 3-hex mention ("register 0xABC") is a valid leading-zero-omitted
+        # ID (same justification as _ID_TOKEN_RE) and is collected honestly
+        # here instead of missed while the live matcher rescues it. Zero-diff:
+        # no snapshot detail mention carries 3-hex (verified — the only
+        # 3-hex snapshot tokens are non-"register" product prose) or 5+ hex
+        # digits (verified).
         for m in re.finditer(
-            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f]))*",
+            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{3,4}(?![0-9A-Fa-f])(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{3,4}(?![0-9A-Fa-f]))*",
             self.text,
         ):
-            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])", m.group(0))]
+            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{3,4}(?![0-9A-Fa-f])", m.group(0))]
             for rid in ids:
                 if rid in regs or rid in DOC_TYPO_REGISTER_IDS:
                     continue
@@ -1038,11 +1124,12 @@ class OrionXSHEXParser:
     def _parse_id_ranges(self, regs: Dict[int, ParsedRegister]) -> None:
         """Expand inline ``0x1070..0x1098`` cycle-history ranges."""
         for line in self.text.splitlines():
-            # Exact-4 bound on both endpoints (same protocol justification
+            # Exact-3/4 bound on both endpoints (same protocol justification
             # as the BlueSolar branch: 2-byte LE ID field, so a 5-hex-digit
-            # endpoint is impossible and must not prefix-expand).
-            # Zero-diff: no snapshot range endpoint carries 5+ hex digits.
-            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", line):
+            # endpoint is impossible and must not prefix-expand; a 3-hex
+            # endpoint is a valid omitted-zero ID).
+            # Zero-diff: no snapshot range endpoint carries 3-hex or 5+ hex digits.
+            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", line):
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
                 if not re.search(r"[Rr]egister|history|History|Cycle", line):
                     continue
@@ -1116,8 +1203,15 @@ class OrionXSHEXParser:
             # widening as the BlueSolar handler (same justification and
             # zero-diff there: no snapshot history-region ID-only line
             # starts with a symbol).
-            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{4}|\s+[0-9A-Fa-f]{4}))\s+(\S.*?)\s*$", line)
+            # Mid-token split dtype-LESS rows (same rescue/justification as
+            # the BlueSolar handler above: "0xED E0 Future history record"
+            # missed by the typed rescue's scale/dtype anchors on every
+            # side while the "0x EDF0" prefix control parsed — history
+            # region itself is the table-row guard; zero-diff verified).
+            m = re.match(r"^\s*(0[xX](?:[0-9A-Fa-f]{3,4}|\s+[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{1,3}\s+[0-9A-Fa-f]{1,3}))\s+(\S.*?)\s*$", line)
             dm = None
+            if m and len(m.group(1).replace(" ", "")[2:]) not in (3, 4):
+                m = None
             if m:
                 rid = int(m.group(1).replace(" ", ""), 16)
                 desc = m.group(2).strip()
@@ -1139,10 +1233,11 @@ class OrionXSHEXParser:
                 # well as whitespace (same justification/pin as the BlueSolar
                 # handler above: ``,``/``:``/``;`` honest pass, spaceless
                 # ``=`` diverges via the ``"=" in line`` skip like the spaced
-                # control, ``-`` range-ambiguous pinned missed; zero-diff no
-                # snapshot history-region ``,``/``:``/``;``/``=`` after
-                # decimal ID).
-                dm = re.match(r"^\s*(\d{3,7})[\s,;:=]+(\S.*?)\s*$", line)
+                # control; trailing-hyphen ``60961- Future`` honest pass via
+                # ``-\s+`` there — hyphen+digits stays the range shape;
+                # zero-diff no snapshot history-region trailing hyphen after
+                # decimal ID, verified).
+                dm = re.match(r"^\s*(\d{3,7})(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
@@ -1177,15 +1272,17 @@ class OrionXSHEXParser:
         if hist_start < 0:
             hist_start = self.text.find("Historical data")
         remote_start = self.text.find("Remote control")
-        # Exact-4 bound on every ID (outer and inner): same protocol
+        # Exact-3/4 bound on every ID (outer and inner): same protocol
         # justification as the BlueSolar detail handler above (2-byte LE ID
         # field — a 5-hex-digit mention is impossible and must not
-        # prefix-collect). Zero-diff: no snapshot mention carries 5+ hex.
+        # prefix-collect; a 3-hex mention is a valid omitted-zero ID and is
+        # collected honestly). Zero-diff: no snapshot mention carries 3-hex
+        # or 5+ hex (verified).
         for m in re.finditer(
-            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f]))*",
+            r"[Rr]egisters?\s+0[xX][0-9A-Fa-f]{3,4}(?![0-9A-Fa-f])(?:\s*(?:and/or|and|or|/|,|\.\.)\s*0[xX][0-9A-Fa-f]{3,4}(?![0-9A-Fa-f]))*",
             self.text,
         ):
-            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{4}(?![0-9A-Fa-f])", m.group(0))]
+            ids = [int(x, 16) for x in re.findall(r"0[xX][0-9A-Fa-f]{3,4}(?![0-9A-Fa-f])", m.group(0))]
             # Inline ".." ranges inside mentions are expanded by
             # _parse_id_ranges; keep only single IDs here.
             if ".." in m.group(0) or "..." in m.group(0):
@@ -1360,14 +1457,14 @@ class BMV7xxHEXParser:
             # Mid-token split ("0xED E0" for 0xEDE0, see
             # _MID_SPLIT_LINE_RE): rejoin the two hex runs so the column
             # math below is unchanged. ``\s+`` covers single/double-space
-            # and tab splits (the rejoin-4 plus dtype/dash anchors below are
+            # and tab splits (the rejoin-3/4 plus dtype/dash anchors below are
             # the table-row guard). Zero-diff: no snapshot line
             # matches (verified).
             if (
                 len(tokens) >= 4
                 and _MID_SPLIT_HEAD_RE.match(tokens[0])
                 and _MID_SPLIT_TAIL_RE.match(tokens[1])
-                and len(tokens[0][2:]) + len(tokens[1]) == 4
+                and len(tokens[0][2:]) + len(tokens[1]) in (3, 4)
                 and _MID_SPLIT_LINE_RE.search(line)
             ):
                 tokens = [tokens[0] + tokens[1]] + tokens[2:]
@@ -1796,18 +1893,18 @@ class PhoenixInverterHEXParser:
             # Mid-token split ("0xED E0" for 0xEDE0, see
             # _MID_SPLIT_LINE_RE): rejoin the two hex runs so the column
             # math below is unchanged. ``\s+`` covers single/double-space
-            # and tab splits (the rejoin-4 plus VE_REG_/access columns below
+            # and tab splits (the rejoin-3/4 plus VE_REG_/access columns below
             # are the table-row guard). Zero-diff: no
             # snapshot line matches (verified).
             if (
                 len(tokens) >= 4
                 and _MID_SPLIT_HEAD_RE.match(tokens[0])
                 and _MID_SPLIT_TAIL_RE.match(tokens[1])
-                and len(tokens[0][2:]) + len(tokens[1]) == 4
+                and len(tokens[0][2:]) + len(tokens[1]) in (3, 4)
                 and _MID_SPLIT_LINE_RE.search(line)
             ):
                 tokens = [tokens[0] + tokens[1]] + tokens[2:]
-            if len(tokens) < 3 or not re.fullmatch(r"0[xX][0-9A-Fa-f]{4}", tokens[0]):
+            if len(tokens) < 3 or not re.fullmatch(r"0[xX][0-9A-Fa-f]{3,4}", tokens[0]):
                 continue
 
             rid = int(tokens[0], 16)

@@ -224,9 +224,23 @@ def scrape_spaced_label_candidates(section: str) -> set[str]:
     for line in section.splitlines():
         if line.strip() in TEXT_FIELD_FURNITURE_LINES:
             continue
-        m = re.match(r"^\s*(\S+ \S+)\s{2,}", line)
+        # Interior separator is ``\s`` (space OR tab), not a literal space:
+        # probe ``V\\tPV  mV  Future spaced label`` (single tab between the
+        # label words, 2+-space column gap after) was missed by the literal-
+        # space pattern while the space control ``V PV`` recorded loudly and
+        # the counter/parser stayed green at {'V'}/63 (reproduced
+        # synthetically before the fix). The candidate normalizes interior
+        # whitespace to one space so tab- and space-spelled collisions share
+        # the same name (``V PV``). Zero-diff: no snapshot section line
+        # carries a tab at all (verified zero ``\\t``), and no snapshot line
+        # carries two tokens before a column gap, so the widened shape adds
+        # no hits. The parser still drops the tab-spelled line (labels are
+        # single-token; its ``(\\S+)\\s{2,}`` never spans the interior tab),
+        # so the probe diverges as candidates − parsed − flagged = {"V PV"}
+        # (loud, same as the space control) instead of agreed-missing.
+        m = re.match(r"^\s*(\S+\s\S+)\s{2,}", line)
         if m and m.group(1).split()[0] not in _deny:
-            found.add(m.group(1))
+            found.add(" ".join(m.group(1).split()))
     return found
 
 
@@ -256,24 +270,65 @@ def scrape_doc_ids(text: str) -> set[int]:
     token-level rescue) is rescued here too (``0[xX]\\s+HHHH``): after
     whitespace-splitting the parser sees two tokens, so a glued-only
     scraper would miss the same future split row the parser now rescues.
-    Verified zero-diff: no ``0x HHHH`` occurrence in any current snapshot."""
-    ids = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{4})\b", text)}
-    for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", text):
+    Verified zero-diff: no ``0x HHHH`` occurrence in any current snapshot.
+    Exact 3/4-hex bound (``{3,4}`` with ``(?![0-9A-Fa-f])``): a 3-hex ID
+    (e.g. future "0xABC") is a VALID 16-bit ID with leading zeros omitted
+    (0xABC == 0x0ABC, packable as "<H" — unlike the pinned-impossible 5-hex
+    at test_hex_register_id_16bit_bound_pinned), so the glued, split-typo,
+    mid-split (rejoin 3-4), bare-x, and range rescues below all accept it
+    wherever the parser does (typed rows via dtype anchors, history rows
+    via the history-region rescue, detail prose via "register(s) 0x...").
+    The strict bound keeps 5-hex impossible on both widths (backtracking
+    from 4 to 3 still lands on a hex char, so "0x12345" yields nothing,
+    never a "0x1234"/"0x123" prefix-catch). Zero-diff: the only 3-hex
+    snapshot tokens are BlueSolar "0x200x" (== already-parsed 0x0200,
+    honest agreement) and "0x300" product prose (== denylisted 0x0300 on
+    BlueSolar; newly scraped on Phoenix — excused by the 0x0300 denylist
+    entry there, same product-ID justification); verified no new
+    uncovered IDs."""
+    ids = {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", text)}
+    for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", text):
         ids.add(int(m.group(1), 16))
     # Mid-token split rescue ("0xED E0" for 0xEDE0, layout glitch splitting
     # the hex run itself): line-leading table-row shape plus a dtype tail on
     # the same line (prose never carries a dtype token), runs of 1-3 hex
-    # digits each rejoining to exactly 4 with one or more whitespace chars
+    # digits each rejoining to 3-4 (4 for current docs, 3 for a
+    # leading-zero-omitted future row — same valid-ID justification as the
+    # glued bound above) with one or more whitespace chars
     # (``\s+``: single/double-space or tab — a lone ``\s`` missed "0xED  E0"
     # while the single-space control hit on all four sides — reproduced
     # before the fix). Verified zero-diff: no snapshot line matches, so no
     # prose false positives.
+    # Dtype-LESS mid-split rescue (probe "0xED E0 Future history record" in
+    # a history region, no scale/dtype columns): the dtype tail above never
+    # fires while the parser's history ID-only handler (same region scope)
+    # would also miss it — all sides green while a row is missed
+    # (reproduced synthetically before the fix). Guard mirrors how
+    # dtype-less rows are recognized at all: HISTORY-REGION context only
+    # ("Restore factory defaults"/"History data" .. "1.2 Asynchronous
+    # items", like the BlueSolar/Orion parsers and the decimal scan's
+    # region tracking) plus a letter-start description (prose "(register
+    # 0xED E0)" is mid-line, never line-leading, so it stays out).
+    # Zero-diff: no snapshot history-region line matches (verified).
+    _in_hist = False
     for _line in text.splitlines():
+        if "Restore factory defaults" in _line or "History data" in _line:
+            _in_hist = True
+        if "1.2 Asynchronous items" in _line:
+            _in_hist = False
+        # Tail boundary is ``\b`` (not just non-hex): a 3-hex row like
+        # "0xABC Future ..." must not split as "ABC"+"F" (the ``F`` is a
+        # prefix of the English word "Future" — ``F|u`` is no ``\b``, so no
+        # spurious 0xABCF alongside the real 0xABC; verified). Genuine
+        # tails end at whitespace/punctuation/EOL (all ``\b``).
         _mm = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s+([0-9A-Fa-f]{1,3})\b", _line)
         if (
             _mm
-            and len(_mm.group(1)) + len(_mm.group(2)) == 4
-            and re.search(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", _line, re.IGNORECASE)
+            and len(_mm.group(1)) + len(_mm.group(2)) in (3, 4)
+            and (
+                re.search(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", _line, re.IGNORECASE)
+                or (_in_hist and re.search(r"0[xX][0-9A-Fa-f]{1,3}\s+[0-9A-Fa-f]{1,3}(?![0-9A-Fa-f])\s+[A-Za-z]", _line))
+            )
         ):
             ids.add(int(_mm.group(1) + _mm.group(2), 16))
     # Bare-x typo rescue (``xEDE0``, missing leading 0), symmetric with the
@@ -286,18 +341,18 @@ def scrape_doc_ids(text: str) -> set[int]:
     # Orion ``xEDE0`` typo (now scraped-and-parsed, honest agreement — the
     # SCRAPER_BLIND_IDS excuse for it is removed below), so prose stays
     # clean and reverse-coverage stays green.
-    for m in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{4})\b", text):
+    for m in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", text):
         ids.add(int(m.group(1), 16))
-    for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})", text):
+    for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", text):
         a, b = int(m.group(1), 16), int(m.group(2), 16)
         if 0 < b - a <= 1024:
             ids.update(range(a, b + 1))
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        if re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\s*\.\.\.\s*$", line):
-            a = int(re.match(r"^\s*0[xX]([0-9A-Fa-f]{4})", line).group(1), 16)  # type: ignore[union-attr]
+        if re.match(r"^\s*0[xX][0-9A-Fa-f]{3,4}\s*\.\.\.\s*$", line):
+            a = int(re.match(r"^\s*0[xX]([0-9A-Fa-f]{3,4})", line).group(1), 16)  # type: ignore[union-attr]
             for nxt in lines[i + 1 : i + 9]:
-                m2 = re.match(r"^\s*(0[xX][0-9A-Fa-f]{4})\s*$", nxt)
+                m2 = re.match(r"^\s*(0[xX][0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*$", nxt)
                 if m2:
                     b = int(m2.group(1), 16)
                     if 0 < b - a <= 1024:
@@ -658,15 +713,27 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # ``LL == 0xFF`` note, no line-leading decimal); product-ID prose
         # ``0xA381 = BMV712`` / ``BMV712 = 0xA381`` stays excluded (hex-led /
         # letter-led, never line-leading decimal — verified zero new snapshot
-        # hits). ``-`` NOT accepted (pinned): hyphen is the decimal-range
-        # separator, so ``60961- Future`` stays range-ambiguous/missed on all
-        # sides by design. Zero-diff: no snapshot line carries
-        # ``,``/``:``/``;``/``=`` after its decimal ID (verified), so snapshot
+        # hits). Trailing-hyphen separator (probe ``60961- Future history
+        # record``: hyphen followed by SPACE, no second number —
+        # unambiguous, unlike the ``60961-60999`` range where the hyphen is
+        # followed by digits): was missed by parsers + scans
+        # (``[\s,;:=]+`` excludes ``-``) while counts stayed green —
+        # reproduced synthetically before the fix. Every decimal separator
+        # below now accepts ``-\s+`` (hyphen + whitespace) alongside the
+        # existing class, so the hyphen-spelled row scrapes/parses honestly
+        # on every side. Shape guards (explicit, justified): ``-\s+``
+        # requires whitespace AFTER the hyphen, so ``60961-60999`` still
+        # misses every ID-row shape and still expands via the range
+        # branches; ``--`` never matches; hyphenated dates (``15-11-2021``,
+        # ``2021-09-06``) miss it (hyphen + digits); bare years miss it (no
+        # description); footer ``1351 JG Almere`` is mid-line (never
+        # line-leading). Zero-diff: no snapshot line carries a trailing
+        # hyphen after its decimal ID (verified), so snapshot
         # scans stay exactly EXPECTED_DECIMAL_SCAN_HITS. Year guard
         # (``2021, ...`` prose must not trip) preserved below via the
         # region-scoped 1900-2100 skip.
         m = re.match(
-            r"^\s*(\d{4,5})[\s,;:=]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"^\s*(\d{4,5})(?:[\s,;:=]+|-\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         )
@@ -676,7 +743,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # tail on the same line. Stays exact (zero hits) on snapshots.
         # Description start is ``\S`` (symbol-first, see docstring).
         for m_mid in re.finditer(
-            r"(?<!\w)(\d{4,5})[\s,;:=]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{4,5})(?:[\s,;:=]+|-\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         ):
@@ -685,7 +752,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # decimal + open-charset description, no dtype required. Year
         # denylist applies only outside history regions (see above).
         # Description start is ``\S`` (symbol-first, see docstring).
-        m_tail = re.match(r"^\s*(\d{4,5})[\s,;:=]+(\S.*?)\s*$", line)
+        m_tail = re.match(r"^\s*(\d{4,5})(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", line)
         if m_tail:
             rid = int(m_tail.group(1))
             if 1900 <= rid <= 2100 and not in_history:
@@ -700,7 +767,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # "1234567 ..." parse honestly; 6-/7-digit no extra guard (years are
         # exactly 4-digit; HEX-frame colon-led runs miss the ``^`` shape;
         # no snapshot hits, verified).
-        for _pat in (r"^\s*(\d{3})(?!\d)[\s,;:=]+(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)[\s,;:=]+(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)[\s,;:=]+(\S.*?)\s*$"):
+        for _pat in (r"^\s*(\d{3})(?!\d)(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)(?:[\s,;:=]+|-\s+)(\S.*?)\s*$"):
             m36 = re.match(_pat, line)
             if m36:
                 _rid36 = int(m36.group(1))
@@ -711,40 +778,50 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # zero-diff: no snapshot hits). Exact lengths with (?!\d) so
         # "60961" never partially matches as "609".
         for _tpat, _flags in (
-            (r"^\s*(\d{3})(?!\d)[\s,;:=]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
-            (r"^\s*(\d{6})(?!\d)[\s,;:=]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
-            (r"^\s*(\d{7})(?!\d)[\s,;:=]+\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{3})(?!\d)(?:[\s,;:=]+|-\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{6})(?!\d)(?:[\s,;:=]+|-\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{7})(?!\d)(?:[\s,;:=]+|-\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
         ):
             _tm = re.match(_tpat, line, _flags)
             if _tm:
                 ids.add(int(_tm.group(1)))
         for _mpat in (
-            r"(?<!\w)(\d{3})(?!\d)[\s,;:=]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-            r"(?<!\w)(\d{6})(?!\d)[\s,;:=]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-            r"(?<!\w)(\d{7})(?!\d)[\s,;:=]+\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{3})(?!\d)(?:[\s,;:=]+|-\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{6})(?!\d)(?:[\s,;:=]+|-\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{7})(?!\d)(?:[\s,;:=]+|-\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
         ):
             for m_mid36 in re.finditer(_mpat, line, re.IGNORECASE):
                 ids.add(int(m_mid36.group(1)))
-        for m2 in re.finditer(r"(?<!\w)0\s+[xX]([0-9A-Fa-f]{4})\b", line):
+        for m2 in re.finditer(r"(?<!\w)0\s+[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", line):
             ids.add(int(m2.group(1), 16))
-        for m3 in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})\b", line):
+        for m3 in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", line):
             ids.add(int(m3.group(1), 16))
         # Mid-token split rescue ("0xED E0" for 0xEDE0, layout glitch
         # splitting the hex run itself): line-leading table-row shape plus a
         # dtype tail on the same line (prose never carries a dtype token),
-        # runs of 1-3 hex digits each rejoining to exactly 4 with ``\s+``
+        # runs of 1-3 hex digits each rejoining to 3-4 (same valid-ID
+        # justification as the hex scraper's glued bound) with ``\s+``
         # (single/double-space or tab — lone ``\s`` missed "0xED  E0" on all
         # four sides while the single-space control hit — reproduced before
-        # the fix). Verified zero-diff: no snapshot line matches, so snapshot
+        # the fix). Dtype-LESS history-region rescue (probe "0xED E0 Future
+        # history record", same guard as the hex scraper above and the
+        # parsers: in_history region + letter-start description; prose
+        # "(register 0xED E0)" is mid-line, never line-leading). Tail
+        # boundary is ``\b`` (not just non-hex): "0xABC Future ..." must not
+        # split as "ABC"+"F" (``F|u`` is no ``\b`` — verified no spurious
+        # 0xABCF). Verified zero-diff: no snapshot line matches, so snapshot
         # scans stay exactly EXPECTED_DECIMAL_SCAN_HITS.
         _mid = re.match(r"^\s*0[xX]([0-9A-Fa-f]{1,3})\s+([0-9A-Fa-f]{1,3})\b", line)
         if (
             _mid
-            and len(_mid.group(1)) + len(_mid.group(2)) == 4
-            and re.search(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", line, re.IGNORECASE)
+            and len(_mid.group(1)) + len(_mid.group(2)) in (3, 4)
+            and (
+                re.search(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", line, re.IGNORECASE)
+                or (in_history and re.search(r"0[xX][0-9A-Fa-f]{1,3}\s+[0-9A-Fa-f]{1,3}(?![0-9A-Fa-f])\s+[A-Za-z]", line))
+            )
         ):
             ids.add(int(_mid.group(1) + _mid.group(2), 16))
-        for m4 in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{4})\b", line):
+        for m4 in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", line):
             ids.add(int(m4.group(1), 16))
         # Decimal range mirror of the hex scraper's guard-free inline
         # expansion (same shape guards as the parser branches, scraper-side
@@ -967,9 +1044,14 @@ NON_REGISTER_IDS = {
     "bmv": frozenset({0x0000, 0x00C8, 0x01F4, 0x4401, 0xAAAA, 0xD101, 0xFFFF, 0xA381})
     | frozenset(range(0x0200, 0x0206)),
     # Phoenix: 0x0064/0x0096 example values; 0x0160 section-header typo for
-    # 0x0150 (asserted separately via parse_ble_header_evidence); 0x4116,
+    # 0x0150 (asserted separately via parse_ble_header_evidence); 0x0300 is
+    # the "0x300 = BlueSolar MPPT 70|15" product-ID prose (3-hex spelling of
+    # the same 0x0300 denylisted on BlueSolar — a product ID, never a
+    # Phoenix HEX register; the Phoenix parser needs VE_REG_ so it stays
+    # unparsed while the exact-3/4 hex scraper now scrapes it, hence
+    # excused here like its BlueSolar twin); 0x4116,
     # 0xAAAA, 0xD101 as above.
-    "phoenix": frozenset({0x0064, 0x0096, 0x0160, 0x4116, 0xAAAA, 0xD101}),
+    "phoenix": frozenset({0x0064, 0x0096, 0x0160, 0x0300, 0x4116, 0xAAAA, 0xD101}),
 }
 
 # Parser IDs the crude scraper cannot see (explicitly justified). The Orion
@@ -1899,6 +1981,91 @@ class TestSpecParsers(unittest.TestCase):
                 ]
                 self.assertEqual(hits, [])
 
+    def test_mid_split_dtypeless_history_rescue_divergence(self):
+        """Mid-token splits in dtype-LESS history rows were missed everywhere:
+        probe ``0xED E0 Future history record`` (history region, no
+        scale/dtype columns) was missed by the BlueSolar parser, the Orion
+        parser, both scrapers, AND the live matcher — every mid-split rescue
+        required a dtype tail (parser scale/dtype anchors, scraper
+        same-line dtype, live 120-char dtype window) — while counts stayed
+        green and the ``0x EDF0`` prefix control parsed (reproduced
+        synthetically before the fix; same hole at Orion). All four sides
+        now rescue dtype-less splits with the history REGION as the
+        table-row guard (mirroring how dtype-less rows are recognized at
+        all — region-scoped loops, not dtype tails). Divergence probe with
+        the dtype-less split row."""
+        from spec_parser import OrionXSHEXParser
+
+        probe = "0xED E0 Future history record\n"
+        hist = f"Restore factory defaults\n{probe}1.2 Asynchronous items\n"
+        # Both history parsers rescue honestly (were missed before the fix).
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                regs = cls(hist).parse_registers()
+                self.assertIn(0xEDE0, regs)
+                self.assertEqual(regs[0xEDE0].description, "Future history record")
+                self.assertEqual(regs[0xEDE0].data_type, "struct")
+                self.assertIsNone(regs[0xEDE0].scale)
+                self.assertEqual(regs[0xEDE0].access, "R")
+        # Both scrapers rescue (were missed: dtype tail required).
+        self.assertIn(0xEDE0, scrape_doc_ids(hist))
+        self.assertIn(0xEDE0, scrape_decimal_ids(hist))
+        # Live matcher rescues via the same region guard (was missed:
+        # dtype-near window never fires without a dtype tail).
+        self.assertEqual(
+            register_id_set_from_text(hist),
+            register_id_set_from_text(
+                "Restore factory defaults\n0xEDE0 Future history record\n1.2 Asynchronous items\n"
+            ),
+        )
+        self.assertIn(0xEDE0, register_id_set_from_text(hist))
+        # Prefix control parses on every side too (dtype-less, region-
+        # guarded on parser/scraper sides, region-rescued live).
+        prefix = "Restore factory defaults\n0x EDF0 Future history record\n1.2 Asynchronous items\n"
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(prefix_parser=cls.__name__):
+                self.assertIn(0xEDF0, cls(prefix).parse_registers())
+        self.assertIn(0xEDF0, scrape_doc_ids(prefix))
+        self.assertIn(0xEDF0, scrape_decimal_ids(prefix))
+        self.assertIn(0xEDF0, register_id_set_from_text(prefix))
+        # Guard controls: prose-shaped MID-splits (mid-line, no region, no
+        # letter description after the ID) stay out on every side.
+        for prose in (
+            "(register 0xED E0) prose mention\n",
+            "(register 0xED  E0) prose mention\n",
+        ):
+            with self.subTest(prose=prose.strip()):
+                self.assertNotIn(0xEDE0, scrape_doc_ids(prose))
+                self.assertNotIn(0xEDE0, scrape_decimal_ids(prose))
+                self.assertNotIn(0xEDE0, register_id_set_from_text(prose))
+        # Prefix-split prose "(register 0x EDF0)": the scrapers rescue the
+        # prefix form GLOBALLY by design (over-inclusion is the safe
+        # direction — same as the typed "0x EDF0 ... un16" rescue, and the
+        # snapshots carry zero such prose so zero-diff holds), while the
+        # parsers (line-leading history shape) and the live matcher
+        # (dtype-near or history-region guard) still miss it — diverging
+        # loudly instead of agreed-missing.
+        pprose = "(register 0x EDF0) prose mention\n"
+        self.assertIn(0xEDF0, scrape_doc_ids(pprose))
+        self.assertIn(0xEDF0, scrape_decimal_ids(pprose))
+        self.assertNotIn(
+            0xEDF0,
+            BlueSolarHEXParser(
+                "Restore factory defaults\n" + pprose + "1.2 Asynchronous items\n"
+            ).parse_registers(),
+        )
+        self.assertNotIn(0xEDF0, register_id_set_from_text(pprose))
+        # A mid-split outside any history region still needs its dtype tail
+        # (typed rescue unchanged).
+        typed = "0xED E0    Split inside  0.1  un16  V\n"
+        self.assertIn(0xEDE0, scrape_doc_ids(typed))
+        self.assertIn(0xEDE0, scrape_decimal_ids(typed))
+        self.assertIn(0xEDE0, register_id_set_from_text(typed))
+        # Zero-diff on snapshots (no dtype-less split form anywhere).
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+
     def test_bluesolar_bare_x_rescue_symmetry(self):
         """BlueSolar bare-``x`` typo asymmetry: probe ``xEDE0 Battery low temp
         level 0.01 un16 V`` in BlueSolar §1.1 was missed by the BlueSolar
@@ -2017,7 +2184,7 @@ class TestSpecParsers(unittest.TestCase):
                 section = text[start:end] if end > start else text[start:]
                 hits = []
                 for line in section.splitlines():
-                    if not re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\b", line):
+                    if not re.match(r"^\s*0[xX][0-9A-Fa-f]{3,4}\b", line):
                         continue
                     row = _split_typed_row(line, allow_bare_x_prefix=bare_x)
                     if row is None:
@@ -2429,7 +2596,7 @@ class TestSpecParsers(unittest.TestCase):
         multi = []
         for line in self.raw_texts["bmv"].splitlines():
             toks = line.split()
-            if len(toks) < 3 or not _re.match(r"^0[xX][0-9A-Fa-f]{4}$", toks[0]):
+            if len(toks) < 3 or not _re.match(r"^0[xX][0-9A-Fa-f]{3,4}$", toks[0]):
                 continue
             if toks[1] == "=":
                 continue
@@ -2817,6 +2984,52 @@ class TestSpecParsers(unittest.TestCase):
         self.assertEqual(candidates, {"V PV"})
         # The loud assertion triggers on the probe: the colliding candidate
         # is neither parsed nor flagged, so the suite would fail here.
+        flagged = {label for label, _ in VEDirectTextParser(full).unknown_units}
+        self.assertEqual(candidates - set(fields) - flagged, {"V PV"})
+
+    def test_text_field_tab_spaced_label_candidate_loud(self):
+        """Tab-separated interior-space labels bypassed the loud gate: probe
+        ``V\\tPV  mV  Future spaced label`` (single tab between the label
+        words, 2+-space column gap after) left the counter at ``{'V'}``
+        (first token ``V`` dedups against the real V row) while the parser's
+        ``(\\S+)\\s{2,}`` never matched the tab-spelled line (single tab vs
+        2+-gap) AND the spaced-candidate pattern used a literal space — so
+        candidates stayed empty and label sets + count 63 stayed green while
+        a field was missed (reproduced synthetically before the fix; the
+        space control ``V PV`` records loudly). The candidate interior
+        separator is now ``\\s`` (space or tab, normalized to one space) so
+        the tab-spelled collision records ``V PV`` loudly; the parser still
+        drops it (labels are single-token — handling it as a parsed label
+        would invent a spaced label), so the probe diverges as
+        candidates − parsed − flagged = {"V PV"} instead of agreed-missing.
+        Zero-diff: no snapshot section line carries a tab (verified zero
+        ``\\t``), and no snapshot line carries two tokens before a column
+        gap, so the widened shape adds no hits."""
+        text = self.raw_texts["text"]
+        start = text.find("The units used by the serial interface are as follows:")
+        end = text.find("Table I Supported Text-mode fields")
+        snap_section = text[start:end]
+        # Zero-FP pins: no tabs and no spaced candidates on the snapshot.
+        self.assertNotIn("\t", snap_section)
+        self.assertEqual(scrape_spaced_label_candidates(snap_section), set())
+        # Colliding tab probe: counter dedups to {'V'} and the parser drops
+        # the tab-spelled line (old gates stay green), but the candidate
+        # axis fires with the space-normalized name.
+        full = (
+            "The units used by the serial interface are as follows:\n"
+            "             V                   mV                       Main voltage\n"
+            "             V\tPV  mV  Future spaced label\n"
+            "Table I Supported Text-mode fields\n"
+        )
+        section = full[: full.find("Table I Supported Text-mode fields")]
+        self.assertEqual(count_doc_field_labels(section), {"V"})
+        fields = VEDirectTextParser(full).parse_fields()
+        self.assertEqual(set(fields), {"V"})
+        candidates = scrape_spaced_label_candidates(section)
+        self.assertEqual(candidates, {"V PV"})
+        # The loud assertion triggers on the probe: the tab-spelled
+        # candidate is neither parsed nor flagged, so the suite would fail
+        # here — exactly like the space control, instead of staying green.
         flagged = {label for label, _ in VEDirectTextParser(full).unknown_units}
         self.assertEqual(candidates - set(fields) - flagged, {"V PV"})
 
@@ -4366,7 +4579,7 @@ class TestSpecParsers(unittest.TestCase):
                 section = text[start:end] if end > start else text[start:]
                 expo = []
                 for line in section.splitlines():
-                    if not re.match(r"^\s*0[xX][0-9A-Fa-f]{4}\b", line):
+                    if not re.match(r"^\s*0[xX][0-9A-Fa-f]{3,4}\b", line):
                         continue
                     row = _split_typed_row(line, allow_bare_x_prefix=bare_x)
                     if row is None:
@@ -5007,7 +5220,7 @@ class TestSpecParsers(unittest.TestCase):
         # fixed shapes (verified live, not just asserted).
         for line in self.raw_texts["bmv"].splitlines():
             toks = line.split()
-            if toks and re.match(r"^0[xX][0-9A-Fa-f]{4}$", toks[0]):
+            if toks and re.match(r"^0[xX][0-9A-Fa-f]{3,4}$", toks[0]):
                 for tok in toks[1:]:
                     if any(c.isdigit() for c in tok):
                         self.assertFalse(tok.startswith("+"), f"signed snapshot token: {line!r}")
@@ -5217,6 +5430,94 @@ class TestSpecParsers(unittest.TestCase):
         self.assertIn(0xEDF0, scrape_doc_ids(ctrl))
         self.assertEqual(register_id_set_from_text(ctrl), {0xEDF0})
         self.assertIn(0xEDF0, scale_dtype_map_from_text(ctrl))
+
+    def test_three_hex_register_id_honest(self):
+        """3-hex-digit register IDs are VALID 16-bit IDs (leading zeros
+        omitted): probe ``0xABC Future register 0.01 un16 V`` packs as
+        ``"<H"`` (``struct.pack("<H", 0xABC)`` == ``"<H"`` 0x0ABC — unlike
+        the pinned-impossible 5-hex at
+        test_hex_register_id_16bit_bound_pinned), so it is widened, not
+        pinned. The probe was missed by ``_split_typed_row`` (exact-4), the
+        hex scrape (exact-4), and the decimal scan, while the live
+        ``register_id_set_from_text`` rescued exact-3 globally — offline
+        suite green while live compared STALE (reproduced synthetically
+        before the fix; asymmetric offline/live instead of agreed-missing).
+        Parser (token, section pre-filter, BMV/Phoenix loops, detail
+        mentions, ranges) and both scrapers (hex glued/split/mid/bare-x
+        halves, decimal hex halves) now accept exact-3 under the same
+        table-row guards (dtype anchors / history-region / ``register(s)
+        0x...`` — bare hex without those guards never matches here); the
+        live side already handled it (documented at
+        ``register_id_set_from_text``, no live change besides the shared
+        split rejoin-3/4). Zero-diff: no 3-hex TYPED row exists in any
+        snapshot (verified — the only 3-hex snapshot tokens are BlueSolar
+        ``0x200x`` == already-parsed 0x0200 and ``0x300`` product prose ==
+        denylisted 0x0300 / Phoenix-denylisted), so counts/pins hold."""
+        import struct
+
+        from spec_parser import (
+            BMV7xxHEXParser,
+            OrionXSHEXParser,
+            PhoenixInverterHEXParser,
+            _split_typed_row,
+        )
+
+        # Validity evidence: 0xABC is addressable as a LE u16 register ID.
+        self.assertEqual(struct.pack("<H", 0xABC), struct.pack("<H", 0x0ABC))
+        row = "0xABC Future register      0.01         un16        V\n"
+        # Token-level rescue (single-token exact-4 missed it).
+        typed = _split_typed_row(row)
+        self.assertIsNotNone(typed)
+        assert typed is not None
+        self.assertEqual(typed[0], 0xABC)
+        self.assertEqual(typed[3], "un16")
+        # Section tables (BlueSolar + Orion, incl. the 0x-section pre-filter).
+        section = f"1.1 Get and Set items\n{row}1.2 Asynchronous items\n"
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(parser=cls.__name__):
+                regs = cls(section).parse_registers()
+                self.assertIn(0xABC, regs)
+                self.assertAlmostEqual(regs[0xABC].scale, 0.01)
+                self.assertEqual(regs[0xABC].data_type, "un16")
+        # BMV + Phoenix loops.
+        bmv = BMV7xxHEXParser("hdr\n0xABC Foo 1 un16 0.01 V\nftr").parse_registers()
+        self.assertIn(0xABC, bmv)
+        self.assertEqual(bmv[0xABC].data_type, "un16")
+        phx = PhoenixInverterHEXParser("0xABC VE_REG_FUTURE R/W un16 1 V\n").parse_registers()
+        self.assertIn(0xABC, phx)
+        self.assertEqual(phx[0xABC].name, "VE_REG_FUTURE")
+        # Hex scraper + live matcher agree (were asymmetric: live caught it
+        # via its global exact-3 while the hex scraper missed it).
+        self.assertEqual(scrape_doc_ids(row), {0xABC})
+        self.assertEqual(register_id_set_from_text(row), {0xABC})
+        self.assertEqual(scale_dtype_map_from_text(row).get(0xABC), (0.01, "un16"))
+        # Detail prose collects honestly via the existing prose path
+        # (agreed-present on both parsers; the hex scraper catches bare hex
+        # symmetrically on both widths — pre-existing shape, same for the
+        # 4-hex control — while the parsers need the "register(s)" word).
+        mention = "Charge current limit (register 0xABC)\n"
+        self.assertIn(0xABC, BlueSolarHEXParser(mention).parse_registers())
+        self.assertIn(0xABC, OrionXSHEXParser(mention).parse_registers())
+        self.assertEqual(scrape_doc_ids("(0xABC) bare hex prose\n"), {0xABC})
+        self.assertEqual(scrape_doc_ids("(0xEDF0) bare hex prose\n"), {0xEDF0})
+        # Decimal scan misses plain hex rows by design — symmetric with the
+        # 4-hex control (both empty), so no new asymmetry there.
+        self.assertEqual(
+            scrape_decimal_ids(row),
+            scrape_decimal_ids("0xEDF0 Battery maximum current 0.01 un16 A\n"),
+        )
+        # 5-hex control still impossible everywhere (pin restated compactly).
+        bad = "0x12345 Future register      0.1         un16        V\n"
+        self.assertIsNone(_split_typed_row(bad))
+        self.assertNotIn(0x1234, scrape_doc_ids(bad))
+        self.assertEqual(register_id_set_from_text(bad), set())
+        # Bare-x 3-hex typo rescued symmetrically too.
+        self.assertIn(0xABC, scrape_doc_ids("xABC Future register 0.01 un16 V\n"))
+        self.assertIn(0xABC, scrape_decimal_ids("xABC Future register 0.01 un16 V\n"))
+        # Zero-diff on snapshots.
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
 
     def test_pid_16bit_bound_pinned(self):
         """5-hex-digit PIDs are protocol-impossible: pinned miss, no false-alarm.
@@ -6614,8 +6915,39 @@ class TestCycle34SeparatorVariants(unittest.TestCase):
                     self.assertIn(60961, regs)
                     self.assertEqual(regs[60961].description, "Future history record")
                 self.assertIn(60961, scrape_decimal_ids(f"60961{sep} Future typed 0.1 un16 V\n"))
-        self.assertEqual(scrape_decimal_ids("60961- Future history record\n"), set())
-        self.assertNotIn(60961, BlueSolarHEXParser("Restore factory defaults\n60961- Future history record\n1.2 Asynchronous items\n").parse_registers())
+        # Trailing-hyphen separator (cycle-38 issue 2): probe ``60961- Future
+        # history record`` (hyphen + space, no second number) now parses
+        # honestly on every decimal side — parsers, decimal scan (ID-only
+        # and typed), while the hex scrape misses it by design (no 0x) and
+        # the ``60961-60999`` range still expands instead of ID-matching.
+        hyp = "60961- Future history record\n"
+        hyp_hist = f"Restore factory defaults\n{hyp}1.2 Asynchronous items\n"
+        self.assertIn(60961, scrape_decimal_ids(hyp))
+        self.assertIn(60961, scrape_decimal_ids(hyp_hist))
+        self.assertNotIn(60961, scrape_doc_ids(hyp))
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(hyphen_parser=cls.__name__):
+                regs = cls(hyp_hist).parse_registers()
+                self.assertIn(60961, regs)
+                self.assertEqual(regs[60961].description, "Future history record")
+                self.assertEqual(regs[60961].data_type, "struct")
+        self.assertIn(60961, scrape_decimal_ids("60961- Future typed 0.1 un16 V\n"))
+        # Range control: hyphen + digits still expands as a range, never an
+        # ID row — on the parsers (history branches) and both scans.
+        self.assertEqual(
+            scrape_decimal_ids("History registers 60961-60999 table\n"),
+            set(range(60961, 61000)),
+        )
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            rng = cls(
+                "Restore factory defaults\nHistory registers 60961-60999 table\n1.2 Asynchronous items\n"
+            ).parse_registers()
+            self.assertIn(60961, rng)
+            self.assertIn(60999, rng)
+        # Date controls: hyphenated revision dates still miss every ID-row
+        # shape (hyphen + digits, no description-after-hyphen-space).
+        self.assertEqual(scrape_decimal_ids("15-11-2021 some change\n"), set())
+        self.assertEqual(scrape_decimal_ids("2021-09-06 note\n"), set())
         self.assertEqual(scrape_decimal_ids("2021, some prose note\n"), set())
         for key in ("bluesolar", "orion", "bmv", "phoenix"):
             with self.subTest(spec=key):

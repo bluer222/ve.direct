@@ -578,6 +578,14 @@ def register_id_set_from_text(text: str) -> set[int]:
         # A synthetic 3-digit PID under renamed markers (``0x999``) now compares
         # STALE via this global stage too (in addition to the tolerant variant
         # above), instead of 150==150 fresh.
+        # NOTE (cycle-38 issue 3): the same global exact-3 above already rescues
+        # 3-hex TABLE-register rows (probe "0xABC Future register 0.01 un16 V"
+        # yields {0xABC} here while the offline parser/scrapers missed it under
+        # their shared exact-4 assumption — offline green while live STALE).
+        # The offline sides now accept exact-3 table IDs too (see
+        # spec_parser._ID_TOKEN_RE and both test-side scrapers), so a future
+        # 3-hex row compares on content instead of vanishing offline. No live
+        # change was needed — documented here, not re-implemented.
         ids |= {int(x, 16) for x in re.findall(r"0[xX]([0-9A-Fa-f]{3})(?![0-9A-Fa-f])", t)}
         for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t):
             try:
@@ -610,7 +618,10 @@ def register_id_set_from_text(text: str) -> set[int]:
                 continue
         # Split-ID rescues (mirror snapshot-side _split_typed_row plus both
         # test scrapers): prefix "0x HHHH" and mid-token "0xED E0",
-        # exactly-4-hex total, table-row guard mirroring the snapshot side
+        # 3-4-hex total (4 for current docs, 3 for a leading-zero-omitted
+        # future row — same valid-ID justification as the exact-3 global
+        # above; the ``(?![0-9A-Fa-f])`` bound keeps 5-hex impossible on both
+        # widths), table-row guard mirroring the snapshot side
         # (a dtype tail near the candidate — prose never carries one, so
         # "(register 0xED E0)" stays out while "0xED E0 ... un16 V" and
         # "0x EDF0 ... un16" rescue). Global (not line-anchored): stdlib
@@ -623,18 +634,45 @@ def register_id_set_from_text(text: str) -> set[int]:
         # Zero-diff: no snapshot carries either form with a nearby dtype
         # (verified, including tab-split — zero ``\t`` in ID context), so
         # no prose false positives.
+        # Dtype-LESS split rescues (same probe as the snapshot-side history
+        # ID-only handlers: "0xED E0 Future history record" with no
+        # scale/dtype columns was missed here too — the dtype window above
+        # never fires — while counts stayed green; reproduced synthetically
+        # before the fix). Guard mirrors how dtype-less rows are recognized
+        # at all: HISTORY-REGION context (this text carries the same
+        # "Restore factory defaults"/"History data" .. "1.2 Asynchronous
+        # items" markers the snapshot-side loops scope to) plus a
+        # letter-start description after the ID (prose "(register 0xED E0)"
+        # is followed by ")", never a letter, so it stays out). The prefix
+        # form gets the same region rescue ("0x EDF0 Future history record"
+        # has no dtype either). Zero-diff: no snapshot carries either
+        # dtype-less split form anywhere (verified), so no new live IDs.
         _dtype_near = re.compile(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE)
-        for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t):
+        _hstart = t.find("Restore factory defaults")
+        if _hstart < 0:
+            _hstart = t.find("History data")
+        _hend = t.find("1.2 Asynchronous items")
+        _hist = (_hstart, _hend) if 0 <= _hstart < _hend else None
+        for m in re.finditer(r"0[xX]\s+([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", t):
             try:
                 if _dtype_near.search(t[m.end():m.end() + 120]):
                     ids.add(int(m.group(1), 16))
+                elif _hist is not None and _hist[0] <= m.start() < _hist[1] and re.match(r"\s+[A-Za-z]", t[m.end():]):
+                    ids.add(int(m.group(1), 16))
             except Exception:
                 continue
-        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{1,3})\s+([0-9A-Fa-f]{1,3})(?![0-9A-Fa-f])", t):
+        for m in re.finditer(r"0[xX]([0-9A-Fa-f]{1,3})\s+([0-9A-Fa-f]{1,3})\b", t):
             try:
-                if len(m.group(1)) + len(m.group(2)) != 4:
+                if len(m.group(1)) + len(m.group(2)) not in (3, 4):
                     continue
+                # Tail boundary is ``\b`` (not just non-hex): a 3-hex row like
+                # "0xABC Future ..." must not split as "ABC"+"F" (``F|u`` is no
+                # ``\b`` — verified no spurious 0xABCF alongside the real 0xABC
+                # from the global exact-3 above). Genuine tails end at
+                # whitespace/punctuation (all ``\b``).
                 if _dtype_near.search(t[m.end():m.end() + 120]):
+                    ids.add(int(m.group(1) + m.group(2), 16))
+                elif _hist is not None and _hist[0] <= m.start() < _hist[1] and re.match(r"\s+[A-Za-z]", t[m.end():]):
                     ids.add(int(m.group(1) + m.group(2), 16))
             except Exception:
                 continue
@@ -904,9 +942,14 @@ def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]
 
     Snapshot parsers are line-anchored (``pdftotext -layout`` rows) and fail
     on stdlib live joins (single-line, single-space); this anchors only
-    ``0xHHHH ... scale dtype`` globally (exact-4 bound ``(?![0-9A-Fa-f])``
+    ``0xHHHH ... scale dtype`` globally (exact-3/4 bound ``(?![0-9A-Fa-f])``
     like the ID stage: a protocol-impossible 5-hex-digit ID contributes no
-    entry instead of prefix-attributing its scale/dtype to ``0x1234``), trying every ID occurrence until one carries a scale+dtype
+    entry instead of prefix-attributing its scale/dtype to ``0x1234`` — the
+    bound rejects on both widths since backtracking from 4 to 3 still lands
+    on a hex char; a valid 3-hex row "0xABC ... 0.01 un16" maps honestly
+    instead of skipping as missing-ID while the snapshot parser holds it).
+    Zero-diff: no snapshot/live scale row uses a 3-hex ID today (verified),
+    trying every ID occurrence until one carries a scale+dtype
     before the next ID (prose mentions like ``register 0x0102. See
     also...`` carry no dtype before the next ID and are skipped, the later
     table row is used). The window is structural — up to the next
@@ -930,7 +973,7 @@ def scale_dtype_map_from_text(text: str, maxdist: int = 120) -> dict[int, tuple]
         if not text:
             return {}
         t = _strip_language_tags(text)
-        pos = [(m.start(), int(m.group(1), 16)) for m in re.finditer(r"0[xX]([0-9A-Fa-f]{4})(?![0-9A-Fa-f])", t)]
+        pos = [(m.start(), int(m.group(1), 16)) for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", t)]
         out: dict[int, tuple] = {}
         for idx, (p, rid) in enumerate(pos):
             if rid in out:
