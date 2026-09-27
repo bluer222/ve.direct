@@ -515,8 +515,8 @@
         },
         {
           "file": "README.md",
-          "start": 76,
-          "end": 76
+          "start": 143,
+          "end": 147
         }
       ],
       "implementation": [
@@ -769,19 +769,19 @@
           "end": 90
         },
         {
-          "file": "README.md",
-          "start": 46,
-          "end": 47
-        },
-        {
-          "file": "README.md",
-          "start": 72,
-          "end": 75
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 9,
           "end": 13
+        },
+        {
+          "file": "README.md",
+          "start": 129,
+          "end": 133
+        },
+        {
+          "file": "README.md",
+          "start": 143,
+          "end": 147
         }
       ],
       "implementation": [
@@ -1071,19 +1071,14 @@
       "requirement": "Requests sharing one wire are serialized across register and untagged command transactions.",
       "sources": [
         {
-          "file": "README.md",
-          "start": 46,
-          "end": 47
-        },
-        {
-          "file": "README.md",
-          "start": 72,
-          "end": 75
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 9,
           "end": 13
+        },
+        {
+          "file": "README.md",
+          "start": 129,
+          "end": 133
         }
       ],
       "implementation": [
@@ -1101,14 +1096,14 @@
       "requirement": "After reply timeout or cancellation after transmission, later HEX requests fail closed until synchronization is explicitly restored.",
       "sources": [
         {
-          "file": "README.md",
-          "start": 72,
-          "end": 75
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 169,
           "end": 176
+        },
+        {
+          "file": "README.md",
+          "start": 135,
+          "end": 141
         }
       ],
       "implementation": [
@@ -1126,14 +1121,14 @@
       "requirement": "Cancellation while an async write/drain is suspended must fail closed if request bytes may already have been transmitted.",
       "sources": [
         {
-          "file": "README.md",
-          "start": 72,
-          "end": 75
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 60,
           "end": 64
+        },
+        {
+          "file": "README.md",
+          "start": 135,
+          "end": 141
         }
       ],
       "implementation": [
@@ -1155,19 +1150,19 @@
       "requirement": "Cancelling an unsent transaction queued behind another must not cancel or desynchronize the active transaction.",
       "sources": [
         {
-          "file": "README.md",
-          "start": 46,
-          "end": 47
-        },
-        {
-          "file": "README.md",
-          "start": 72,
-          "end": 75
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 9,
           "end": 13
+        },
+        {
+          "file": "README.md",
+          "start": 129,
+          "end": 133
+        },
+        {
+          "file": "README.md",
+          "start": 135,
+          "end": 141
         }
       ],
       "implementation": [
@@ -1185,14 +1180,14 @@
       "requirement": "reset_hex_state re-enables requests after the caller actually resets/drains stale input.",
       "sources": [
         {
-          "file": "README.md",
-          "start": 72,
-          "end": 75
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 169,
           "end": 176
+        },
+        {
+          "file": "README.md",
+          "start": 135,
+          "end": 141
         }
       ],
       "implementation": [
@@ -1209,11 +1204,6 @@
       "requirement": "Restart must not mark response routing safe while pre-restart bytes remain buffered on the host.",
       "sources": [
         {
-          "file": "README.md",
-          "start": 72,
-          "end": 75
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 169,
           "end": 176
@@ -1227,6 +1217,11 @@
           "file": "tests/specs/Orion-XS-HEX-protocol.txt",
           "start": 36,
           "end": 36
+        },
+        {
+          "file": "README.md",
+          "start": 135,
+          "end": 141
         }
       ],
       "implementation": [
@@ -1264,19 +1259,19 @@
           "end": 113
         },
         {
-          "file": "README.md",
-          "start": 46,
-          "end": 47
-        },
-        {
-          "file": "README.md",
-          "start": 72,
-          "end": 75
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 9,
           "end": 13
+        },
+        {
+          "file": "README.md",
+          "start": 129,
+          "end": 133
+        },
+        {
+          "file": "README.md",
+          "start": 135,
+          "end": 141
         }
       ],
       "implementation": [
@@ -1294,11 +1289,6 @@
       "requirement": "Typed async_notifications must deliver an event another reader already queued without requiring additional serial bytes.",
       "sources": [
         {
-          "file": "README.md",
-          "start": 46,
-          "end": 47
-        },
-        {
           "file": "src/ve_direct/device.py",
           "start": 9,
           "end": 13
@@ -1307,6 +1297,11 @@
           "file": "src/ve_direct/device.py",
           "start": 393,
           "end": 402
+        },
+        {
+          "file": "README.md",
+          "start": 129,
+          "end": 133
         }
       ],
       "implementation": [
@@ -1330,8 +1325,8 @@
         },
         {
           "file": "README.md",
-          "start": 46,
-          "end": 47
+          "start": 129,
+          "end": 133
         }
       ],
       "implementation": [
@@ -1352,14 +1347,14 @@
       "requirement": "Unknown raw register identifiers and their value bytes remain available through the raw request API.",
       "sources": [
         {
-          "file": "README.md",
-          "start": 63,
-          "end": 64
-        },
-        {
           "file": "tests/specs/BlueSolar-HEX-protocol.txt",
           "start": 52,
           "end": 59
+        },
+        {
+          "file": "README.md",
+          "start": 113,
+          "end": 114
         }
       ],
       "implementation": [
@@ -1511,8 +1506,8 @@
         },
         {
           "file": "README.md",
-          "start": 15,
-          "end": 17
+          "start": 7,
+          "end": 9
         }
       ],
       "implementation": [

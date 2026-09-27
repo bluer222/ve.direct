@@ -129,5 +129,13 @@
       "notes": "Printed page number 16; not a protocol requirement."
     }
   ],
-  "requirement_inventory_sha256": "2b6de534e3c11a1e90dbaf1aea5e65e61e1a9374d7579c4263ec3acc224eec4d"
+  "requirement_inventory_sha256": "9f2874d131899919a5ad28a649a7443b86228b8fac51a667f4600e0c37dd6c70",
+  "inventory_reviews": [
+    {
+      "date": "2026-09-27",
+      "reason": "README revision: relocate host API contract citations to the rewritten sections. Requirement statements, dispositions, pinned specification references and test bindings are unchanged; no acceptance obligation was removed or waived.",
+      "previous_sha256": "2b6de534e3c11a1e90dbaf1aea5e65e61e1a9374d7579c4263ec3acc224eec4d",
+      "sha256": "9f2874d131899919a5ad28a649a7443b86228b8fac51a667f4600e0c37dd6c70"
+    }
+  ]
 }

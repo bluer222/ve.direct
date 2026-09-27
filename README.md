@@ -1,84 +1,200 @@
-# ve-direct — async Python for Victron VE.Direct (Text + HEX)
+# ve.direct
 
-Async-only client covering the public Text spec (3.34 + BlueSolar-HEX PIDs:
-every `LABEL` mapped to units/description/`CS`/`ERR`/`OR`/`CAP_BLE`/`AR`/
-`MODE`/`MPPT`/`MON`/`PID` — 171 PIDs incl. 0xA048, 0xA110/0xA111, Phoenix
-HEX Rev 5 0xA2B1/0xA2E1/0xA2F1 families) plus HEX
-framing with an extensive 400+ register database validated against
-Victron's official documentation (BlueSolar-HEX Rev 18, Orion-XS-HEX,
-BMV-7xx-HEX Rev 7, Phoenix-Inverter-HEX Rev 5, and Text Protocol 3.34):
-history (0x1030/0x104F/0x1050-0x106E/0x10A0-0x10BE, Orion 0x1042/0x1043/
-0x106F/0x1099/0x1070-0x1098), VE.Smart networking 0x2000-0x2027, relay
-0x0350-0x0353/0xEDD9/0xEDBA/0xEDB9/0x100A, display 0x0400-0x0408, load/
-lighting/ports, charger/battery extras — STRUCT decoders return dicts,
-sentinels (`0xFFFF`/`0x7FFF`/`0x7FFFFFFF`) decode as `None`.
+An async Python client for Victron VE.Direct. Read checksum-validated Text
+telemetry, query and write HEX registers, and receive unsolicited HEX
+notifications over the same connection.
 
-Scope is the publicly documented host protocol: Text reception and documented
-HEX commands/registers for MPPT, Phoenix Inverter, BMV-7xx/SmartShunt and Orion
-XS. Firmware image transfer and VE.Can are separate protocols. `MULTI_RS`
-entries are explicitly exported as `EXPERIMENTAL_MULTI_RS_REGISTERS` because
-no public Victron HEX specification exists for them.
+The library includes register definitions and decoders for BlueSolar and
+SmartSolar MPPT, MPPT RS, Orion XS, BMV-7xx and compatible SmartShunt devices,
+and Phoenix inverters. It requires Python 3.9 or newer.
 
-```python
-async with await AsyncVEDirect.from_port("/dev/ttyUSB0") as dev:
-    async for frame in dev.frames():          # checksum-validated Text
-        print(frame.to_si())                  # SI floats + human enums
-        # {'PID': 41034, 'V': 27.69, 'CS': 3, ...}
-        print(frame["CS"].human)              # "Bulk"
-    print(await dev.hex_get("PANEL_VOLTAGE")) # 31.3
-    await dev.hex_set("BAT_MAX_CURRENT", 35.0)
+## Install
+
+Install from a checkout of this repository:
+
+```sh
+git clone https://github.com/bluer222/ve.direct.git
+cd ve.direct
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install ".[serial]"
 ```
 
-## Validation & Tools
+The `serial` extra installs `pyserial` and `pyserial-asyncio`. For parsers,
+register codecs, or a custom transport, `python -m pip install .` installs
+the core library without runtime dependencies.
 
-- `tools/fetch_specs.py` — Downloads all 5 official Victron Energy PDF specifications and extracts layout text for continuous verification.
-- `tools/spec_parser.py` — Automated specification parsers for BlueSolar, Orion-XS, BMV-7xx, Phoenix Inverter, and Text Mode specs.
-- `tests/test_spec_parsers.py` — Table coverage and metadata checks for register IDs, scale factors, data types, units, and aliased registers.
-- `conformance/` — [Finite acceptance scope](conformance/SCOPE.md), [audit findings](conformance/FINDINGS.md), requirement-to-test ledgers, and independent behavioral tests. Run `python3 conformance/run.py` with the serial extra installed on a POSIX host; [the generated report](conformance/RESULTS.md) records failures and evidence gaps. Table coverage alone does not establish protocol correctness.
+## Read a device
 
-## Layout
+This example queries an MPPT charger, reads one Text block, then streams
+subsequent blocks. Change the serial port and `flavor` for your device.
 
-- `src/ve_direct/tables.py` — Text labels, CS/ERR/OR/CAP_BLE/AR/MODE/MPPT/MON/PID maps
-- `src/ve_direct/text.py` — byte-state `TextParser` (incremental, mid-record
-  HEX-interleave safe, corruption resynchronization), `Frame`, `to_si()`
-- `src/ve_direct/hex.py` — `:CMD+DATA+CHECK` framing (`sum == 0x55`), Get/Set/Ping/AppVersion/ProductId/Restart/Boot builders (`decode_line(strict=True)` raises `ChecksumError`, `decode_app_version()` parses fw type)
-- `src/ve_direct/registers/` — HEX DB + `lookup/decode_value/encode_value/for_flavor/decode_bat_type`
-  (`hex_get`/`hex_set` take documented names; `hex_get_raw`/`hex_set_raw` take raw ids; BITMASK encode accepts `["bit_name", ...]`; STRUCT (history/timer/load-control/network-status/voltage-range) decodes to dict; same-ID aliases require specifying `flavor` when looked up by ID via `lookup(id, flavor=...)`, otherwise raising `AmbiguousRegisterError` — prefer names or pass flavor)
-- `src/ve_direct/device.py` — `AsyncVEDirect` (shared-wire Text/HEX demux,
-  serialized request routing, typed `async_notifications()`)
-- `src/ve_direct/transport.py` — `SimulatedTransport` + `make_text_block` (no hardware needed)
+```python
+import asyncio
 
-## Serial
+from ve_direct import AsyncVEDirect
 
-`pip install 've-direct[serial]'` (pyserial + pyserial-asyncio). Core + tests are
-stdlib-only: `python3 -m unittest discover -s tests`.
 
-## Spec notes
+async def main():
+    async with await AsyncVEDirect.from_port(
+        "/dev/ttyUSB0", flavor="MPPT"
+    ) as dev:
+        print("Product ID:", hex(await dev.get_product_id()))
+        print("Panel voltage:", await dev.hex_get("PANEL_VOLTAGE"))
 
-- Text: `19200 8N1`, `\r\nLABEL\tVALUE`, block/sec, `Checksum` byte makes
-  `sum(block) % 256 == 0`. BMV sends alternating PID/history blocks.
-- HEX: `:<nibble><hex><check>\n`, LE values, Get `:7<id>00`, Set `:8<id>00<val>`
-  (e.g. `:8F0ED0064000C`), ping `:154`, app-version `:352`, product-id `:451`,
-  restart `:64F` (no reply), async `:A<id><flags><val>`.
-  `dev.ping()/get_app_version()/get_product_id()/restart()` available.
-- Unknown registers work by raw id via `hex_get_raw()`/`hex_set_raw()` (payload
-  bytes undecoded); `hex_get()`/`hex_set()` require a documented register name.
-  `WRITE_ONLY` (e.g. `RESTORE_DEFAULTS 0x0004`, `CLEAR_HISTORY 0x1030`,
-  `REMOTE_COMMAND 0x2004`) raises on `hex_get`, allowed on `hex_set`.
-  Flavors form a hierarchy (`MPPT->CHG`, `MPPT_SMALL/MPPT_RS->MPPT`, `MULTI_RS->INV+MPPT_RS`,
-  `BMV71->BMV`, `ORION->CHG`; see `docs/HEX_REGISTERS.md`).
-- Product ID command replies carry a two-byte little-endian ID for all
-  documented families, with no flavor needed. Register `0x0100` has separate
-  version-dependent layout rules, including its four-byte form.
-- VE.Direct has no transaction IDs. Requests are serialized. After a request
-  timeout or cancellation, the client fails closed to prevent a late response
-  being attributed to a newer request; reset the link/device and call
-  `reset_hex_state()` before issuing another HEX request.
-- Command `0` boot entry is rejected for BMV devices, where it is reserved.
-- `restart()` leaves HEX routing disabled until stale host input has been
-  drained and `reset_hex_state()` is called. Text reception continues.
-- `boot(timeout=0.2)` observes incoming traffic for boot failure during that
-  interval. A failure raises `RegisterError`; silence does not confirm boot
-  entry. Later boot failures are logged when read and cannot fail another command.
-- Select `flavor="MPPT_SMALL"` for 10A/15A/20A MPPT models without a rotary
-  switch so typed battery settings use the small-model table.
+        frame = await dev.read_one(timeout=5.0)
+        print(frame.to_si())
+        if "CS" in frame:
+            print("Charge state:", frame["CS"].human)
+
+        async for frame in dev.frames():
+            print(frame.to_si())
+
+
+asyncio.run(main())
+```
+
+Serial defaults are 19200 baud, 8 data bits, no parity, and one stop bit.
+`from_port()` requests `dtr=True` and `rts=False`; both are configurable.
+
+Each field retains its original text in `.raw`, its decoded value in
+`.value`, its wire unit in `.unit`, and any readable interpretation in
+`.human`. `frame.to_si()` converts measurements to units such as volts,
+amps, amp-hours, kilowatt-hours, and percentages. State codes remain numeric;
+use `.human` for their labels. Missing measurements decode as `None`.
+
+Fields vary by device, firmware, and block. BMV devices can alternate
+between blocks with different fields, so check for a label before using it.
+See the [Text field reference](docs/TEXT_FRAMES.md) for labels and units.
+
+## Select a device family
+
+Set `flavor` when opening a connection. Some register IDs have different
+meanings, scales, or layouts across families, and the client uses this
+setting to select the correct decoder and encoder.
+
+| Flavor | Device or register family |
+| --- | --- |
+| `MPPT` | BlueSolar and SmartSolar MPPT; uses the large-model battery-type table |
+| `MPPT_SMALL` | 10A, 15A, and 20A MPPT models without a rotary switch |
+| `MPPT_RS` | MPPT RS |
+| `ORION` | Orion XS DC-DC chargers |
+| `BMV` | BMV-700/702/712 and compatible SmartShunt devices |
+| `BMV71` | BMV-712 and SmartShunt variant, inheriting BMV definitions |
+| `INV` | Phoenix inverters |
+| `CHG` | Shared charger register definitions |
+
+For example, battery-type value `1` means `type_2` on `MPPT_SMALL` and
+`type_1` on `MPPT`. The client does not infer this distinction from a
+ProductId command reply. That command returns a two-byte little-endian ID
+and needs no flavor; Get register `0x0100` has separate layout rules.
+
+## Read and write registers
+
+Within an open async connection, use documented register names:
+
+```python
+current_limit = await dev.hex_get("BAT_MAX_CURRENT")  # Amps
+await dev.hex_set("BAT_MAX_CURRENT", 35.0)           # Set 35 A
+```
+
+Typed access applies the register's scale and representation. Enums accept
+named values, bitmasks accept lists of bit names, and structured records
+such as history and timers decode to dictionaries. Documented missing-value
+sentinels decode as `None`. BMV description writes allow 19 ASCII characters
+plus the terminating NUL within the String20 limit.
+
+`hex_get()` and `hex_set()` also accept numeric IDs. An ID shared by different
+register definitions requires a flavor; otherwise lookup raises
+`AmbiguousRegisterError`. Named lookup with a flavor selects that family's
+definition. Reading a write-only register or writing a read-only or constant
+register raises `RegisterError`.
+
+For registers outside the catalog, use the raw API. It returns a `HexFrame`
+whose `.value_bytes` contains the unconverted payload:
+
+```python
+reply = await dev.hex_get_raw(0xEDF0)
+print(reply.value_bytes)
+# hex_set_raw(register_id, payload_bytes) sends an explicitly encoded value.
+```
+
+The [HEX register reference](docs/HEX_REGISTERS.md) lists names, access rules,
+units, and family differences. A catalog entry does not guarantee that every
+model or firmware supports that register; the device's error flags are
+reported as `RegisterError`.
+
+## Streaming and connection recovery
+
+`frames()` yields Text frames and `async_notifications()` yields decoded
+unsolicited HEX notifications. They can run alongside HEX requests on the
+same connection. A shared read lock routes incoming data to its consumer;
+Text and notifications received during a command are queued for later
+consumption. HEX request/response transactions are serialized.
+
+VE.Direct has no transaction IDs. After a reply timeout, a failed write, or
+cancellation after transmission may have started, the client blocks further
+HEX requests with `TransportError` so a late reply cannot satisfy a newer
+request. Reset the device/link and drain stale host input before calling
+`reset_hex_state()`. That method clears partial parser state while preserving
+already queued frames. `restart()` also leaves HEX routing blocked until
+this recovery is complete. Text reception remains available.
+
+`boot(timeout=0.2)` sends the boot-entry command and observes incoming traffic
+for a failure during that interval. A failure raises `RegisterError`; silence
+does not confirm boot entry. Later boot failures are logged when read and
+cannot reject an unrelated command. Command `0` is reserved on BMV devices,
+so `boot()` rejects it for `BMV` and `BMV71`.
+
+## Try it without hardware
+
+Run the included Text simulator from the repository root:
+
+```sh
+python examples/async_log.py --sim
+```
+
+Applications can use `SimulatedTransport` and `make_text_block` directly, or
+provide their own async `read_chunk(n)` and `write(data)` callables to
+`AsyncVEDirect`. `AsyncVEDirect.from_streams(reader, writer)` accepts an
+existing asyncio stream pair. The [examples](examples/) also include Text
+logging from a serial port and HEX register queries.
+
+## Validation and scope
+
+The frozen conformance scope covers public Text reception, documented HEX
+commands and register codecs, and the library's async delivery contracts.
+It pins five Victron specifications: Text Protocol 3.34, BlueSolar HEX Rev 18,
+Orion XS HEX dated 16 June 2025, BMV-7xx HEX Rev 7, and Phoenix Inverter HEX
+Rev 5.
+
+The [acceptance report](conformance/RESULTS.md) records 191 requirement
+groups, with all 125 executable host requirements passing across 122 tests
+and 2,114 subtests. Specification ambiguities and device obligations remain
+explicit. The [scope and stopping rule](conformance/SCOPE.md) define the
+claim; the [audit findings](conformance/FINDINGS.md) record the resolved
+defects and their regression criteria.
+
+Firmware image transfer, private commands, VE.Can framing, and physical
+device behavior are outside this host-library acceptance scope. Undocumented
+Multi RS definitions are separate experimental entries in
+`EXPERIMENTAL_MULTI_RS_REGISTERS`.
+
+With the serial extra installed, run these from the repository root:
+
+```sh
+python conformance/run.py
+python -m unittest discover -s tests
+```
+
+The conformance gate runs offline and requires a POSIX host for its serial
+pseudo-terminal tests. It fails on missing evidence, skipped required tests,
+or changed pinned sources. The ordinary suite includes live specification
+freshness checks; install Poppler's `pdftotext` and provide network access
+for a run without skipped freshness checks. Nix setup is documented in the
+[conformance scope](conformance/SCOPE.md).
+
+[CI](https://github.com/bluer222/ve.direct/actions/workflows/ci.yml) runs both
+suites on Python 3.9, 3.12, and 3.14, including a weekly specification check.
+For source citations and documented conflicts, see
+[Sources](docs/SOURCES.md) and [Specification exceptions](docs/SPEC_EXCEPTIONS.md).
