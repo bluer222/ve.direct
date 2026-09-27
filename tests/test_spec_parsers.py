@@ -343,13 +343,24 @@ def scrape_doc_ids(text: str) -> set[int]:
     # clean and reverse-coverage stays green.
     for m in re.finditer(r"(?<!\w)[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", text):
         ids.add(int(m.group(1), 16))
-    for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", text):
+    # Single-char ellipsis range separators (U+2026/U+22EF, both verified
+    # missed synthetically before the fix — U+22EF checked, not assumed)
+    # normalize to ASCII ``...`` first (mirror of
+    # spec_parser._normalize_range_ellipsis): probe ``0x1060…0x1062`` expands
+    # like the ASCII control (hex inline accepts 2-3 dots, so ``...``
+    # matches there like ``..``). Zero-diff: the only snapshot ``…`` lines are
+    # HEX-framing prose (no 0x endpoints) and the Orion ``, … ,`` header
+    # (endpoints already scraped via ASCII ``..``), no snapshot inline hex
+    # range carries 3 dots, and no snapshot line carries U+22EF — so
+    # normalization expands nothing new on snapshots.
+    _ellipsis_text = re.sub("[\u2026\u22EF]", "...", text)
+    for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.{2,3}\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", _ellipsis_text):
         a, b = int(m.group(1), 16), int(m.group(2), 16)
         if 0 < b - a <= 1024:
             ids.update(range(a, b + 1))
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        if re.match(r"^\s*0[xX][0-9A-Fa-f]{3,4}\s*\.\.\.\s*$", line):
+        if re.match(r"^\s*0[xX][0-9A-Fa-f]{3,4}\s*\.\.\.\s*$", re.sub("[\u2026\u22EF]", "...", line)):
             a = int(re.match(r"^\s*0[xX]([0-9A-Fa-f]{3,4})", line).group(1), 16)  # type: ignore[union-attr]
             for nxt in lines[i + 1 : i + 9]:
                 m2 = re.match(r"^\s*(0[xX][0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*$", nxt)
@@ -732,8 +743,32 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # scans stay exactly EXPECTED_DECIMAL_SCAN_HITS. Year guard
         # (``2021, ...`` prose must not trip) preserved below via the
         # region-scoped 1900-2100 skip.
+        # Trailing-dot separator (probe ``60962. Future history record``:
+        # dot + SPACE — unambiguous, unlike the ``60961...60999`` range
+        # where dots meet digits, and unlike version prose ``1.16``/``v1.12``
+        # which is mid-line and short-digited, never line-leading
+        # ``\d{3,7}``): missed by parsers + scans while counts stayed green
+        # (reproduced before fix). Every separator below now accepts
+        # ``\.\s+`` (dot + whitespace required, so ``60961...60999`` still
+        # misses the ID-row shape and expands via the range branches).
+        # Slash separator (probe ``60962/Future history record``: slash with
+        # NO space — unambiguous, unlike slash-dates ``15/11/2022`` whose
+        # line-leading run is 2-digit, never ``\d{3,7}``): missed likewise
+        # (reproduced before fix). Every separator below accepts ``/\s*``
+        # (both ``60962/Future`` and ``60962 / Future``). Shape guards:
+        # line-leading ``\d{3,7}`` keeps ``70/15`` product refs (2-digit
+        # leads) and mid-line prose out. Zero-diff for both: no snapshot
+        # line carries a trailing dot/slash after its decimal ID (verified).
+        # Unicode-dash separator (probe ``60961– Future history record``
+        # U+2013 + SPACE — U+2014/U+2212 twins verified missed identically,
+        # not assumed): every separator below accepts
+        # ``[U+2212/U+2013/U+2014]\s+`` (mirror of ASCII ``-\s+``), so all
+        # three dash spellings scrape/parse honestly while ``60961–60999``
+        # (dash + digits) still expands via the normalized range branches.
+        # Zero-diff: no snapshot line carries a unicode dash after its
+        # decimal ID (verified).
         m = re.match(
-            r"^\s*(\d{4,5})(?:[\s,;:=]+|-\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"^\s*(\d{4,5})(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         )
@@ -743,7 +778,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # tail on the same line. Stays exact (zero hits) on snapshots.
         # Description start is ``\S`` (symbol-first, see docstring).
         for m_mid in re.finditer(
-            r"(?<!\w)(\d{4,5})(?:[\s,;:=]+|-\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{4,5})(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
             line,
             re.IGNORECASE,
         ):
@@ -752,7 +787,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # decimal + open-charset description, no dtype required. Year
         # denylist applies only outside history regions (see above).
         # Description start is ``\S`` (symbol-first, see docstring).
-        m_tail = re.match(r"^\s*(\d{4,5})(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", line)
+        m_tail = re.match(r"^\s*(\d{4,5})(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)(\S.*?)\s*$", line)
         if m_tail:
             rid = int(m_tail.group(1))
             if 1900 <= rid <= 2100 and not in_history:
@@ -767,7 +802,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # "1234567 ..." parse honestly; 6-/7-digit no extra guard (years are
         # exactly 4-digit; HEX-frame colon-led runs miss the ``^`` shape;
         # no snapshot hits, verified).
-        for _pat in (r"^\s*(\d{3})(?!\d)(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)(?:[\s,;:=]+|-\s+)(\S.*?)\s*$"):
+        for _pat in (r"^\s*(\d{3})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)(\S.*?)\s*$", r"^\s*(\d{6})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)(\S.*?)\s*$", r"^\s*(\d{7})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)(\S.*?)\s*$"):
             m36 = re.match(_pat, line)
             if m36:
                 _rid36 = int(m36.group(1))
@@ -778,17 +813,17 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # zero-diff: no snapshot hits). Exact lengths with (?!\d) so
         # "60961" never partially matches as "609".
         for _tpat, _flags in (
-            (r"^\s*(\d{3})(?!\d)(?:[\s,;:=]+|-\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
-            (r"^\s*(\d{6})(?!\d)(?:[\s,;:=]+|-\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
-            (r"^\s*(\d{7})(?!\d)(?:[\s,;:=]+|-\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{3})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{6})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
+            (r"^\s*(\d{7})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)\S.*\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", re.IGNORECASE),
         ):
             _tm = re.match(_tpat, line, _flags)
             if _tm:
                 ids.add(int(_tm.group(1)))
         for _mpat in (
-            r"(?<!\w)(\d{3})(?!\d)(?:[\s,;:=]+|-\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-            r"(?<!\w)(\d{6})(?!\d)(?:[\s,;:=]+|-\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
-            r"(?<!\w)(\d{7})(?!\d)(?:[\s,;:=]+|-\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{3})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{6})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
+            r"(?<!\w)(\d{7})(?!\d)(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)\S.*?\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b",
         ):
             for m_mid36 in re.finditer(_mpat, line, re.IGNORECASE):
                 ids.add(int(m_mid36.group(1)))
@@ -834,7 +869,15 @@ def scrape_decimal_ids(text: str) -> set[int]:
         # IDs. Zero-diff: no snapshot decimal range (the BMV signed
         # "-32768..32767" cell is excluded by the signed lookbehind and the
         # span cap alike; no snapshot digit-flanking unicode dash, verified).
-        _range_line = re.sub("[\u2212\u2013\u2014]", "-", line)
+        # Single-char ellipsis (U+2026/U+22EF, both verified missed before
+        # the fix — U+22EF checked, not assumed) normalizes to ASCII "..."
+        # likewise (mirror of spec_parser._normalize_range_ellipsis): probe
+        # "History registers 60961…60999 table" expands like the control.
+        # Zero-diff: the only snapshot "…" lines are HEX-framing prose (no
+        # digit groups) and the Orion ", … ," header (no digit-flanking
+        # ellipsis), and no snapshot line carries U+22EF — so normalization
+        # expands nothing new on snapshots.
+        _range_line = re.sub("[\u2026\u22EF]", "...", re.sub("[\u2212\u2013\u2014]", "-", line))
         for m5 in re.finditer(r"(?<![\w\-])(\d{4,5})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{4,5})(?!\w)", _range_line):
             a, b = int(m5.group(1)), int(m5.group(2))
             if 0 < b - a <= 1024:
@@ -857,10 +900,13 @@ def scrape_decimal_ids(text: str) -> set[int]:
     # Multi-line decimal "..." mirror of the hex scraper's 8-line overscan
     # (parsers scan 3 — the gap divergence axis). Zero-diff: no snapshot
     # decimal "..." start line. Widened to 3-/6-/7-digit (no snapshot hits,
-    # verified; same overscan/gap axis as 4-5 digit).
+    # verified; same overscan/gap axis as 4-5 digit). Single-char ellipsis
+    # starts ("60961 …", U+2026/U+22EF) normalize to "..." likewise
+    # (zero-diff: no snapshot "…"/"⋯" start line — verified).
     _lines = text.splitlines()
     for i, line in enumerate(_lines):
-        if re.match(r"^\s*\d{4,5}\s*\.\.\.\s*$", line):
+        _ellipsis_line = re.sub("[\u2026\u22EF]", "...", line)
+        if re.match(r"^\s*\d{4,5}\s*\.\.\.\s*$", _ellipsis_line):
             a = int(re.match(r"^\s*(\d{4,5})", line).group(1))  # type: ignore[union-attr]
             for nxt in _lines[i + 1 : i + 9]:
                 m6 = re.match(r"^\s*(\d{4,5})\s*$", nxt)
@@ -869,7 +915,7 @@ def scrape_decimal_ids(text: str) -> set[int]:
                     if 0 < b - a <= 1024:
                         ids.update(range(a, b + 1))
                     break
-        elif re.match(r"^\s*\d{3}(?!\d)\s*\.\.\.\s*$", line) or re.match(r"^\s*\d{6}(?!\d)\s*\.\.\.\s*$", line) or re.match(r"^\s*\d{7}(?!\d)\s*\.\.\.\s*$", line):
+        elif re.match(r"^\s*\d{3}(?!\d)\s*\.\.\.\s*$", _ellipsis_line) or re.match(r"^\s*\d{6}(?!\d)\s*\.\.\.\s*$", _ellipsis_line) or re.match(r"^\s*\d{7}(?!\d)\s*\.\.\.\s*$", _ellipsis_line):
             try:
                 a = int(re.match(r"^\s*(\d{3,7})", line).group(1))  # type: ignore[union-attr]
             except Exception:
@@ -885,6 +931,72 @@ def scrape_decimal_ids(text: str) -> set[int]:
                         ids.update(range(a, b + 1))
                     break
     return ids
+
+
+#: Enum-value (rid, value) pairs the sentinel scraper over-includes by
+#: design (explicit, justified — the scraper-over-inclusive precedent):
+#: BlueSolar/Orion 0xEDF1 Battery-type prints ``0xFF = user`` in its Unit
+#: cell, a genuine value encoding documented by the "Battery type values
+#: (register 0xEDF1)" table (not a sentinel: the DB models 0xEDF1 with no
+#: sentinel, and the parser's comma guard keeps it out). The scraper accepts
+#: spaced ``=``/``:`` WITHOUT the comma guard, so it records (0xEDF1, 0xFF)
+#: on both snapshots; the comparison below excuses exactly this pair.
+#: A future genuine sentinel on 0xEDF1 (different value, e.g. comma-led
+#: ``K, 0xFFFF = N/A``) still fails loudly — the denylist is value-exact.
+SENTINEL_SCRAPER_ENUM_ALLOW = frozenset({(0xEDF1, 0xFF)})
+
+
+def scrape_doc_sentinels(text: str) -> dict[int, set[int]]:
+    """Independent sentinel-annotation scraper: table-row shape, WIDE operator.
+
+    The parser extracts sentinel annotations from unit/desc cells via the
+    shared ``_SENTINEL_ANNOT_RE`` (glued ``0xHEX=`` + ``0xHEX means`` +
+    COMMA-led spaced ``0xHEX =``/``0xHEX :``). This scraper re-derives the
+    same sets from the raw text with a differently-shaped method so a parser
+    drop fails loudly instead of agreed-missing: it walks lines (not parser
+    token-splits), requires a line-leading ``0xHHHH`` table-row ID plus a
+    dtype token on the same line (prose mentions like ``transmit 0xFFFF @
+    timeout``, ``A value of 0xFFFF indicates``, Range cells
+    ``0x0000..0xFFFF``, and product prose ``0xA3F0 = Orion XS`` carry no
+    dtype token and stay out), then scans ONLY the substring after the dtype
+    token (the Unit/desc region — never Range/prose/values tables, same
+    scoping as the parser) for hex annotations. The operator is deliberately
+    WIDER than the parser's: spaced ``=``/``:`` need NO comma here, so a
+    comma-less spaced annotation (``K 0xFFFF = N/A``) is still scraped while
+    the parser drops it — scraped-but-unparsed, failing loudly (see the
+    sentinel divergence test). Over-inclusion is the safe direction: the
+    ``0xFF = user`` enum rows record here and are excused ONLY by the exact
+    SENTINEL_SCRAPER_ENUM_ALLOW pair above. ``means`` keeps the parser's
+    code-first whitespace shape (code-glued ``0xFFFFmeans`` and reversed
+    ``means 0xFFFF`` are non-shapes, pinned missed on both sides).
+    Widths accept 1-8 hex digits like the parser; ``==`` never matches.
+    Verified: on all four current HEX snapshots the scraper yields exactly
+    the parser sets modulo the denylist pair (0xEDEC/0xEDE6 {0xFFFF} on
+    BlueSolar+Orion, everything else empty)."""
+    found: dict[int, set[int]] = {}
+    for line in text.splitlines():
+        m_id = re.match(r"^\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", line)
+        if not m_id:
+            continue
+        rid = int(m_id.group(1), 16)
+        m_dt = re.search(r"\b(un8|un16|un24|un32|sn8|sn16|sn32|string\d*)\b", line, re.IGNORECASE)
+        if not m_dt:
+            continue
+        tail = line[m_dt.end():]
+        for m in re.finditer(
+            r"0[xX]([0-9A-Fa-f]{1,8})\s*=(?!=)\s*\S"
+            r"|0[xX]([0-9A-Fa-f]{1,8})\s*:\s*\S"
+            r"|0[xX]([0-9A-Fa-f]{1,8})\s+means\b",
+            tail,
+        ):
+            hexpart = next((g for g in m.groups() if g is not None), None)
+            if hexpart is None:
+                continue
+            try:
+                found.setdefault(rid, set()).add(int(hexpart, 16))
+            except ValueError:
+                continue
+    return found
 
 
 def independent_revision_info(text: str):
@@ -1639,6 +1751,80 @@ class TestSpecParsers(unittest.TestCase):
             with self.subTest(date=line):
                 self.assertEqual(scrape_decimal_ids(line), set())
 
+    def test_decimal_id_separator_dot_slash_unicode_dash(self):
+        """Decimal ID rows accept ``.``, ``/``, and unicode-dash separators.
+
+        Probes ``60962. Future history record`` / ``60962/Future history
+        record`` / ``60961– Future history record`` (U+2013 + space) were
+        missed by both history parsers AND both scans (all required
+        ``[\\s,;:=]+`` or ASCII ``-\\s+`` after the digits) while counts
+        stayed green — reproduced synthetically before the fix. U+2014 and
+        U+2212 twins behaved identically (verified here, not assumed). Every
+        decimal separator (typed line-leading/mid-line, dtype-less ID-only,
+        3-/6-/7-digit halves in scrape_decimal_ids; ID-only rows in both
+        history parsers) now also accepts ``.\\s+`` (dot + whitespace),
+        ``/\\s*`` (slash, spaced or glued), and unicode-dash + whitespace,
+        so each spelling scrapes/parses honestly with struct/R/None metadata
+        like the whitespace control. The hex scraper misses by design (no
+        ``0x`` prefix — the decimal scan is the loud side); live has no
+        decimal path at all (tools/fetch_specs.py carries only hex ID
+        extraction — verified by inspection — so nothing to change there).
+        The table-row shape (line-leading ``\\d{3,7}`` + description) is what
+        keeps version/date prose out: ``1.16``/``v1.12`` are mid-prose and
+        short-digited, ``2021-09-06``/``15/11/2022`` miss the separator
+        shape (hyphen/slash + digits, 2-digit lead), pinned as controls.
+        Zero-diff: no snapshot line carries a trailing dot/slash/unicode
+        dash after its decimal ID (verified live here), so snapshot scans
+        stay exactly EXPECTED_DECIMAL_SCAN_HITS."""
+        from spec_parser import OrionXSHEXParser
+
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(spec=key):
+                self.assertEqual(scrape_decimal_ids(self.raw_texts[key]), EXPECTED_DECIMAL_SCAN_HITS[key])
+                hits = [
+                    line
+                    for line in self.raw_texts[key].splitlines()
+                    if re.match(r"^\s*\d{3,7}[./\u2212\u2013\u2014]", line)
+                ]
+                self.assertEqual(hits, [])
+        dashes = {"U+2013": "–", "U+2014": "—", "U+2212": "−"}
+        probes = [("60962. Future history record\n", 60962), ("60962/Future history record\n", 60962)]
+        probes += [(f"60961{dash} Future history record\n", 60961) for dash in dashes.values()]
+        for probe, rid in probes:
+            with self.subTest(probe=probe.strip()):
+                self.assertEqual(scrape_decimal_ids(probe), {rid})
+                # Hex scraper misses by design (no ``0x``) — loud via decimal.
+                self.assertNotIn(rid, scrape_doc_ids(probe))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(parser=cls.__name__):
+                        text = (
+                            "Restore factory defaults\n"
+                            + probe
+                            + "1.2 Asynchronous items\n"
+                        )
+                        parsed = cls(text).parse_registers()[rid]
+                        self.assertEqual(parsed.description, "Future history record")
+                        self.assertEqual(parsed.data_type, "struct")
+                        self.assertIsNone(parsed.scale)
+                        self.assertEqual(parsed.access, "R")
+        # Typed decimal rows take the widened separators on the scan side.
+        self.assertEqual(scrape_decimal_ids("60961. Future un16 record\n"), {60961})
+        self.assertEqual(scrape_decimal_ids("60961/Future un16 record\n"), {60961})
+        # Controls: versions, slash/hyphen dates, bare years, product refs.
+        for line in (
+            "Available on BlueSolar mppt chargers since firmware version v1.16\n",
+            "Available since version v1.12, and only for models with a load output.\n",
+            "1.16\n",
+            "5) 2021-09-06\n",
+            "15-11-2021 some change\n",
+            "15/11/2022 some change\n",
+            "2021/09/06 some change\n",
+            "70/15 blah\n",
+            "2016 Production stopped note\n",
+        ):
+            with self.subTest(control=line.strip()):
+                self.assertEqual(scrape_decimal_ids(line), set())
+
     def test_decimal_id_range_expansion(self):
         """Decimal ID ranges were missed on every side: probe ``History
         registers 60961-60999 table`` yielded an empty parser, an empty hex
@@ -1764,6 +1950,98 @@ class TestSpecParsers(unittest.TestCase):
         # Hex control: dash-separated hex is not a range shape on any side
         # (``..`` only), so no unicode normalization applies there.
         self.assertEqual(BlueSolarHEXParser("History 0x1060-0x1062 table\n").parse_registers().get(0x1061), None)
+
+    def test_range_ellipsis_u2026_u22EF_expansion(self):
+        """Single-char ellipsis ranges expand like ASCII ``..``/``...``.
+
+        Probes ``History registers 60961…60999 table`` (U+2026) and the
+        U+22EF twin ``⋯`` were missed by decimal AND hex range expansion on
+        every side (0 IDs) while the ASCII controls expanded 39 IDs on both
+        (all sides shared the ASCII-only ``..``/``...`` separator assumption
+        — reproduced synthetically before the fix; U+22EF verified missed
+        identically, not assumed). Multi-line ``60961 …`` + ``60963``
+        likewise expanded nothing while ASCII ``...`` expanded. Both chars
+        normalize to ASCII ``...`` in range expansion on parser
+        (BlueSolar + Orion inline hex/decimal, BlueSolar multi-line hex/
+        decimal via spec_parser._normalize_range_ellipsis) and scraper sides
+        (hex inline/multi-line, decimal inline/multi-line), so the probes
+        now expand honestly (struct/R/None like the controls). Orion has no
+        multi-line branch (ASCII or ellipsis — pinned parity, not a new
+        asymmetry). Zero-diff: no snapshot line carries a digit-flanking
+        ``…``/``⋯`` (verified live here — the only ``…`` lines are
+        HEX-framing ``[…]``/``[……]`` prose and the Orion ``, … ,`` header)
+        and no snapshot multi-line ellipsis start exists, so snapshot scans
+        stay exactly EXPECTED_DECIMAL_SCAN_HITS and reverse-coverage stays
+        green (re-asserted here).
+        """
+        from spec_parser import OrionXSHEXParser
+
+        # Zero-diff pins: no ellipsis range shape in any snapshot.
+        for key in ("bluesolar", "orion", "bmv", "phoenix"):
+            with self.subTest(snapshot=key):
+                text = self.raw_texts[key]
+                self.assertEqual(scrape_decimal_ids(text), EXPECTED_DECIMAL_SCAN_HITS[key])
+                adjacent = [
+                    line
+                    for line in text.splitlines()
+                    if re.search(r"\d[\u2026\u22EF]|[\u2026\u22EF]\d", line)
+                ]
+                self.assertEqual(adjacent, [])
+                starts = [
+                    line
+                    for line in text.splitlines()
+                    if re.match(r"^\s*(?:0[xX][0-9A-Fa-f]{3,4}|\d{3,7})\s*[\u2026\u22EF]\s*$", line)
+                ]
+                self.assertEqual(starts, [])
+        ellipses = {"U+2026": "…", "U+22EF": "⋯"}
+        for ell_name, ell in ellipses.items():
+            with self.subTest(ellipsis=ell_name):
+                # Decimal inline: honest pass on every side.
+                line = f"History registers 60961{ell}60999 table\n"
+                scraped = scrape_decimal_ids(line)
+                self.assertEqual(len(scraped), 39)
+                self.assertIn(60961, scraped)
+                self.assertIn(60999, scraped)
+                self.assertNotIn(60961, scrape_doc_ids(line))
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(parser=cls.__name__):
+                        regs = cls(line).parse_registers()
+                        block = [r for r in regs if 60961 <= r <= 60999]
+                        self.assertEqual(len(block), 39)
+                        self.assertEqual(regs[60980].data_type, "struct")
+                        self.assertEqual(regs[60980].access, "R")
+                        self.assertIsNone(regs[60980].scale)
+                # Hex inline: honest pass on every side (ASCII parity below).
+                hexline = f"History 0x1060{ell}0x1062 table\n"
+                self.assertEqual(
+                    scrape_doc_ids(hexline), {0x1060, 0x1061, 0x1062}
+                )
+                self.assertIn(0x1061, BlueSolarHEXParser(hexline).parse_registers())
+                self.assertIn(0x1061, OrionXSHEXParser(hexline).parse_registers())
+                # Multi-line decimal: scraped (8-line overscan) and parsed
+                # by BlueSolar (3-line window); Orion misses like its ASCII
+                # control (no multi-line branch — pinned parity).
+                gap = f"60961 {ell}\n60963\n"
+                self.assertIn(60962, scrape_decimal_ids(gap))
+                self.assertIn(60962, BlueSolarHEXParser(gap).parse_registers())
+                self.assertNotIn(60962, OrionXSHEXParser(gap).parse_registers())
+        # Controls: ASCII still expands identically (no regression).
+        self.assertEqual(len(scrape_decimal_ids("History registers 60961-60999 table\n")), 39)
+        self.assertEqual(
+            scrape_doc_ids("History 0x1060..0x1062 table\n"), {0x1060, 0x1061, 0x1062}
+        )
+        self.assertIn(0x1061, BlueSolarHEXParser("History 0x1060..0x1062 table\n").parse_registers())
+        ascii_gap = "60961 ...\n60963\n"
+        self.assertIn(60962, scrape_decimal_ids(ascii_gap))
+        self.assertIn(60962, BlueSolarHEXParser(ascii_gap).parse_registers())
+        self.assertNotIn(60962, OrionXSHEXParser(ascii_gap).parse_registers())
+        # Span divergence: a 300-register ellipsis range is scraped (1024
+        # cap) but unparsed (64 cap) — loud, like the ASCII axis.
+        wide = "History registers 60961…61261 table\n"
+        self.assertIn(61100, scrape_decimal_ids(wide))
+        for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+            with self.subTest(span=cls.__name__):
+                self.assertNotIn(61100, cls(wide).parse_registers())
 
     def test_bmv_settings_parenthesized_unit_loud(self):
         """BMV settings-branch parenthesized units dropped silently: probe
@@ -4616,6 +4894,117 @@ class TestSpecParsers(unittest.TestCase):
         ).parse_registers()[0xEDEC]
         self.assertEqual(means.sentinels, {0xFFFF})
         self.assertEqual(means.unit, "K")
+
+    def test_sentinel_spaced_annotations_divergence(self):
+        """Spaced ``=``/``:`` sentinel annotations parse honestly on both sides.
+
+        Probes ``K, 0xFFFF = N/A`` / ``K, 0xFFFF: N/A`` yielded empty
+        sentinel sets on the parser with no independent sentinel scraper to
+        diverge against — a dropped annotation stayed green (reproduced
+        synthetically before the fix). The parser now accepts COMMA-led
+        spaced ``=``/``:`` (shared ``_SENTINEL_ANNOT_RE``), and the
+        independent scrape_doc_sentinels above re-derives the same sets from
+        raw text with a differently-shaped method (line walk + line-leading
+        ID + dtype tail + post-dtype tail scan, no parser token-split), so
+        the probes pass honestly on both sides. Divergence axes (loud, not
+        agreed-missing): the scraper's spaced operator needs NO comma, so a
+        comma-less ``K 0xFFFF = N/A`` row is scraped-but-unparsed; the
+        ``0xFF = user`` enum rows record in the scraper and are excused ONLY
+        by the exact SENTINEL_SCRAPER_ENUM_ALLOW pair (a genuine value
+        encoding per the 0xEDF1 values table, while the parser's comma guard
+        keeps it out). ``means`` keeps the code-first whitespace shape:
+        code-glued ``0xFFFFmeans`` and reversed ``means 0xFFFF`` are
+        non-shapes, pinned missed on both sides. Zero-diff: snapshot parser
+        sets are exactly 0xEDEC/0xEDE6 {0xFFFF} on BlueSolar+Orion (empty
+        everywhere else, incl. all of BMV/Phoenix), and scraper sets match
+        modulo the denylist pair (proved live here)."""
+        from spec_parser import BMV7xxHEXParser, OrionXSHEXParser
+
+        # Zero-diff: full snapshot sentinel maps, parser vs scraper.
+        for key, raw_key in (
+            ("bluesolar", "bluesolar"), ("orion", "orion"),
+            ("bmv", "bmv"), ("phoenix", "phoenix"),
+        ):
+            with self.subTest(snapshot=key):
+                regs = {
+                    "bluesolar": self.bs_regs, "orion": self.or_regs,
+                    "bmv": self.bmv_regs, "phoenix": self.ph_regs,
+                }[key]
+                parsed = {rid: set(r.sentinels) for rid, r in regs.items() if r.sentinels}
+                expected = (
+                    {0xEDEC: {0xFFFF}, 0xEDE6: {0xFFFF}}
+                    if key in ("bluesolar", "orion") else {}
+                )
+                self.assertEqual(parsed, expected)
+                scraped = {
+                    rid: vals
+                    for rid, vals in scrape_doc_sentinels(self.raw_texts[raw_key]).items()
+                }
+                for (erid, eval_) in SENTINEL_SCRAPER_ENUM_ALLOW:
+                    if erid in scraped:
+                        self.assertIn(eval_, scraped[erid])
+                        rest = scraped[erid] - {eval_}
+                        if rest:
+                            scraped[erid] = rest
+                        else:
+                            del scraped[erid]
+                self.assertEqual(scraped, expected)
+        # Honest pass: comma-led spaced ``=``/``:`` on section tables (both
+        # parsers) and the BMV short layout, plus tab spacing.
+        for annot in ("K, 0xFFFF = N/A", "K, 0xFFFF: N/A", "K, 0xFFFF\t=\tN/A"):
+            with self.subTest(annotation=annot):
+                for cls in (BlueSolarHEXParser, OrionXSHEXParser):
+                    with self.subTest(parser=cls.__name__):
+                        text = (
+                            "1.1 Get and Set items\n"
+                            f"0xEDEC     Battery temperature      0.01        un16        {annot}\n"
+                            "1.2 Asynchronous items\n"
+                        )
+                        probe = cls(text).parse_registers()[0xEDEC]
+                        self.assertEqual(probe.sentinels, {0xFFFF})
+                        self.assertEqual(
+                            scrape_doc_sentinels(text), {0xEDEC: {0xFFFF}}
+                        )
+                bmv = BMV7xxHEXParser(f"hdr\n0xEDEC Battery temp un16 {annot}\nftr").parse_registers()[0xEDEC]
+                self.assertEqual(bmv.sentinels, {0xFFFF})
+        # Still loud: comma-less spaced annotation is scraped but unparsed.
+        for annot in ("K 0xFFFF = N/A", "K 0xFFFF: N/A"):
+            with self.subTest(divergent=annot):
+                text = (
+                    "1.1 Get and Set items\n"
+                    f"0xEDEC     Battery temperature      0.01        un16        {annot}\n"
+                    "1.2 Asynchronous items\n"
+                )
+                self.assertEqual(
+                    scrape_doc_sentinels(text), {0xEDEC: {0xFFFF}}
+                )
+                self.assertEqual(
+                    BlueSolarHEXParser(text).parse_registers()[0xEDEC].sentinels, set()
+                )
+        # Enum denylist pin: ``0xFF = user`` stays parser-empty, scraper-hit.
+        enum_text = (
+            "1.1 Get and Set items\n"
+            "0xEDF1     Battery type               1           un8         0xFF = user\n"
+            "1.2 Asynchronous items\n"
+        )
+        self.assertEqual(
+            BlueSolarHEXParser(enum_text).parse_registers()[0xEDF1].sentinels, set()
+        )
+        self.assertEqual(scrape_doc_sentinels(enum_text), {0xEDF1: {0xFF}})
+        self.assertIn((0xEDF1, 0xFF), SENTINEL_SCRAPER_ENUM_ALLOW)
+        # ``means`` non-shapes stay missed on both sides; control still hits.
+        for nonshape in ("Battery 0xFFFFmeans N/A", "Battery means 0xFFFF N/A"):
+            with self.subTest(nonshape=nonshape):
+                row = f"hdr\n0xEDEC {nonshape} 0.01 un16 K\nftr"
+                self.assertEqual(
+                    BMV7xxHEXParser(row).parse_registers()[0xEDEC].sentinels, set()
+                )
+                text = (
+                    "1.1 Get and Set items\n"
+                    f"0xEDEC     {nonshape}      0.01        un16        K\n"
+                    "1.2 Asynchronous items\n"
+                )
+                self.assertEqual(scrape_doc_sentinels(text), {})
 
     def test_scale_scientific_notation_parsed(self):
         """A scientific-notation scale on an allowlisted ID (probe ``0xEDB3

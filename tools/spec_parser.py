@@ -186,20 +186,55 @@ def _normalize_range_dashes(line: str) -> str:
     return _SCALE_DASH_RE.sub("-", line)
 
 
+#: Single-char ellipsis lookalikes for a range separator (U+2026 HORIZONTAL
+#: ELLIPSIS, U+22EF MIDLINE HORIZONTAL ELLIPSIS): inline ranges accept ASCII
+#: ``..``/``...`` only, so ``60961…60999`` / ``0x1060…0x1062`` (and the U+22EF
+#: twins — verified missed synthetically before the fix, not assumed) missed
+#: every parser and scan while the ASCII controls expanded. Both normalize to
+#: ASCII ``...`` first, routing through the same shape guards (hex inline
+#: accepts 2-3 dots so ``...`` matches there like ``..``; decimal ``...``
+#: matches; multi-line ``...`` starts match; signed ``-32768..`` lookbehind, ``--`` exclusion, span and
+#: context caps unchanged). Applied only to range-scan lines (never
+#: whole-doc prose mutation). Zero-diff: the only snapshot ``…`` lines are
+#: HEX-framing prose (``[…]``/``[……]``, no digits) and the Orion
+#: cycle-history header ``(0x1070=newest, … , 0x1098=oldest)`` (endpoints
+#: already scraped via ASCII ``..``; the ``…`` sits between prose commas,
+#: never between digit groups — verified), and no snapshot line carries
+#: U+22EF at all — so normalization expands no range on current docs.
+_RANGE_ELLIPSIS_RE = re.compile("[\u2026\u22EF]")
+
+
+def _normalize_range_ellipsis(line: str) -> str:
+    """Map U+2026/U+22EF to ASCII ``...`` in a range line (see above)."""
+    return _RANGE_ELLIPSIS_RE.sub("...", line)
+
+
 #: Sentinel annotation inside a unit/description cell: a hex value glued to
-#: ``=`` with its meaning (``K, 0xFFFF=N/A``, ``A, 0xFFFF=use max``) or an
-#: explicit ``0xXXXX means ...`` clause. The ``=`` must be GLUED (no spaces):
-#: the only spaced ``0xHEX = ...`` unit cells in any snapshot are the
-#: 0xEDF1 Battery-type ``0xFF = user`` enum-value rows (BlueSolar + Orion —
-#: a genuine value encoding, not a sentinel), so glued-only keeps them out
-#: while the four sentinel rows match (verified by scan: glued ``0xHEX=``
-#: unit cells are exactly BlueSolar/Orion 0xEDEC/0xEDE6; spaced are exactly
-#: the two 0xEDF1 rows). Widths accept 1-8 hex digits (0xFF..0xFFFFFFFF);
-#: bare hex without ``=``/``means`` (Range ``0x0000..0xFFFF``, Step
-#: ``0xFFFFFFFF``, product IDs) never matches. Callers scan unit/desc cells
-#: only (never Range/prose/values tables).
+#: ``=`` with its meaning (``K, 0xFFFF=N/A``, ``A, 0xFFFF=use max``), a
+#: COMMA-led spaced annotation (``K, 0xFFFF = N/A``, ``K, 0xFFFF: N/A`` —
+#: probes missed by the glued-only shape on parser AND both scans while
+#: counts stayed green — reproduced synthetically before the fix), or an
+#: explicit ``0xXXXX means ...`` clause. The spaced ``=``/``:`` must be
+#: COMMA-led (``,\s*0xHEX\s*[:=]``): the only spaced ``0xHEX = ...`` unit
+#: cells in any snapshot are the 0xEDF1 Battery-type ``0xFF = user``
+#: enum-value rows (BlueSolar + Orion — a genuine value encoding, not a
+#: sentinel — verified by scan: spaced ``0xHEX =`` unit cells are exactly
+#: the two 0xEDF1 rows, which carry no comma), so the comma guard keeps
+#: them out while the four sentinel rows (``K, ...``/``A, ...`` — all
+#: comma-led) match glued or spaced alike. A comma-LESS spaced annotation
+#: (``K 0xFFFF = N/A``) stays parser-missed by design while the independent
+#: scraper (tests/test_spec_parsers.py scrape_doc_sentinels) still catches
+#: it — scraped-but-unparsed, failing loudly instead of agreed-missing (see
+#: the sentinel divergence test). The ``0xHEX means`` clause keeps its
+#: whitespace requirement (code-glued ``0xFFFFmeans`` and reversed
+#: ``means 0xFFFF`` are non-shapes, pinned missed on both sides). Widths
+#: accept 1-8 hex digits (0xFF..0xFFFFFFFF); bare hex without ``=``/``:``/
+#: ``means`` (Range ``0x0000..0xFFFF``, Step ``0xFFFFFFFF``, product IDs,
+#: ``==`` prose like the Orion ``LL == 0xFF`` note) never matches. Callers
+#: scan unit/desc cells only (never Range/prose/values tables).
 _SENTINEL_ANNOT_RE = re.compile(
     r"0[xX]([0-9A-Fa-f]{1,8})=(?!=)|0[xX]([0-9A-Fa-f]{1,8})\s+means\b"
+    r"|,\s*0[xX]([0-9A-Fa-f]{1,8})\s*=(?!=)\s*\S|,\s*0[xX]([0-9A-Fa-f]{1,8})\s*:\s*\S"
 )
 
 
@@ -210,7 +245,7 @@ def _extract_sentinel_annotations(*cells: Optional[str]) -> Set[int]:
         if not cell:
             continue
         for m in _SENTINEL_ANNOT_RE.finditer(cell):
-            hexpart = m.group(1) if m.group(1) is not None else m.group(2)
+            hexpart = next((g for g in m.groups() if g is not None), None)
             try:
                 found.add(int(hexpart, 16))
             except ValueError:
@@ -664,8 +699,13 @@ class BlueSolarHEXParser:
             # expanding 0x1234..0x1234). Endpoints accept 3-4 hex (a 3-hex
             # endpoint is the same valid omitted-zero ID as _ID_TOKEN_RE).
             # Zero-diff: no snapshot range
-            # endpoint carries 3-hex or 5+ hex digits (verified).
-            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", line):
+            # endpoint carries 3-hex or 5+ hex digits (verified). Dots accept
+            # 2-3 (``\.{2,3}``): single-char ellipsis separators (U+2026/U+22EF)
+            # normalize to ``...`` first (see _normalize_range_ellipsis), so
+            # probe ``0x1060…0x1062`` expands like the ASCII control.
+            # Zero-diff: no snapshot inline hex range carries 3 dots
+            # (verified — only ``..``), so current rows expand identically.
+            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.{2,3}\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", _normalize_range_ellipsis(line)):
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
                 # Only register-listing contexts (history/timer/cycle/vreg
                 # headers); never settings Range columns.
@@ -716,7 +756,10 @@ class BlueSolarHEXParser:
             # first (mirror of _normalize_scale_dashes): probe "History
             # registers 60961–60999 table" (U+2013) missed every side
             # before the fix while the ASCII control expanded 39 IDs.
-            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", _normalize_range_dashes(line)):
+            # Single-char ellipsis (U+2026/U+22EF) normalizes to "..."
+            # likewise (see _normalize_range_ellipsis): probe "History
+            # registers 60961…60999 table" expands like the control.
+            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", _normalize_range_dashes(_normalize_range_ellipsis(line))):
                 a, b = int(m.group(1)), int(m.group(2))
                 if not re.search(r"[Rr]egister|vreg|history|History|Timer|Cycle|0[xX]104F|0[xX]1050", line):
                     continue
@@ -733,7 +776,7 @@ class BlueSolarHEXParser:
                             source="BlueSolar-HEX",
                             notes=f"range-expanded decimal {a}..{b}; byte-field layout, no single wire type",
                         )
-            m = re.match(r"^\s*0[xX]([0-9A-Fa-f]{3,4})\s*\.\.\.\s*$", line)
+            m = re.match(r"^\s*0[xX]([0-9A-Fa-f]{3,4})\s*\.\.\.\s*$", _normalize_range_ellipsis(line))
             if m:
                 a = int(m.group(1), 16)
                 for j in range(i + 1, min(i + 4, len(lines))):
@@ -769,8 +812,11 @@ class BlueSolarHEXParser:
             # above; probes "999 ..." / "123456 ..." / "1234567 ..." expand
             # honestly).
             # Zero-diff: no decimal "..." start line exists in any snapshot
-            # (verified, including 3-/6-/7-digit).
-            dm = re.match(r"^\s*(\d{3,7})\s*\.\.\.\s*$", line)
+            # (verified, including 3-/6-/7-digit). Single-char ellipsis
+            # starts (``60961 …``) normalize likewise (zero-diff: no snapshot
+            # ``…``/``⋯`` start line — the only ``…`` lines are framing prose
+            # and the Orion ``, … ,`` header, verified).
+            dm = re.match(r"^\s*(\d{3,7})\s*\.\.\.\s*$", _normalize_range_ellipsis(line))
             if dm:
                 a = int(dm.group(1))
                 for j in range(i + 1, min(i + 4, len(lines))):
@@ -828,7 +874,11 @@ class BlueSolarHEXParser:
         end = self.text.find("1.2 Asynchronous items")
         region = self.text[start:end] if 0 <= start < end else self.text[start:]
         for line in region.splitlines():
-            if "..." in line or ".." in line or "|" in line or "=" in line:
+            # Range/marker lines never become single ID rows (multi-line
+            # ``…``/``⋯`` starts included: ``60961 …`` would otherwise match
+            # the ID shape below via its plain-space gap once the range span
+            # exceeds the 64 cap — mirroring how ASCII ``...`` is skipped).
+            if "..." in line or ".." in line or "…" in line or "⋯" in line or "|" in line or "=" in line:
                 continue
             # Split-typo IDs ("0x HHHH", see _ID_TOKEN_SPLIT_PREFIXES) share
             # this row shape; the inner whitespace is stripped for int().
@@ -953,27 +1003,56 @@ class BlueSolarHEXParser:
                 # line carries ``,``/``:``/``;``/``=`` after its decimal ID
                 # (verified), so current rows parse identically.
                 # Trailing-hyphen separator (probe ``60961- Future history
-                # record``: hyphen followed by SPACE, no second number —
-                # unambiguous, unlike the ``60961-60999`` range where the
-                # hyphen is followed by digits): missed by parsers + scans
-                # (``[\s,;:=]+`` excludes ``-``) while counts stayed green —
+                # record``, ``-\s+``: hyphen + whitespace — hyphen + digits
+                # stays the range shape, ``--`` never matches, hyphenated
+                # dates miss it; see history).
+                # Trailing-dot separator (probe ``60962. Future history
+                # record``: dot followed by SPACE — unambiguous, unlike the
+                # ``60961...60999`` range where dots are followed by digits,
+                # and unlike version prose ``1.16``/``v1.12`` which is
+                # mid-line and short-digited, never the line-leading
+                # ``\d{3,7}`` table-row shape): missed by parsers + scans
+                # (``[\s,;:=]+`` excludes ``.``) while counts stayed green —
                 # reproduced synthetically before the fix. The separator
-                # below accepts ``-\s+`` (hyphen + whitespace) alongside the
-                # existing class, so the hyphen-spelled row parses honestly
-                # on every side. Shape guards (explicit, justified):
-                # ``-\s+`` requires whitespace AFTER the hyphen, so
-                # ``60961-60999`` (hyphen + digits) still misses the ID-row
-                # shape and still expands via the decimal-range branches;
-                # ``--`` never matches (second hyphen is not ``\s``);
-                # hyphenated dates (``15-11-2021``, ``2021-09-06``) miss it
-                # (``-`` after digits is followed by digits, not space);
-                # bare years miss it (no description). Zero-diff: no
-                # snapshot history-region line carries a trailing hyphen
-                # after its decimal ID (verified), so current rows parse
-                # identically. Year guard
+                # below accepts ``\.\s+`` (dot + whitespace) alongside the
+                # existing class, so the dot-spelled row parses honestly on
+                # every side. Shape guards (explicit, justified): ``\.\s+``
+                # requires whitespace AFTER the dot, so ``60961...60999``
+                # (dots + digits) still misses the ID-row shape (and the
+                # ``..`` skip above excludes it first) and still expands via
+                # the decimal-range branches; version ``1.16``/``v1.12``
+                # misses it (mid-prose, never line-leading ``\d{3,7}``);
+                # dot-dates miss it the same way. Zero-diff: no snapshot
+                # history-region line carries a trailing dot after its
+                # decimal ID (verified), so current rows parse identically.
+                # Slash separator (probe ``60962/Future history record``:
+                # slash with NO space — unambiguous, unlike slash-dates
+                # ``15/11/2022`` whose line-leading run is 2-digit, never
+                # ``\d{3,7}``): missed by parsers + scans while counts stayed
+                # green — reproduced synthetically before the fix. The
+                # separator below accepts ``/\s*`` (slash + optional space)
+                # so both ``60962/Future`` and ``60962 / Future`` parse
+                # honestly. Shape guards: line-leading ``\d{3,7}`` keeps
+                # ``70/15``/``12V/12V`` product refs (2-digit leads) and
+                # mid-line prose out; hyphenated/slashed dates (``2021-09-06``,
+                # ``15/11/2022``) miss it as above. Zero-diff: no snapshot
+                # history-region line carries a slash after its decimal ID
+                # (verified).
+                # Unicode-dash separator (probe ``60961– Future history
+                # record`` U+2013 + SPACE — U+2014/U+2212 twins verified
+                # missed identically before the fix, not assumed): the
+                # separator below accepts ``[U+2212/U+2013/U+2014]\s+``
+                # (unicode dash + whitespace, mirror of ASCII ``-\s+``), so
+                # all three dash spellings parse honestly. Shape guards:
+                # whitespace required after the dash, so ``60961–60999``
+                # (dash + digits) still misses the ID-row shape and still
+                # expands via the normalized decimal-range branches.
+                # Zero-diff: no snapshot history-region line carries a
+                # unicode dash after its decimal ID (verified).
+                # Year guard
                 # below (``rid <= 255`` + region scoping) still excludes
                 # ``2021, ...`` prose outside regions (verified).
-                dm = re.match(r"^\s*(\d{3,7})(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", line)
+                dm = re.match(r"^\s*(\d{3,7})(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)(\S.*?)\s*$", line)
                 if not dm:
                     continue
                 rid = int(dm.group(1))
@@ -1149,7 +1228,11 @@ class OrionXSHEXParser:
             # endpoint is impossible and must not prefix-expand; a 3-hex
             # endpoint is a valid omitted-zero ID).
             # Zero-diff: no snapshot range endpoint carries 3-hex or 5+ hex digits.
-            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.\.\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", line):
+            # Dots accept 2-3 (``\.{2,3}``): probe ``0x1060…0x1062`` (U+2026,
+            # normalized to ``...`` via _normalize_range_ellipsis) expands
+            # like the ASCII control. Zero-diff: no snapshot inline hex
+            # range carries 3 dots (verified).
+            for m in re.finditer(r"0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])\s*\.{2,3}\s*0[xX]([0-9A-Fa-f]{3,4})(?![0-9A-Fa-f])", _normalize_range_ellipsis(line)):
                 a, b = int(m.group(1), 16), int(m.group(2), 16)
                 if not re.search(r"[Rr]egister|history|History|Cycle", line):
                     continue
@@ -1171,11 +1254,13 @@ class OrionXSHEXParser:
             # justification, widened to 3-/6-/7-digit there). Probe "History
             # registers 60961-60999 table" was missed on all sides before
             # the fix (unicode-dash twin "60961–60999" likewise — normalized
-            # via _normalize_range_dashes, mirror of _normalize_scale_dashes).
+            # via _normalize_range_dashes, mirror of _normalize_scale_dashes;
+            # single-char-ellipsis twin "60961…60999" likewise — normalized
+            # via _normalize_range_ellipsis).
             # Zero-diff: no decimal range line with history context
             # exists in any snapshot (verified, incl. 3-digit "174..372"
             # Range cells which lack the context guard).
-            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", _normalize_range_dashes(line)):
+            for m in re.finditer(r"(?<![\w\-])(\d{3,7})\s*(?:\.\.\.|\.\.|-(?!-))\s*(\d{3,7})(?!\w)", _normalize_range_dashes(_normalize_range_ellipsis(line))):
                 a, b = int(m.group(1)), int(m.group(2))
                 if not re.search(r"[Rr]egister|history|History|Cycle", line):
                     continue
@@ -1206,7 +1291,10 @@ class OrionXSHEXParser:
         start, end = self._history_region()
         region = self.text[start:end] if start >= 0 else self.text
         for line in region.splitlines():
-            if "..." in line or ".." in line or "|" in line or "=" in line:
+            # Range/marker lines never become single ID rows (multi-line
+            # ``…``/``⋯`` starts included — same justification as the
+            # BlueSolar handler above).
+            if "..." in line or ".." in line or "…" in line or "⋯" in line or "|" in line or "=" in line:
                 continue
             # Split-typo IDs ("0x HHHH", see _ID_TOKEN_SPLIT_PREFIXES) share
             # this row shape; the inner whitespace is stripped for int().
@@ -1255,11 +1343,14 @@ class OrionXSHEXParser:
                 # well as whitespace (same justification/pin as the BlueSolar
                 # handler above: ``,``/``:``/``;`` honest pass, spaceless
                 # ``=`` diverges via the ``"=" in line`` skip like the spaced
-                # control; trailing-hyphen ``60961- Future`` honest pass via
-                # ``-\s+`` there — hyphen+digits stays the range shape;
-                # zero-diff no snapshot history-region trailing hyphen after
-                # decimal ID, verified).
-                dm = re.match(r"^\s*(\d{3,7})(?:[\s,;:=]+|-\s+)(\S.*?)\s*$", line)
+                # control; trailing-hyphen/dot/slash/unicode-dash honest pass
+                # via ``-\s+``/``\.\s+``/``/\s*``/unicode-``\s+`` there (same
+                # guards: hyphen/dot/unicode-dash + digits stays the range
+                # shape, ``70/15`` 2-digit leads and ``15/11/2022`` miss the
+                # ``\d{3,7}`` shape, versions miss line-leading; zero-diff no
+                # snapshot history-region trailing separator after decimal
+                # ID, verified).
+                dm = re.match(r"^\s*(\d{3,7})(?:[\s,;:=]+|-\s+|\.\s+|/\s*|[\u2212\u2013\u2014]\s+)(\S.*?)\s*$", line)
                 if not dm:
                     # Single-line ".." range already handled; dotted triple
                     # ("0x1070..0x1098  Cycle history ...") is range-expanded.
