@@ -8,12 +8,12 @@ version = "0.1.0"
 description = "Async Python library for Victron VE.Direct Text + HEX protocols (MPPT/BMV/Inverter/Charger/OrionXS/RS)"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-only" }
 authors = [{ name = "ve.direct contributors" }]
 keywords = ["victron", "vedirect", "ve.direct", "mppt", "bmv", "solar"]
 classifiers = [
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: GNU Affero General Public License v3",
   "Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator",
 ]
 dependencies = []
