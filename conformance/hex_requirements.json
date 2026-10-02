@@ -27,7 +27,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:177"
+        "src/ve_direct/hex.py:178"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_all_byte_values_use_uppercase_hex_and_modulo_checksum",
@@ -82,8 +82,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:168",
-        "src/ve_direct/hex.py:173"
+        "src/ve_direct/hex.py:169",
+        "src/ve_direct/hex.py:174"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_all_byte_values_use_uppercase_hex_and_modulo_checksum",
@@ -119,8 +119,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:266",
-        "src/ve_direct/device.py:362"
+        "src/ve_direct/hex.py:275",
+        "src/ve_direct/device.py:490"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_get_and_set_envelopes_use_little_endian_and_zero_flags",
@@ -155,8 +155,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:272",
-        "src/ve_direct/device.py:366"
+        "src/ve_direct/hex.py:281",
+        "src/ve_direct/device.py:494"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_get_and_set_envelopes_use_little_endian_and_zero_flags",
@@ -191,8 +191,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:278",
-        "src/ve_direct/device.py:464"
+        "src/ve_direct/hex.py:287",
+        "src/ve_direct/device.py:603"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_fixed_command_builders",
@@ -223,8 +223,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:283",
-        "src/ve_direct/device.py:472"
+        "src/ve_direct/hex.py:292",
+        "src/ve_direct/device.py:611"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_fixed_command_builders",
@@ -254,8 +254,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:113",
-        "src/ve_direct/hex.py:145"
+        "src/ve_direct/hex.py:114",
+        "src/ve_direct/hex.py:146"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_version_types_and_release_candidate_letters"
@@ -284,8 +284,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:145",
-        "src/ve_direct/device.py:464"
+        "src/ve_direct/hex.py:146",
+        "src/ve_direct/device.py:603"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_orion_ping_types_have_no_version",
@@ -310,8 +310,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:267",
-        "src/ve_direct/device.py:472"
+        "src/ve_direct/device.py:389",
+        "src/ve_direct/device.py:611"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_unknown_and_framing_errors_fail_current_request"
@@ -341,7 +341,7 @@
       ],
       "implementation": [
         "src/ve_direct/hex.py:81",
-        "src/ve_direct/device.py:485"
+        "src/ve_direct/device.py:624"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_orion_24_bit_release_example",
@@ -401,8 +401,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:503",
-        "src/ve_direct/device.py:512",
+        "src/ve_direct/device.py:642",
+        "src/ve_direct/device.py:651",
         "src/ve_direct/transport.py:211"
       ],
       "tests": [
@@ -428,8 +428,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:503",
-        "src/ve_direct/device.py:511"
+        "src/ve_direct/device.py:642",
+        "src/ve_direct/device.py:650"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_product_id_command_accepts_documented_two_byte_reply"
@@ -463,8 +463,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:293",
-        "src/ve_direct/device.py:568"
+        "src/ve_direct/hex.py:302",
+        "src/ve_direct/device.py:709"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_fixed_command_builders",
@@ -495,8 +495,8 @@
       ],
       "implementation": [
         "src/ve_direct/hex.py:30",
-        "src/ve_direct/hex.py:298",
-        "src/ve_direct/device.py:517"
+        "src/ve_direct/hex.py:307",
+        "src/ve_direct/device.py:656"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_boot_command_contains_documented_magic_without_assuming_byte_order"
@@ -515,12 +515,12 @@
         },
         {
           "file": "README.md",
-          "start": 143,
-          "end": 147
+          "start": 175,
+          "end": 179
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:525"
+        "src/ve_direct/device.py:664"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_bmv_reserved_boot_command_is_not_transmitted"
@@ -574,9 +574,9 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:207",
-        "src/ve_direct/hex.py:221",
-        "src/ve_direct/hex.py:227"
+        "src/ve_direct/hex.py:208",
+        "src/ve_direct/hex.py:222",
+        "src/ve_direct/hex.py:228"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_direction_specific_names_and_register_envelopes",
@@ -612,7 +612,7 @@
       ],
       "implementation": [
         "src/ve_direct/hex.py:33",
-        "src/ve_direct/device.py:228"
+        "src/ve_direct/device.py:350"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_each_get_set_error_flag_is_an_error_not_a_value",
@@ -669,7 +669,7 @@
       "implementation": [
         "src/ve_direct/hex.py:39",
         "src/ve_direct/hex.py:75",
-        "src/ve_direct/device.py:267"
+        "src/ve_direct/device.py:389"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_direction_specific_names_and_register_envelopes",
@@ -714,7 +714,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:286"
+        "src/ve_direct/device.py:408"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_unknown_and_framing_errors_fail_current_request",
@@ -740,7 +740,7 @@
       ],
       "implementation": [
         "src/ve_direct/hex.py:19",
-        "src/ve_direct/device.py:286"
+        "src/ve_direct/device.py:408"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_unknown_and_framing_errors_fail_current_request",
@@ -775,18 +775,18 @@
         },
         {
           "file": "README.md",
-          "start": 129,
-          "end": 133
+          "start": 141,
+          "end": 145
         },
         {
           "file": "README.md",
-          "start": 143,
-          "end": 147
+          "start": 175,
+          "end": 179
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:286",
-        "src/ve_direct/device.py:517"
+        "src/ve_direct/device.py:408",
+        "src/ve_direct/device.py:656"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_boot_failure_is_not_assigned_to_next_command"
@@ -825,9 +825,9 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:210",
-        "src/ve_direct/device.py:395",
-        "src/ve_direct/device.py:427"
+        "src/ve_direct/device.py:332",
+        "src/ve_direct/device.py:525",
+        "src/ve_direct/device.py:558"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_async_alone_is_typed_and_never_acknowledged",
@@ -882,15 +882,15 @@
         },
         {
           "file": "src/ve_direct/hex.py",
-          "start": 235,
-          "end": 241
+          "start": 236,
+          "end": 242
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:235",
-        "src/ve_direct/device.py:157",
-        "src/ve_direct/device.py:214",
-        "src/ve_direct/device.py:245"
+        "src/ve_direct/hex.py:236",
+        "src/ve_direct/device.py:279",
+        "src/ve_direct/device.py:336",
+        "src/ve_direct/device.py:367"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_bad_checksums_and_unparseable_lines",
@@ -926,8 +926,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:157",
-        "src/ve_direct/text.py:291"
+        "src/ve_direct/device.py:279",
+        "src/ve_direct/text.py:302"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_text_async_and_reply_survive_every_chunk_boundary",
@@ -972,7 +972,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:157"
+        "src/ve_direct/device.py:279"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -989,7 +989,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:427"
+        "src/ve_direct/device.py:558"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1011,7 +1011,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:177"
+        "src/ve_direct/hex.py:178"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_orion_unknown_example_conflicts_with_checksum_rule"
@@ -1058,7 +1058,7 @@
       ],
       "implementation": [
         "src/ve_direct/hex.py:30",
-        "src/ve_direct/hex.py:298"
+        "src/ve_direct/hex.py:307"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_boot_command_contains_documented_magic_without_assuming_byte_order"
@@ -1077,13 +1077,13 @@
         },
         {
           "file": "README.md",
-          "start": 129,
-          "end": 133
+          "start": 141,
+          "end": 145
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:337",
-        "src/ve_direct/device.py:438"
+        "src/ve_direct/device.py:457",
+        "src/ve_direct/device.py:569"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_transactions_are_serialized_across_command_and_register_calls"
@@ -1097,18 +1097,18 @@
       "sources": [
         {
           "file": "src/ve_direct/device.py",
-          "start": 169,
-          "end": 176
+          "start": 291,
+          "end": 298
         },
         {
           "file": "README.md",
-          "start": 135,
-          "end": 141
+          "start": 147,
+          "end": 160
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:351",
-        "src/ve_direct/device.py:453"
+        "src/ve_direct/device.py:471",
+        "src/ve_direct/device.py:584"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_timeout_and_cancellation_after_write_fail_closed"
@@ -1122,22 +1122,22 @@
       "sources": [
         {
           "file": "src/ve_direct/device.py",
-          "start": 60,
-          "end": 64
+          "start": 110,
+          "end": 117
         },
         {
           "file": "README.md",
-          "start": 135,
-          "end": 141
+          "start": 147,
+          "end": 160
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:344",
-        "src/ve_direct/device.py:349",
-        "src/ve_direct/device.py:354",
-        "src/ve_direct/device.py:446",
-        "src/ve_direct/device.py:451",
-        "src/ve_direct/device.py:456"
+        "src/ve_direct/device.py:464",
+        "src/ve_direct/device.py:469",
+        "src/ve_direct/device.py:474",
+        "src/ve_direct/device.py:577",
+        "src/ve_direct/device.py:582",
+        "src/ve_direct/device.py:587"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_cancellation_during_write_must_also_fail_closed"
@@ -1156,18 +1156,18 @@
         },
         {
           "file": "README.md",
-          "start": 129,
-          "end": 133
+          "start": 141,
+          "end": 145
         },
         {
           "file": "README.md",
-          "start": 135,
-          "end": 141
+          "start": 147,
+          "end": 160
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:339",
-        "src/ve_direct/device.py:441"
+        "src/ve_direct/device.py:459",
+        "src/ve_direct/device.py:572"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_cancelling_a_queued_transaction_preserves_active_transaction"
@@ -1181,17 +1181,17 @@
       "sources": [
         {
           "file": "src/ve_direct/device.py",
-          "start": 169,
-          "end": 176
+          "start": 291,
+          "end": 298
         },
         {
           "file": "README.md",
-          "start": 135,
-          "end": 141
+          "start": 147,
+          "end": 160
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:181"
+        "src/ve_direct/device.py:303"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_reset_after_external_input_drain_reenables_transactions"
@@ -1205,8 +1205,8 @@
       "sources": [
         {
           "file": "src/ve_direct/device.py",
-          "start": 169,
-          "end": 176
+          "start": 291,
+          "end": 298
         },
         {
           "file": "tests/specs/BlueSolar-HEX-protocol.txt",
@@ -1220,13 +1220,13 @@
         },
         {
           "file": "README.md",
-          "start": 135,
-          "end": 141
+          "start": 147,
+          "end": 160
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:568",
-        "src/ve_direct/device.py:570"
+        "src/ve_direct/device.py:709",
+        "src/ve_direct/device.py:711"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_restart_cannot_make_buffered_stale_replies_safe"
@@ -1265,18 +1265,18 @@
         },
         {
           "file": "README.md",
-          "start": 129,
-          "end": 133
+          "start": 141,
+          "end": 145
         },
         {
           "file": "README.md",
-          "start": 135,
-          "end": 141
+          "start": 147,
+          "end": 160
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:214",
-        "src/ve_direct/device.py:245"
+        "src/ve_direct/device.py:336",
+        "src/ve_direct/device.py:367"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_reply_routing_requires_operation_and_register"
@@ -1295,18 +1295,18 @@
         },
         {
           "file": "src/ve_direct/device.py",
-          "start": 393,
-          "end": 402
+          "start": 521,
+          "end": 532
         },
         {
           "file": "README.md",
-          "start": 129,
-          "end": 133
+          "start": 141,
+          "end": 145
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:117",
-        "src/ve_direct/device.py:427"
+        "src/ve_direct/device.py:237",
+        "src/ve_direct/device.py:558"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_async_waiting_behind_text_reader_uses_already_queued_notification"
@@ -1325,15 +1325,15 @@
         },
         {
           "file": "README.md",
-          "start": 129,
-          "end": 133
+          "start": 141,
+          "end": 145
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:117",
-        "src/ve_direct/device.py:138",
-        "src/ve_direct/device.py:149",
-        "src/ve_direct/device.py:302"
+        "src/ve_direct/device.py:237",
+        "src/ve_direct/device.py:256",
+        "src/ve_direct/device.py:271",
+        "src/ve_direct/device.py:424"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_competing_text_readers_recheck_already_queued_frames",
@@ -1353,13 +1353,13 @@
         },
         {
           "file": "README.md",
-          "start": 113,
-          "end": 114
+          "start": 125,
+          "end": 126
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:362",
-        "src/ve_direct/device.py:366"
+        "src/ve_direct/device.py:490",
+        "src/ve_direct/device.py:494"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_raw_unknown_register_payload_remains_available"
@@ -1373,24 +1373,24 @@
       "sources": [
         {
           "file": "src/ve_direct/device.py",
-          "start": 86,
-          "end": 103
+          "start": 145,
+          "end": 187
         },
         {
           "file": "src/ve_direct/device.py",
-          "start": 120,
-          "end": 122
+          "start": 240,
+          "end": 242
         },
         {
           "file": "src/ve_direct/device.py",
-          "start": 292,
-          "end": 294
+          "start": 414,
+          "end": 416
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:93",
-        "src/ve_direct/device.py:108",
-        "src/ve_direct/device.py:326"
+        "src/ve_direct/device.py:152",
+        "src/ve_direct/device.py:192",
+        "src/ve_direct/device.py:448"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_eof_and_closed_connection_are_transport_errors"
@@ -1409,12 +1409,12 @@
         },
         {
           "file": "src/ve_direct/device.py",
-          "start": 69,
-          "end": 85
+          "start": 124,
+          "end": 144
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:76"
+        "src/ve_direct/device.py:132"
       ],
       "tests": [
         "test_hex_acceptance.HexClientAcceptance.test_serial_constructor_uses_19200_and_configurable_control_lines"
@@ -1605,8 +1605,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/hex.py:177",
-        "src/ve_direct/hex.py:235"
+        "src/ve_direct/hex.py:178",
+        "src/ve_direct/hex.py:236"
       ],
       "tests": [
         "test_hex_acceptance.HexWireAcceptance.test_every_literal_example_encodes_and_decodes"

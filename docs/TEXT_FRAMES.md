@@ -4,7 +4,23 @@ Wire: 19200 8N1, records `CR LF LABEL TAB VALUE`, approximately one
 block/sec. The raw byte after `Checksum<TAB>` makes `sum(block)%256==0`.
 HEX starts are detected byte-by-byte, including immediately after that raw
 checksum and while interrupting a Text record.
+Only an exact case-insensitive `Checksum` label after a CRLF record boundary
+terminates a block. Unknown labels such as `XChecksum`, and values containing
+`Checksum`, remain data within the validated block.
+An initial capture fragment starting at `Checksum<TAB>` or `LF Checksum<TAB>`
+is discarded so its raw checksum byte cannot hide the next complete block.
 BMV/SmartShunt sends alternating PID-block + history-block. In code: frame[label].value/.unit/.human, frame.to_si(), frame.describe(label).
+
+Nonnumeric measurement text stays in `.raw` and `.value`. `to_si()` preserves
+that string and converts the other numeric fields independently. Missing
+measurements retain `None`.
+
+The client queues up to 256 Text frames by default. Set a positive integer
+`text_queue_size` in its constructor, `from_streams()`, or `from_port()` to
+change the limit. Overflow discards the oldest queued frame and increments
+`dev.dropped_text_frames`. Frames below capacity retain arrival order.
+`read_one()` timeouts raise the exported `ve_direct.TimeoutError`.
+Closing the client wakes blocked Text readers with `TransportError`.
 
 ## Labels
 

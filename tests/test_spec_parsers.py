@@ -7519,19 +7519,39 @@ class TestCycle34SeparatorVariants(unittest.TestCase):
         single = "The product id:\nFoo Model  0x12345\nThese models are phased out.\n"
         self.assertNotIn(0x1234, tolerant_pid_ids(single))
         self.assertEqual(register_id_set_from_text(single), set())
+
+    def test_pid_renamed_markers_live(self):
+        from fetch_specs import tolerant_pid_ids
+        snap_text = self.raw_texts["text"]
         try:
-            for key in fetch_specs.OFFICIAL_SPECS:
-                with self.subTest(spec=key):
-                    pdf = download_pdf_bytes(fetch_specs.OFFICIAL_SPECS[key]["url"], timeout=30.0)
-                    live_ids = live_register_ids(pdf)
-                    snap_ids = register_id_set_from_text((self.specs_dir / f"{key}.txt").read_text(errors="ignore"))
-                    self.assertEqual(live_ids, snap_ids)
-                    if key == "VE.Direct-Protocol-3.34":
-                        from fetch_specs import live_text_for_structures
-                        live_text = live_text_for_structures(pdf)
-                        self.assertEqual(tolerant_pid_ids(live_text), tolerant_pid_ids(snap_text))
+            pdfs = {
+                key: download_pdf_bytes(spec["url"], timeout=30.0)
+                for key, spec in fetch_specs.OFFICIAL_SPECS.items()
+            }
         except OSError as e:
             self.skipTest(f"live download unreachable, skipping: {e}")
+        for key, pdf in pdfs.items():
+            with self.subTest(spec=key):
+                live_ids = live_register_ids(pdf)
+                snap_ids = register_id_set_from_text((self.specs_dir / f"{key}.txt").read_text(errors="ignore"))
+                self.assertEqual(live_ids, snap_ids)
+                if key == "VE.Direct-Protocol-3.34":
+                    from fetch_specs import live_text_for_structures
+                    live_text = live_text_for_structures(pdf)
+                    self.assertEqual(tolerant_pid_ids(live_text), tolerant_pid_ids(snap_text))
+
+    def test_pid_live_download_failure_skips_without_errors(self):
+        suite = unittest.TestSuite([
+            type(self)("test_pid_renamed_markers_stale"),
+            type(self)("test_pid_renamed_markers_live"),
+        ])
+        result = unittest.TestResult()
+        with mock.patch(__name__ + ".download_pdf_bytes", side_effect=OSError("offline")):
+            suite.run(result)
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(result.testsRun, 2)
+        self.assertEqual(len(result.skipped), 1)
+        self.assertEqual(result.skipped[0][0]._testMethodName, "test_pid_renamed_markers_live")
 
 
 if __name__ == "__main__":

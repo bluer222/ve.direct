@@ -1,6 +1,6 @@
 Acceptance verdict: PASS_WITH_STATED_SCOPE
 
-Scope `public-host-2026-09-27`. Generated 2026-09-27T15:52:51+00:00.
+Scope `public-host-2026-09-27`. Generated 2026-09-30T12:32:33+00:00.
 
 191 requirement groups; 122 distinct test methods; 2114 unittest subtests.
 
@@ -8,7 +8,7 @@ Requirement results: AMBIGUOUS=14, DEVICE=48, EXCLUDED=4, PASS=125.
 
 This is a finite host-protocol acceptance result, not a claim that all possible programs or hardware behavior were proved correct. PASS applies only to the evidence named in each requirement. DEVICE and EXCLUDED are outside the host gate. AMBIGUOUS records a source conflict; it must remain visible in the supported-scope claim. FAIL, GAP, missing tests, skipped tests, and unreviewed source sections block acceptance.
 
-Implementation fingerprint: `04da0f86f7e657b891b5c4acdba024fd5a6f93f49a525ae2b3077eff112d53b5`.
+Implementation fingerprint: `0621c3ed3e97cea6d0b5c6f6a10da6ce4d49e4b664d1031a8d16badc175350b6`.
 
 The source section ledger accounts for every nonblank snapshot line. This detects omitted sections; it does not mechanically prove that the human interpretation of every sentence is correct.
 

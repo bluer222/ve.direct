@@ -9,7 +9,7 @@ Usage:
 
 Concurrency: one shared wire, so all reads go through a single read lock and
 HEX request/response transactions are serialized.
-Text frames arriving during a HEX transaction are queued, never dropped;
+Text frames arriving during a HEX transaction are queued up to configured limits;
 HEX replies arriving while frames() drives the reads still resolve penders.
 """
 from __future__ import annotations
@@ -25,45 +25,100 @@ from .hex import HexFrame, decode_line
 from .text import Frame, TextParser
 
 BAUDRATE = 19200
+DEFAULT_QUEUE_SIZE = 256
 _LOG = logging.getLogger(__name__)
 
 
 class AsyncVEDirect:
     def __init__(self, read_chunk, write, *, read_size: int = 1024,
-                 flavor: str | None = None) -> None:
-        """read_chunk(n) -> await bytes, write(bytes) -> await None."""
+                 flavor: str | None = None,
+                 text_queue_size: int = DEFAULT_QUEUE_SIZE,
+                 async_queue_size: int = DEFAULT_QUEUE_SIZE,
+                 close_transport=None) -> None:
+        """Build a client from async read/write callables.
+
+        Both event queues drop their oldest item when full. Queue sizes must
+        be positive integers. Optional close_transport() releases resources
+        owned by a custom transport and may return an awaitable.
+        """
+        self._validate_queue_sizes(text_queue_size, async_queue_size)
         self._read_chunk = read_chunk
         self._write = write
+        self._close_transport = close_transport
         self._read_size = read_size
         self.flavor = flavor
         self._text = TextParser()
         self._register_waiter: tuple[int, int, asyncio.Future] | None = None
         self._command_waiter: tuple[int, asyncio.Future] | None = None
         self._boot_waiter: asyncio.Future | None = None
-        self._text_queue: asyncio.Queue[Frame] = asyncio.Queue()
-        self.async_frames: asyncio.Queue[HexFrame] = asyncio.Queue()
+        self._text_queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=text_queue_size)
+        self.async_frames: asyncio.Queue[HexFrame] = asyncio.Queue(maxsize=async_queue_size)
+        self.dropped_text_frames = 0
+        self.dropped_async_frames = 0
         self._write_lock = asyncio.Lock()
         self._transaction_lock = asyncio.Lock()
         self._read_lock = asyncio.Lock()
         self._data_pumped = asyncio.Event()
         self._hex_synchronized = True
         self._closed = False
+        self._read_task: asyncio.Future | None = None
+        self._write_task: asyncio.Future | None = None
+        self._close_task: asyncio.Task | None = None
+
+    @staticmethod
+    def _validate_queue_sizes(text_queue_size: int, async_queue_size: int) -> None:
+        for name, size in (("text_queue_size", text_queue_size),
+                           ("async_queue_size", async_queue_size)):
+            if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+    @property
+    def flavor(self) -> str | None:
+        return self._flavor
+
+    @flavor.setter
+    def flavor(self, value: str | None) -> None:
+        self._flavor = value.upper() if value is not None else None
+
+    def _enqueue(self, queue: asyncio.Queue, frame, *, text: bool) -> None:
+        if queue.full():
+            queue.get_nowait()
+            queue.task_done()
+            if text:
+                self.dropped_text_frames += 1
+            else:
+                self.dropped_async_frames += 1
+        queue.put_nowait(frame)
 
     async def _do_write(self, payload: bytes) -> None:
+        task = None
         try:
             res = self._write(payload)
             if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
-                await res
-        except (Exception, asyncio.CancelledError):
+                task = asyncio.ensure_future(res)
+                self._write_task = task
+                await task
+            self._check_open()
+        except asyncio.CancelledError:
+            self._hex_synchronized = False
+            if self._closed:
+                raise TransportError("device is closed") from None
+            raise
+        except Exception:
             # A transport may send bytes before drain() fails or is cancelled.
             # Its eventual reply cannot safely belong to a later transaction.
             self._hex_synchronized = False
             raise
+        finally:
+            if self._write_task is task:
+                self._write_task = None
 
     # ---- construction ----
     @classmethod
     def from_streams(cls, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                     *, flavor: str | None = None):
+                     *, flavor: str | None = None,
+                     text_queue_size: int = DEFAULT_QUEUE_SIZE,
+                     async_queue_size: int = DEFAULT_QUEUE_SIZE):
         async def read_chunk(n: int) -> bytes:
             return await reader.read(n)
 
@@ -71,14 +126,18 @@ class AsyncVEDirect:
             writer.write(data)
             await writer.drain()
 
-        dev = cls(read_chunk, write, flavor=flavor)
+        dev = cls(read_chunk, write, flavor=flavor,
+                  text_queue_size=text_queue_size, async_queue_size=async_queue_size)
         dev._writer = writer  # type: ignore[attr-defined]
         return dev
 
     @classmethod
     async def from_port(cls, port: str, baudrate: int = BAUDRATE,
                         *, flavor: str | None = None,
-                        dtr: bool = True, rts: bool = False):
+                        dtr: bool = True, rts: bool = False,
+                        text_queue_size: int = DEFAULT_QUEUE_SIZE,
+                        async_queue_size: int = DEFAULT_QUEUE_SIZE):
+        cls._validate_queue_sizes(text_queue_size, async_queue_size)
         try:
             import serial_asyncio  # type: ignore[import-not-found]
         except ImportError as e:
@@ -92,14 +151,41 @@ class AsyncVEDirect:
             with suppress(Exception):
                 serial_obj.dtr = dtr
                 serial_obj.rts = rts
-        return cls.from_streams(reader, writer, flavor=flavor)
+        return cls.from_streams(reader, writer, flavor=flavor,
+                                text_queue_size=text_queue_size,
+                                async_queue_size=async_queue_size)
 
     async def close(self) -> None:
+        """Wake readers and pending requests, then release the transport.
+
+        Only the client's transport tasks are cancelled. Caller tasks receive
+        TransportError and remain responsible for their own other work.
+        """
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._finish_close())
+        await asyncio.shield(self._close_task)
+
+    async def _finish_close(self) -> None:
         self._closed = True
+        self._fail_pending_request(TransportError("device is closed"))
+        tasks = [task for task in (self._read_task, self._write_task)
+                 if task is not None]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+        self._read_task = None
+        self._write_task = None
+        self._data_pumped.set()
         w = getattr(self, "_writer", None)
         if w is not None:
             with suppress(Exception):
                 w.close()
+        if self._close_transport is not None:
+            result = self._close_transport()
+            if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
+                await result
 
     async def __aenter__(self):
         return self
@@ -110,6 +196,56 @@ class AsyncVEDirect:
     def _check_open(self) -> None:
         if self._closed:
             raise TransportError("device is closed")
+
+    def _fail_pending_request(self, exc: Exception) -> None:
+        fut = self._active_future()
+        if fut is not None and not fut.done():
+            self._hex_synchronized = False
+            fut.set_exception(exc)
+
+    async def _read_transport(self, *, consumer_read: bool = False) -> bytes:
+        """Own the cancellable transport read without cancelling its caller."""
+        self._check_open()
+        task = self._read_task
+        retain_read = False
+        try:
+            if task is None:
+                task = asyncio.ensure_future(self._read_chunk(self._read_size))
+                self._read_task = task
+            chunk = await asyncio.shield(task)
+            self._check_open()
+            if chunk == b"":
+                raise TransportError("connection closed / EOF on transport")
+            return chunk
+        except asyncio.CancelledError:
+            fut = self._active_future()
+            if (consumer_read and not self._closed and task is not None and not task.cancelled()
+                    and fut is not None and not fut.done()):
+                # A consumer deadline must not cancel the wire read serving
+                # another request. The next pump takes ownership of this read,
+                # including bytes that arrive before it acquires the lock.
+                retain_read = True
+                raise
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await task
+            exc = TransportError("device is closed" if self._closed
+                                 else "transport read was cancelled")
+            # Boot has no success reply. Ending its observation window may
+            # cancel this read without leaving an unmatched request reply.
+            # Cancellation of boot itself still fails closed in boot().
+            if self._boot_waiter is None or self._closed:
+                self._fail_pending_request(exc)
+            if self._closed:
+                raise exc from None
+            raise
+        except Exception as exc:
+            self._fail_pending_request(exc)
+            raise
+        finally:
+            if not retain_read and self._read_task is task:
+                self._read_task = None
 
     # ---- shared read pump (single reader for the shared wire) ----
     async def _pump_once(self, *, require_text: bool = False,
@@ -127,11 +263,9 @@ class AsyncVEDirect:
             if require_async and not self.async_frames.empty():
                 return
             self._check_open()
-            chunk = await self._read_chunk(self._read_size)
-            if chunk == b"":
-                raise TransportError("connection closed / EOF on transport")
+            chunk = await self._read_transport(consumer_read=True)
             for frame in self._pump(chunk):
-                self._text_queue.put_nowait(frame)
+                self._enqueue(self._text_queue, frame, text=True)
             self._data_pumped.set()
             self._data_pumped.clear()
 
@@ -139,12 +273,16 @@ class AsyncVEDirect:
     async def read_one(self, timeout: float = 5.0) -> Frame:
         async def _next() -> Frame:
             while True:
+                self._check_open()
                 try:
                     return self._text_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     await self._pump_once(require_text=True)
 
-        return await asyncio.wait_for(_next(), timeout)
+        try:
+            return await asyncio.wait_for(_next(), timeout)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(f"no Text frame within {timeout}s") from exc
 
     async def frames(self):
         """Yield checksum-validated Text Frames forever."""
@@ -183,7 +321,7 @@ class AsyncVEDirect:
 
         A timed-out request cannot be safely distinguished from a later reply
         because VE.Direct has no transaction identifier.  The client therefore
-        fails closed after timeout/cancellation.  Call this only after the
+        fails closed after timeout, cancellation or transport failure. Call this only after the
         device/link has been reset and stale host input has been drained.
         A restart command alone cannot remove buffered host input.
         Discard partial parser state from the old connection; already queued
@@ -212,7 +350,7 @@ class AsyncVEDirect:
         if not frame.valid:
             raise ChecksumError(f"HEX checksum failed for {frame.raw!r}")
         if frame.cmd == _hex.CMD_ASYNC:
-            self.async_frames.put_nowait(frame)
+            self._enqueue(self.async_frames, frame, text=False)
             return
         if frame.cmd in (_hex.CMD_GET, _hex.CMD_SET):
             # BlueSolar-HEX §1 / Orion-XS-HEX §1 Get/Set response =
@@ -323,11 +461,9 @@ class AsyncVEDirect:
                     if fut.done():
                         break
                     self._check_open()
-                    chunk = await self._read_chunk(self._read_size)
-                    if chunk == b"":
-                        raise TransportError("connection closed / EOF on transport")
+                    chunk = await self._read_transport()
                     for frame in self._pump(chunk):
-                        self._text_queue.put_nowait(frame)
+                        self._enqueue(self._text_queue, frame, text=True)
                     self._data_pumped.set()
                     self._data_pumped.clear()
             return fut.result()
@@ -355,9 +491,17 @@ class AsyncVEDirect:
                 if wrote:
                     self._hex_synchronized = False
                 raise
+            except Exception:
+                if wrote and not fut.done():
+                    self._hex_synchronized = False
+                raise
             finally:
                 if self._register_waiter is not None and self._register_waiter[2] is fut:
                     self._register_waiter = None
+                if not fut.done():
+                    fut.cancel()
+                elif not fut.cancelled():
+                    fut.exception()
 
     async def hex_get_raw(self, register_id: int, timeout: float = 2.0) -> HexFrame:
         return await self._transact(
@@ -390,7 +534,9 @@ class AsyncVEDirect:
             raise RegisterError(f"{reg.name} is CONSTANT")
         raw = _regs.encode_value(reg, value)
         frame = await self.hex_set_raw(reg.id, raw, timeout)
-        return _regs.decode_value(reg, frame.value_bytes) if frame.value_bytes else None
+        if reg.cls == "VOID" and not frame.value_bytes:
+            return None
+        return _regs.decode_value(reg, frame.value_bytes)
 
     def decode_async_frame(self, frame: HexFrame,
                            *, flavor: str | None = None) -> dict:
@@ -420,7 +566,8 @@ class AsyncVEDirect:
             "register_id": rid,
             "name": reg.name,
             "flags": frame.flags or 0,
-            "value": _regs.decode_value(reg, frame.value_bytes),
+            "value": (frame.value_bytes if frame.flags
+                      else _regs.decode_value(reg, frame.value_bytes)),
             "register": reg,
         }
 
@@ -457,9 +604,17 @@ class AsyncVEDirect:
                 if wrote:
                     self._hex_synchronized = False
                 raise
+            except Exception:
+                if wrote and not fut.done():
+                    self._hex_synchronized = False
+                raise
             finally:
                 if self._command_waiter is not None and self._command_waiter[1] is fut:
                     self._command_waiter = None
+                if not fut.done():
+                    fut.cancel()
+                elif not fut.cancelled():
+                    fut.exception()
 
     async def ping(self, timeout: float = 2.0) -> HexFrame:
         frame = await self._command_transact(
@@ -554,6 +709,8 @@ class AsyncVEDirect:
                     self._boot_waiter = None
                 if not fut.done():
                     fut.cancel()
+                elif not fut.cancelled():
+                    fut.exception()
 
     async def restart(self) -> None:
         """Send ``:64F`` without waiting for a reply.

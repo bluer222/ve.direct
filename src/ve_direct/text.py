@@ -40,18 +40,22 @@ _MISSING_EMPTY_LABELS = frozenset({"T", "CE", "SOC", "TTG"})
 _CHECKSUM_TAB = b"checksum\t"
 
 
-def _endswith_checksum_tab(buf: bytes | bytearray) -> bool:
-    n = len(_CHECKSUM_TAB)
-    return len(buf) >= n and bytes(buf[-n:]).lower() == _CHECKSUM_TAB
+def _endswith_checksum_tab(buf: bytes | bytearray, *, initial: bool = False) -> bool:
+    marker = b"\r\n" + _CHECKSUM_TAB
+    if len(buf) >= len(marker) and bytes(buf[-len(marker):]).lower() == marker:
+        return True
+    # A capture can begin at the final field of a partial block, with CRLF
+    # or its CR missing. Protect its raw checksum byte from HEX demux only
+    # at startup. The strict marker search never publishes this fragment.
+    return (initial and len(buf) in (len(_CHECKSUM_TAB), len(_CHECKSUM_TAB) + 1)
+            and bytes(buf).lower() in (_CHECKSUM_TAB, b"\n" + _CHECKSUM_TAB))
 
 
 def _find_checksum_tab(buf: bytes | bytearray, start: int = 0) -> int:
-    n = len(_CHECKSUM_TAB)
-    limit = len(buf) - n + 1
-    for i in range(start, limit):
-        if bytes(buf[i:i + n]).lower() == _CHECKSUM_TAB:
-            return i
-    return -1
+    # Only an exact field at a CRLF record boundary terminates a block.
+    # Labels such as XChecksum and value text containing Checksum are data.
+    index = bytes(buf).lower().find(b"\r\n" + _CHECKSUM_TAB, max(0, start - 2))
+    return index + 2 if index >= 0 else -1
 
 
 def _decode_fw(raw: str) -> str | None:
@@ -211,12 +215,14 @@ class Frame:
         return f"{label}: {tv.raw}{u} ({tv.desc}){h}"
 
     def to_si(self) -> dict[str, float | int | str | None]:
-        """Wire units converted to SI-ish floats (V, A, kWh, ...)."""
+        """Convert numeric wire units, preserving invalid raw strings and None."""
         out: dict[str, float | int | str | None] = {}
         for label, tv in self.fields.items():
             v = tv.value
             if v is None:
                 out[label] = None
+            elif not isinstance(v, (int, float)):
+                out[label] = v
             elif label in ("V", "V2", "V3", "VS", "VM", "VPV", "H7", "H8", "H15", "H16"):
                 out[label] = v / 1000  # type: ignore[operator]
             elif label in ("I", "I2", "I3", "IL"):
@@ -276,6 +282,11 @@ class TextParser:
         hex_lines: list[bytes] = []
         for byte in data:
             if self._hex_buf is not None:
+                if byte == ord(":"):
+                    # A colon cannot be HEX data. Drop an unfinished frame
+                    # so a lost LF cannot hide the next complete reply.
+                    self._hex_buf = bytearray(b":")
+                    continue
                 self._hex_buf.append(byte)
                 if byte == 0x0A:
                     hex_lines.append(bytes(self._hex_buf))
@@ -286,7 +297,7 @@ class TextParser:
                     self._hex_buf = None
                 continue
 
-            checksum_byte_expected = _endswith_checksum_tab(self._buf)
+            checksum_byte_expected = _endswith_checksum_tab(self._buf, initial=not self._seen_checksum)
             if byte == ord(":") and not checksum_byte_expected:
                 self._hex_buf = bytearray(b":")
                 continue

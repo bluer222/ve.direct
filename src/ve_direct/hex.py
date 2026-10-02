@@ -84,11 +84,12 @@ def decode_app_version_24(raw: bytes | int | object) -> dict:
     Orion-XS §1.1 Notes 1-2 document only LL == 0xFF = release (vHH.MM).
     Any other LL value is undocumented: return version None with an
     "unknown(...)" type, never an invented label.
+    Integer inputs represent the complete unsigned four-byte register word.
     """
     if hasattr(raw, "value_bytes"):
         raw = getattr(raw, "value_bytes")
     if isinstance(raw, int):
-        raw_b = raw.to_bytes(4 if raw > 0xFFFFFF else 3, "little")
+        raw_b = raw.to_bytes(4, "little")
     else:
         raw_b = bytes(raw)
     h = raw_b.hex().upper()
@@ -239,18 +240,26 @@ def decode_line(line: bytes | str, *, strict: bool = False) -> HexFrame:
     Default (streaming) returns ``HexFrame(valid=False)`` on bad checksum so
     one corrupt line never kills the Text/HEX stream; pass ``strict=True``
     for request/response validation where a bad checksum must raise.
+    Accept lowercase digits and an optional LF or CRLF terminator. Any other
+    whitespace or character outside the HEX alphabet raises FrameError.
     """
     try:
         raw = line.encode("ascii") if isinstance(line, str) else bytes(line)
-        s = raw.strip().decode("ascii", errors="strict")
+        s = raw.decode("ascii", errors="strict")
     except (UnicodeDecodeError, UnicodeEncodeError) as e:
         raise FrameError(f"HEX line is not ASCII: {e}") from e
+    if s.endswith("\r\n"):
+        s = s[:-2]
+    elif s.endswith("\n"):
+        s = s[:-1]
     if not s.startswith(":"):
         raise FrameError(f"HEX line must start with ':', got {s!r}")
-    hexpart = s[1:].strip()
+    hexpart = s[1:]
     if len(hexpart) < 3 or len(hexpart) % 2 == 0:
         # cmd(1 nibble) + data pairs + check(2) => odd total length, min 3
         raise FrameError(f"malformed HEX line: {s!r}")
+    if any(char not in "0123456789ABCDEFabcdef" for char in hexpart):
+        raise FrameError(f"non-hex character in {s!r}")
     try:
         cmd = int(hexpart[0], 16)
         all_bytes = bytes(int(hexpart[i : i + 2], 16) for i in range(1, len(hexpart), 2))

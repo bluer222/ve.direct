@@ -28,7 +28,7 @@
       ],
       "implementation": [
         "src/ve_direct/device.py:27",
-        "src/ve_direct/device.py:79"
+        "src/ve_direct/device.py:135"
       ],
       "tests": [
         "test_transport_acceptance.TransportAcceptance.test_serial_defaults",
@@ -48,7 +48,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:79"
+        "src/ve_direct/device.py:135"
       ],
       "tests": [
         "test_transport_acceptance.TransportAcceptance.test_control_lines"
@@ -82,8 +82,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:268",
-        "src/ve_direct/text.py:334"
+        "src/ve_direct/text.py:274",
+        "src/ve_direct/text.py:345"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_documented_frame_fixture_and_every_split",
@@ -103,7 +103,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:334"
+        "src/ve_direct/text.py:345"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_unknown_fields_and_arbitrary_label_lengths"
@@ -127,7 +127,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:141"
+        "src/ve_direct/text.py:145"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_numeric_units_and_si_conventions_for_all_measurements",
@@ -147,8 +147,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:289",
-        "src/ve_direct/text.py:298"
+        "src/ve_direct/text.py:300",
+        "src/ve_direct/text.py:309"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_all_256_binary_checksum_bytes",
@@ -168,7 +168,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:298"
+        "src/ve_direct/text.py:309"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_documented_frame_fixture_and_every_split"
@@ -192,7 +192,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:314"
+        "src/ve_direct/text.py:325"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_corrupted_measurement_rejected_after_known_boundary",
@@ -212,7 +212,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:298"
+        "src/ve_direct/text.py:309"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_alternating_blocks_stay_independent_at_every_split",
@@ -232,7 +232,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:268"
+        "src/ve_direct/text.py:274"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_hex_between_records_and_after_checksum_at_every_split",
@@ -252,7 +252,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:268"
+        "src/ve_direct/text.py:274"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_hex_midrecord_resume_policy",
@@ -288,7 +288,7 @@
       ],
       "implementation": [
         "src/ve_direct/tables.py:10",
-        "src/ve_direct/text.py:213"
+        "src/ve_direct/text.py:217"
       ],
       "tests": [
         "test_spec_parsers.TestSpecParsers.test_text_protocol_spec",
@@ -338,7 +338,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:124"
+        "src/ve_direct/text.py:128"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_product_id_serial_and_legacy_model",
@@ -364,7 +364,7 @@
       ],
       "implementation": [
         "src/ve_direct/tables.py:24",
-        "src/ve_direct/text.py:141"
+        "src/ve_direct/text.py:145"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_current_sign_is_preserved"
@@ -388,7 +388,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:128"
+        "src/ve_direct/text.py:132"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_missing_sensor_unsynchronised_and_dc_monitor_fields"
@@ -417,7 +417,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:128"
+        "src/ve_direct/text.py:132"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_missing_sensor_unsynchronised_and_dc_monitor_fields"
@@ -446,7 +446,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:128"
+        "src/ve_direct/text.py:132"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_missing_sensor_unsynchronised_and_dc_monitor_fields"
@@ -465,7 +465,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:169"
+        "src/ve_direct/text.py:173"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_time_to_go_infinity_preserves_sentinel"
@@ -490,7 +490,7 @@
       ],
       "implementation": [
         "src/ve_direct/tables.py:45",
-        "src/ve_direct/text.py:213"
+        "src/ve_direct/text.py:217"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_numeric_units_and_si_conventions_for_all_measurements",
@@ -530,7 +530,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:175"
+        "src/ve_direct/text.py:179"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_alarm_relay_and_load_states"
@@ -549,7 +549,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:175"
+        "src/ve_direct/text.py:179"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_alarm_relay_and_load_states"
@@ -598,7 +598,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:57"
+        "src/ve_direct/text.py:61"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_fw_release_and_candidate_examples",
@@ -618,7 +618,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:75"
+        "src/ve_direct/text.py:79"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_fwe_documented_examples"
@@ -637,7 +637,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:78"
+        "src/ve_direct/text.py:82"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_fwe_leading_zero_padding_is_optional"
@@ -656,7 +656,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:81"
+        "src/ve_direct/text.py:85"
       ],
       "tests": [],
       "disposition": "ambiguous",
@@ -673,7 +673,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:165",
+        "src/ve_direct/text.py:169",
         "src/ve_direct/tables.py:120"
       ],
       "tests": [
@@ -693,7 +693,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:165",
+        "src/ve_direct/text.py:169",
         "src/ve_direct/tables.py:136"
       ],
       "tests": [
@@ -728,8 +728,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:141",
-        "src/ve_direct/text.py:154"
+        "src/ve_direct/text.py:145",
+        "src/ve_direct/text.py:158"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_hexadecimal_off_reason_wire_value"
@@ -793,7 +793,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:153",
+        "src/ve_direct/text.py:157",
         "src/ve_direct/tables.py:75"
       ],
       "tests": [],
@@ -830,7 +830,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:136"
+        "src/ve_direct/text.py:140"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_product_id_serial_and_legacy_model",
@@ -850,7 +850,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:155",
+        "src/ve_direct/text.py:159",
         "src/ve_direct/tables.py:79"
       ],
       "tests": [
@@ -886,7 +886,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:157",
+        "src/ve_direct/text.py:161",
         "src/ve_direct/tables.py:98"
       ],
       "tests": [
@@ -907,7 +907,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:157"
+        "src/ve_direct/text.py:161"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_all_error_codes"
@@ -946,7 +946,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:150"
+        "src/ve_direct/text.py:154"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_day_sequence_full_domain_and_rollover"
@@ -980,7 +980,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:184"
+        "src/ve_direct/text.py:188"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_product_id_serial_and_legacy_model"
@@ -1016,7 +1016,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:159",
+        "src/ve_direct/text.py:163",
         "src/ve_direct/tables.py:158"
       ],
       "tests": [
@@ -1036,7 +1036,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:161",
+        "src/ve_direct/text.py:165",
         "src/ve_direct/tables.py:166"
       ],
       "tests": [
@@ -1056,7 +1056,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:163",
+        "src/ve_direct/text.py:167",
         "src/ve_direct/tables.py:172"
       ],
       "tests": [
@@ -1076,8 +1076,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:252",
-        "src/ve_direct/text.py:298"
+        "src/ve_direct/text.py:258",
+        "src/ve_direct/text.py:309"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_recommended_capacity_accepts_22_records"
@@ -1096,8 +1096,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:252",
-        "src/ve_direct/text.py:298"
+        "src/ve_direct/text.py:258",
+        "src/ve_direct/text.py:309"
       ],
       "tests": [
         "test_text_acceptance.TextAcceptance.test_documented_frame_fixture_and_every_split",
@@ -1122,7 +1122,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/text.py:124",
+        "src/ve_direct/text.py:128",
         "src/ve_direct/tables.py:374"
       ],
       "tests": [

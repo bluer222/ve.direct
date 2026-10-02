@@ -129,13 +129,25 @@
       "notes": "Printed page number 16; not a protocol requirement."
     }
   ],
-  "requirement_inventory_sha256": "9f2874d131899919a5ad28a649a7443b86228b8fac51a667f4600e0c37dd6c70",
+  "requirement_inventory_sha256": "9b641adf827a1c93d86671e359372e2f022f190a96b8a44e87a5d10dbd5a1d1f",
   "inventory_reviews": [
     {
       "date": "2026-09-27",
       "reason": "README revision: relocate host API contract citations to the rewritten sections. Requirement statements, dispositions, pinned specification references and test bindings are unchanged; no acceptance obligation was removed or waived.",
       "previous_sha256": "2b6de534e3c11a1e90dbaf1aea5e65e61e1a9374d7579c4263ec3acc224eec4d",
       "sha256": "9f2874d131899919a5ad28a649a7443b86228b8fac51a667f4600e0c37dd6c70"
+    },
+    {
+      "date": "2026-09-29",
+      "reason": "Deep-audit repairs: relocate README contract citations and production implementation anchors after transport lifecycle, queue bounds and codec fixes. Requirement statements, dispositions, pinned specification references and test bindings are unchanged; no acceptance obligation was removed or waived.",
+      "previous_sha256": "9f2874d131899919a5ad28a649a7443b86228b8fac51a667f4600e0c37dd6c70",
+      "sha256": "47bec66964f5987c58883f5d8ecc5c8b242156bed4f5ccee061e54f29b3d9133"
+    },
+    {
+      "date": "2026-09-29",
+      "reason": "Second deep-audit repair cycle: relocate host contract citations and implementation anchors after exact checksum-field matching, structured numeric bounds, and HEX alphabet validation. Requirement IDs, statements, dispositions, test bindings, pinned specification references, and source sections are unchanged; no acceptance obligation was removed or waived.",
+      "previous_sha256": "47bec66964f5987c58883f5d8ecc5c8b242156bed4f5ccee061e54f29b3d9133",
+      "sha256": "9b641adf827a1c93d86671e359372e2f022f190a96b8a44e87a5d10dbd5a1d1f"
     }
   ]
 }

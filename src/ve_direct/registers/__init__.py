@@ -942,6 +942,25 @@ def _none_if(raw: int | None, bad: set[int]) -> int | None:
     return None if raw is None or raw in bad else raw
 
 
+def _wire_integer(value, bits: int, field: str, *, signed: bool = False) -> int:
+    """Reject values that cannot be represented by an integer wire field."""
+    minimum = -(1 << (bits - 1)) if signed else 0
+    maximum = (1 << (bits - 1 if signed else bits)) - 1
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{field} must be an integer in {minimum}..{maximum}") from exc
+    if (not isinstance(value, str) and number != value) or not minimum <= number <= maximum:
+        raise ValueError(f"{field} must be an integer in {minimum}..{maximum}, got {value!r}")
+    return number
+
+
+def _wire_flag(value, field: str) -> int:
+    if isinstance(value, str):
+        raise ValueError(f"{field} must be a boolean or numeric 0/1, got {value!r}")
+    return _wire_integer(value, 1, field)
+
+
 def decode_timer_event(raw: bytes) -> dict:
     """0xEDA0..0xEDA5 un32: sn16 offset(min) + u8 anchor + u8 dim(0..100)."""
     import struct as _s
@@ -960,11 +979,11 @@ def encode_timer_event(value: dict | bytes | int) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value[:4]).ljust(4, b"\x00")
     if isinstance(value, int):
-        return _s.pack("<I", value & 0xFFFFFFFF)
-    off = int(value.get("offset_min", 0))
-    anchor = int(value.get("anchor", 1))
-    dim = int(value.get("dim_pct", value.get("dim", 0)))
-    return _s.pack("<hBB", off, anchor & 0xFF, dim & 0xFF)
+        return _s.pack("<I", _wire_integer(value, 32, "TIMER_EVENT packed value"))
+    off = _wire_integer(value.get("offset_min", 0), 16, "TIMER_EVENT offset_min", signed=True)
+    anchor = _wire_integer(value.get("anchor", 1), 8, "TIMER_EVENT anchor")
+    dim = _wire_integer(value.get("dim_pct", value.get("dim", 0)), 8, "TIMER_EVENT dim_pct")
+    return _s.pack("<hBB", off, anchor, dim)
 
 
 def decode_voltage_range(raw: bytes) -> dict:
@@ -978,9 +997,9 @@ def encode_voltage_range(value: dict | bytes | int) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value[:2]).ljust(2, b"\x00")
     if isinstance(value, int):
-        return bytes([value & 0xFF, (value >> 8) & 0xFF])
-    return bytes([int(value.get("min_V", value.get("min", 0))) & 0xFF,
-                  int(value.get("max_V", value.get("max", 0))) & 0xFF])
+        return _wire_integer(value, 16, "VOLTAGE_RANGE packed value").to_bytes(2, "little")
+    return bytes([_wire_integer(value.get("min_V", value.get("min", 0)), 8, "VOLTAGE_RANGE min_V"),
+                  _wire_integer(value.get("max_V", value.get("max", 0)), 8, "VOLTAGE_RANGE max_V")])
 
 
 def decode_load_control(raw: bytes) -> dict:
@@ -997,12 +1016,14 @@ def encode_load_control(value: dict | bytes | int | str) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value[:1])
     if isinstance(value, int):
-        return bytes([value & 0xFF])
+        return bytes([_wire_integer(value, 8, "LOAD_OUTPUT_CONTROL packed value")])
     if isinstance(value, str):
         rev = {v: k for k, v in ENUM_MAPS.get("LOAD_OUTPUT_CONTROL", {}).items()}
-        return bytes([rev.get(value, 0) & 0xFF])
-    mode = int(value.get("mode", 0)) & 0x0F
-    if value.get("lighting_timer"):
+        if value not in rev:
+            raise ValueError(f"unknown enum label {value!r} for LOAD_OUTPUT_CONTROL")
+        return bytes([rev[value]])
+    mode = _wire_integer(value.get("mode", 0), 4, "LOAD_OUTPUT_CONTROL mode")
+    if _wire_flag(value.get("lighting_timer", False), "LOAD_OUTPUT_CONTROL lighting_timer"):
         mode |= 0x80
     return bytes([mode])
 
@@ -1025,16 +1046,11 @@ def encode_network_status(value: dict | bytes | int) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value[:1])
     if isinstance(value, int):
-        return bytes([value & 0xFF])
-    v = int(value.get("mode", 4)) & 0x0F
-    if value.get("using_icharge"):
-        v |= 0x10
-    if value.get("using_isense"):
-        v |= 0x20
-    if value.get("using_tsense"):
-        v |= 0x40
-    if value.get("using_vsense"):
-        v |= 0x80
+        return bytes([_wire_integer(value, 8, "NETWORK_STATUS packed value")])
+    v = _wire_integer(value.get("mode", 4), 4, "NETWORK_STATUS mode")
+    for field, bit in (("using_icharge", 4), ("using_isense", 5),
+                       ("using_tsense", 6), ("using_vsense", 7)):
+        v |= _wire_flag(value.get(field, False), "NETWORK_STATUS " + field) << bit
     return bytes([v])
 
 
@@ -1248,16 +1264,18 @@ def encode_bmv_sw_version(value: dict | bytes | int | str) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value[:2]).ljust(2, b"\x00")
     if isinstance(value, int):
-        return _s.pack("<H", value & 0xFFFF)
+        return _s.pack("<H", _wire_integer(value, 16, "BMV_SW_VERSION packed value"))
     if isinstance(value, str):
         s = value.strip()
         if "." in s:
             hi_s, lo_s = s.split(".", 1)
-            return _s.pack("<H", ((int(hi_s, 0) & 0xFF) << 8) | (int(lo_s, 16) & 0xFF))
-        return _s.pack("<H", int(s, 0) & 0xFFFF)
+            major = _wire_integer(int(hi_s, 0), 8, "BMV_SW_VERSION major")
+            minor = _wire_integer(int(lo_s, 16), 8, "BMV_SW_VERSION minor")
+            return _s.pack("<H", (major << 8) | minor)
+        return _s.pack("<H", _wire_integer(int(s, 0), 16, "BMV_SW_VERSION packed value"))
     if isinstance(value, dict):
         if "raw" in value:
-            return _s.pack("<H", int(value["raw"]) & 0xFFFF)
+            return _s.pack("<H", _wire_integer(value["raw"], 16, "BMV_SW_VERSION raw"))
         if "version" in value:
             return encode_bmv_sw_version(value["version"])
     raise ValueError(f"cannot encode BMV_SW_VERSION from {value!r}")
@@ -1283,12 +1301,18 @@ _STRUCT_DECODERS = {
 
 
 def decode_value(reg: HexRegister, raw: bytes) -> float | int | str | bool | list[str] | dict | None:
-    """Decode LE payload bytes to scaled value / enum name / bool / bit names / dict."""
+    """Decode LE values; reject incomplete typed scalar payloads with RegisterError."""
+    if reg.cls in ("NUMERIC", "BOOLEAN", "ENUM", "BITMASK"):
+        width = {"int8_t": 1, "uint8_t": 1, "int16_t": 2, "uint16_t": 2,
+                 "int24_t": 3, "uint24_t": 3, "int32_t": 4, "uint32_t": 4,
+                 "uint16_or_uint32": 2}.get(reg.dtype, 1)
+        if len(raw) < width or (reg.dtype == "uint16_or_uint32"
+                                and len(raw) not in (2, 4)):
+            raise RegisterError(
+                f"truncated {reg.name} value: want {reg.dtype}, got {len(raw)} bytes")
     if reg.cls == "STRING":
         return raw.split(b"\x00")[0].decode("ascii", errors="replace")
     if reg.cls == "BOOLEAN":
-        if not raw:
-            return False
         return bool(int.from_bytes(raw[:1], "little"))
     if reg.cls == "VOID":
         return raw.hex().upper()
@@ -1301,17 +1325,13 @@ def decode_value(reg: HexRegister, raw: bytes) -> float | int | str | bool | lis
                 return {"raw": bytes(raw).hex().upper()}
         return bytes(raw).hex().upper()
     if reg.cls == "ENUM":
-        if not raw:
-            return "unknown(empty)"
         signed = reg.dtype.startswith("int")
         width = {"int8_t": 1, "uint8_t": 1, "int16_t": 2, "uint16_t": 2, "int32_t": 4, "uint32_t": 4}.get(reg.dtype, 1)
-        if len(raw) < width:
-            return "unknown(empty)"
         v = int.from_bytes(raw[:width], "little", signed=signed)
         return ENUM_MAPS.get(reg.enum or "", {}).get(v, f"unknown({v})")
     if reg.cls == "BITMASK":
         width = {"uint8_t": 1, "uint16_t": 2, "uint32_t": 4}.get(reg.dtype, len(raw))
-        value = int.from_bytes(raw[:width], "little") if raw else 0
+        value = int.from_bytes(raw[:width], "little")
         names = ENUM_MAPS.get(reg.enum or "", {})
         if not names:
             return value
@@ -1369,7 +1389,7 @@ def encode_value(reg: HexRegister, value: float | int | str | bool | list[str] |
                 return _s.pack(fmt0, s)
         raise ValueError(f"None not allowed for {reg.name}")
     if reg.cls == "BOOLEAN":
-        return bytes([1 if value else 0])
+        return bytes([_wire_flag(value, reg.name)])
     if reg.cls == "STRING":
         raw = str(value).encode("ascii") + b"\x00"
         if reg.max_length is not None and len(raw) > reg.max_length:
@@ -1405,7 +1425,8 @@ def encode_value(reg: HexRegister, value: float | int | str | bool | list[str] |
             value = rev[value]
         signed = reg.dtype.startswith("int")
         width = {"int8_t": 1, "uint8_t": 1, "int16_t": 2, "uint16_t": 2, "int32_t": 4, "uint32_t": 4}.get(reg.dtype, 1)
-        return int(value).to_bytes(width, "little", signed=signed)
+        return _wire_integer(value, width * 8, reg.name, signed=signed).to_bytes(
+            width, "little", signed=signed)
     if reg.cls == "BITMASK":
         width = {"uint8_t": 1, "uint16_t": 2, "uint32_t": 4}.get(reg.dtype, 4)
         if isinstance(value, (list, tuple)):
@@ -1417,7 +1438,7 @@ def encode_value(reg: HexRegister, value: float | int | str | bool | list[str] |
                     raise ValueError(f"unknown bit name {name!r} for {reg.name}")
                 mask |= 1 << rev[name]
             value = mask
-        return int(value).to_bytes(width, "little")
+        return _wire_integer(value, width * 8, reg.name).to_bytes(width, "little")
     if reg.cls == "VOID":
         if isinstance(value, (bytes, bytearray)):
             return bytes(value)

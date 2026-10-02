@@ -110,7 +110,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1174"
+        "src/ve_direct/registers/__init__.py:1190"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_product_id_register_layouts"
@@ -134,8 +134,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -163,7 +163,7 @@
       ],
       "implementation": [
         "src/ve_direct/registers/__init__.py:705",
-        "src/ve_direct/registers/__init__.py:1321"
+        "src/ve_direct/registers/__init__.py:1341"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_capability_bits",
@@ -209,8 +209,8 @@
       ],
       "implementation": [
         "src/ve_direct/registers/__init__.py:47",
-        "src/ve_direct/registers/__init__.py:1446",
-        "src/ve_direct/registers/__init__.py:1459"
+        "src/ve_direct/registers/__init__.py:1466",
+        "src/ve_direct/registers/__init__.py:1479"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -334,8 +334,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -362,8 +362,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_boolean_settings",
@@ -390,7 +390,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:383",
+        "src/ve_direct/device.py:511",
         "src/ve_direct/registers/__init__.py:188"
       ],
       "tests": [],
@@ -413,8 +413,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -433,7 +433,7 @@
       "implementation": [
         "src/ve_direct/registers/__init__.py:212",
         "src/ve_direct/registers/__init__.py:863",
-        "src/ve_direct/device.py:370"
+        "src/ve_direct/device.py:498"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_small_charger_battery_type_normal_decode",
@@ -497,8 +497,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -546,8 +546,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -584,8 +584,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -603,8 +603,8 @@
       ],
       "implementation": [
         "src/ve_direct/registers/__init__.py:242",
-        "src/ve_direct/registers/__init__.py:970",
-        "src/ve_direct/registers/__init__.py:1338"
+        "src/ve_direct/registers/__init__.py:989",
+        "src/ve_direct/registers/__init__.py:1358"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_voltage_range_and_yield_widths",
@@ -624,8 +624,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -666,8 +666,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -705,8 +705,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -723,8 +723,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:986",
-        "src/ve_direct/registers/__init__.py:996",
+        "src/ve_direct/registers/__init__.py:1005",
+        "src/ve_direct/registers/__init__.py:1015",
         "src/ve_direct/registers/__init__.py:741"
       ],
       "tests": [
@@ -745,8 +745,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -789,8 +789,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -808,8 +808,8 @@
       ],
       "implementation": [
         "src/ve_direct/registers/__init__.py:381",
-        "src/ve_direct/registers/__init__.py:945",
-        "src/ve_direct/registers/__init__.py:958"
+        "src/ve_direct/registers/__init__.py:964",
+        "src/ve_direct/registers/__init__.py:977"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_timer_events"
@@ -866,8 +866,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -929,8 +929,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -947,7 +947,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1048"
+        "src/ve_direct/registers/__init__.py:1064"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_history_total_both_versions"
@@ -966,7 +966,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1071"
+        "src/ve_direct/registers/__init__.py:1087"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_daily_history_offsets"
@@ -985,8 +985,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1003,7 +1003,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1094"
+        "src/ve_direct/registers/__init__.py:1110"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_tracker_history_offsets_and_absent_trackers"
@@ -1073,8 +1073,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1113,7 +1113,7 @@
       "implementation": [
         "src/ve_direct/registers/__init__.py:337",
         "src/ve_direct/registers/__init__.py:762",
-        "src/ve_direct/registers/__init__.py:1010"
+        "src/ve_direct/registers/__init__.py:1031"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_network_mode_info_status_and_state",
@@ -1133,8 +1133,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1156,8 +1156,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:383",
-        "src/ve_direct/device.py:427"
+        "src/ve_direct/device.py:511",
+        "src/ve_direct/device.py:558"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1197,8 +1197,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1286,8 +1286,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1310,7 +1310,7 @@
       ],
       "implementation": [
         "src/ve_direct/registers/__init__.py:354",
-        "src/ve_direct/device.py:383"
+        "src/ve_direct/device.py:511"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1327,7 +1327,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1192",
+        "src/ve_direct/registers/__init__.py:1208",
         "src/ve_direct/hex.py:80"
       ],
       "tests": [
@@ -1391,7 +1391,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1119"
+        "src/ve_direct/registers/__init__.py:1135"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_orion_cumulative_history_offsets"
@@ -1415,8 +1415,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1135",
-        "src/ve_direct/registers/__init__.py:1166"
+        "src/ve_direct/registers/__init__.py:1151",
+        "src/ve_direct/registers/__init__.py:1182"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_orion_cycle_history_offsets_and_sentinels"
@@ -1476,8 +1476,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1287",
-        "src/ve_direct/registers/__init__.py:1373"
+        "src/ve_direct/registers/__init__.py:1313",
+        "src/ve_direct/registers/__init__.py:1393"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_bmv_string20_write_boundary",
@@ -1507,8 +1507,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1525,8 +1525,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [
         "test_spec_parsers.TestSpecParsers.test_spec_schema_compliance",
@@ -1554,8 +1554,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1611,7 +1611,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1231"
+        "src/ve_direct/registers/__init__.py:1247"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_bmv_version_and_string_reads"
@@ -1682,7 +1682,7 @@
       "implementation": [
         "src/ve_direct/registers/__init__.py:398",
         "src/ve_direct/registers/__init__.py:733",
-        "src/ve_direct/device.py:383"
+        "src/ve_direct/device.py:511"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1723,7 +1723,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1219"
+        "src/ve_direct/registers/__init__.py:1235"
       ],
       "tests": [
         "test_register_acceptance.RegisterAcceptance.test_phoenix_product_revision"
@@ -1747,7 +1747,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1192",
+        "src/ve_direct/registers/__init__.py:1208",
         "src/ve_direct/hex.py:80"
       ],
       "tests": [
@@ -1830,7 +1830,7 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/device.py:370"
+        "src/ve_direct/device.py:498"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1852,8 +1852,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1889,8 +1889,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1928,8 +1928,8 @@
         }
       ],
       "implementation": [
-        "src/ve_direct/registers/__init__.py:1285",
-        "src/ve_direct/registers/__init__.py:1358"
+        "src/ve_direct/registers/__init__.py:1303",
+        "src/ve_direct/registers/__init__.py:1378"
       ],
       "tests": [],
       "disposition": "device_obligation",
@@ -1953,7 +1953,7 @@
       "implementation": [
         "src/ve_direct/registers/__init__.py:218",
         "src/ve_direct/registers/__init__.py:267",
-        "src/ve_direct/registers/__init__.py:1467"
+        "src/ve_direct/registers/__init__.py:1487"
       ],
       "tests": [],
       "disposition": "excluded",
@@ -1987,7 +1987,7 @@
       "implementation": [
         "src/ve_direct/registers/__init__.py:47",
         "src/ve_direct/registers/__init__.py:874",
-        "src/ve_direct/registers/__init__.py:1459"
+        "src/ve_direct/registers/__init__.py:1479"
       ],
       "tests": [
         "test_registers.TestRegisters.test_0400_flavor_disambiguation",

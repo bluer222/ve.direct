@@ -21,6 +21,11 @@ STRUCT registers decode to dict (history, timer events, voltage range, load cont
 
 Framing: ":<cmd><hex><check>\n", `(cmd+sum(data)+check)&0xFF==0x55`. Commands: ping `:154`, app-version `:352` (decode via decode_app_version), product-id `:451`, restart `:64F` (no reply), get `:7<id>00`, set `:8<id>00<val>` (e.g. `:8F0ED0064000C`), boot `:0<51FA*5>`. Get/Set register replies carry a flags byte (nonzero = `RegisterError`); command Done replies carry their command-specific payload; Async `:A` queued in `dev.async_frames`. `decode_line(..., strict=True)` raises `ChecksumError`; streaming defaults to `valid=False`.
 
+`decode_line()` accepts uppercase or lowercase HEX digits and an optional LF
+or CRLF terminator; a complete unterminated frame is also accepted. Signs,
+spaces, tabs, extra terminators, and other characters raise `FrameError` in
+both decode modes. Leading or trailing whitespace is not stripped.
+
 ## Device families (Flavors, hierarchy: MPPT->CHG, MPPT_SMALL/MPPT_RS->MPPT, MULTI_RS->INV+MPPT_RS, BMV71->BMV, ORION->CHG)
 
 | Flavor | Devices | Text labels hint |
@@ -39,6 +44,31 @@ Framing: ":<cmd><hex><check>\n", `(cmd+sum(data)+check)&0xFF==0x55`. Commands: p
 In code: from ve_direct.registers import for_flavor; for_flavor("BMV").
 
 `BMV_DESCRIPTION` is String20, including its terminating NUL. Typed writes accept up to 19 ASCII characters and reject longer inputs rather than exceeding the wire width.
+
+Flavor names are case-insensitive. Enum labels are case-sensitive; unknown
+load-control labels raise `ValueError` before a write. Typed scalar decoders
+raise `RegisterError` when numeric, boolean, enum, or bitmask bytes are
+incomplete. YIELD_TODAY/YIELD_YESTERDAY require either two or four bytes.
+Empty VOID replies remain valid, and raw APIs retain malformed value bytes.
+Flagged Async notifications expose their original bytes in `value` with the
+device's `flags`, without manufacturing a typed reading.
+
+Structured numeric encoders reject fractional numbers and values outside
+their wire widths with `ValueError`. Dictionary modes occupy four bits;
+timer anchors, dim levels, and voltage-range fields occupy eight bits;
+timer offsets are signed 16-bit integers. Packed numeric words retain all
+bits within their unsigned 8-, 16-, or 32-bit width. Structured one-bit flags
+accept booleans or numeric 0/1 and reject strings. These bounds enforce the
+wire representation without adding model-specific setting limits. Raw byte
+APIs remain available for explicit encodings.
+
+`dev.async_frames` holds 256 notifications by default. Set `async_queue_size`
+on the constructor or either factory to change the positive integer limit.
+Overflow discards the oldest queued notification and increments
+`dev.dropped_async_frames`; below capacity notifications retain arrival order.
+HEX reply routing continues even if notifications overflow. Firmware helper
+`decode_app_version_24()` interprets an integer as a complete unsigned
+four-byte register word, including the identifier byte and zero padding.
 
 ## hex_get — all readable registers (READ_ONLY + READ_WRITE + CONSTANT)
 

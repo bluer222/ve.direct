@@ -8,7 +8,7 @@ The cases below do not all follow one rule. The rules actually applied are liste
 
 ### Normative text outranks examples
 
-When a shall-style sentence and a printed example disagree, the sentence wins. Illustration: Orion product id 2-byte replies are rejected even though the Orion section 1.3 example prints a 2-byte reply, because section 1.1 says the 2-byte form should be ignored. See the Orion 2-byte entry in the catalog.
+When a normative rule and a printed example disagree, the rule wins. Orion section 1.3 prints Unknown reply `:30300F4`, which fails the documented checksum rule. The encoder produces `:303004F`, and strict decoding rejects the printed form. See the Orion Unknown checksum typo entry below. ProductId commands and Get register `0x0100` have separate layouts, as recorded in their catalog entry.
 
 ### Annotating notes qualify the cells they attach to
 

@@ -62,6 +62,8 @@ Each field retains its original text in `.raw`, its decoded value in
 `.human`. `frame.to_si()` converts measurements to units such as volts,
 amps, amp-hours, kilowatt-hours, and percentages. State codes remain numeric;
 use `.human` for their labels. Missing measurements decode as `None`.
+Nonnumeric measurements retain their raw strings through `to_si()`, so a
+bad voltage field does not prevent conversion of a valid current field.
 
 Fields vary by device, firmware, and block. BMV devices can alternate
 between blocks with different fields, so check for a label before using it.
@@ -72,6 +74,7 @@ See the [Text field reference](docs/TEXT_FRAMES.md) for labels and units.
 Set `flavor` when opening a connection. Some register IDs have different
 meanings, scales, or layouts across families, and the client uses this
 setting to select the correct decoder and encoder.
+Flavor names are case-insensitive, including later assignments to `dev.flavor`.
 
 | Flavor | Device or register family |
 | --- | --- |
@@ -103,6 +106,16 @@ named values, bitmasks accept lists of bit names, and structured records
 such as history and timers decode to dictionaries. Documented missing-value
 sentinels decode as `None`. BMV description writes allow 19 ASCII characters
 plus the terminating NUL within the String20 limit.
+Enum labels are case-sensitive. Unknown labels, including load-control
+labels such as `"autp"` or `"OFF"`, raise `ValueError` before writing.
+Incomplete numeric, boolean, enum, or bitmask values raise `RegisterError`;
+the raw APIs retain the original bytes for diagnosis. Empty VOID responses
+remain valid. Flagged async error notifications retain raw bytes in `value`.
+Enum, bitmask, and structured integer writes reject fractional values and
+integers that do not fit their wire fields with `ValueError` before transmission. One-bit flags
+and boolean registers accept booleans or numeric 0/1, and reject strings.
+Use `False` to switch a boolean setting off. These checks enforce wire
+representation; the device still validates its model-specific setting ranges.
 
 `hex_get()` and `hex_set()` also accept numeric IDs. An ID shared by different
 register definitions requires a flavor; otherwise lookup raises
@@ -131,14 +144,36 @@ unsolicited HEX notifications. They can run alongside HEX requests on the
 same connection. A shared read lock routes incoming data to its consumer;
 Text and notifications received during a command are queued for later
 consumption. HEX request/response transactions are serialized.
+Text read timeouts and cancelled stream consumers preserve a transport read
+serving a pending HEX request, so that request can still receive its reply.
 
-VE.Direct has no transaction IDs. After a reply timeout, a failed write, or
+Both event queues hold up to 256 events by default. Configure positive integer
+`text_queue_size` and `async_queue_size` on `AsyncVEDirect`, `from_streams()`,
+or `from_port()`. When a queue is full, the client discards its oldest queued
+event and retains the newest. `dropped_text_frames` and `dropped_async_frames`
+count those discarded events. Below capacity, each queue preserves every
+event in arrival order. Overflow never blocks reading or HEX reply routing.
+
+VE.Direct has no transaction IDs. After a reply timeout, a failed read or write, or
 cancellation after transmission may have started, the client blocks further
 HEX requests with `TransportError` so a late reply cannot satisfy a newer
 request. Reset the device/link and drain stale host input before calling
 `reset_hex_state()`. That method clears partial parser state while preserving
 already queued frames. `restart()` also leaves HEX routing blocked until
 this recovery is complete. Text reception remains available.
+
+`read_one()` and HEX reply timeouts raise `ve_direct.TimeoutError`, which
+inherits from `VeDirectError`. EOF and calls interrupted by `close()` raise
+`TransportError`. Other transport errors retain their original exception
+types. Correlated device rejections raise `RegisterError` and permit later
+requests without resetting the link.
+
+`close()` cancels and awaits the client's active transport operations, wakes
+blocked Text/notification consumers and pending requests with `TransportError`,
+and closes a stored StreamWriter. It does not cancel the caller's tasks.
+For custom transport cleanup, pass an optional `close_transport` callback
+to the constructor. The callback runs once and can be synchronous or async.
+Custom read/write callables must allow cancellation to finish.
 
 `boot(timeout=0.2)` sends the boot-entry command and observes incoming traffic
 for a failure during that interval. A failure raises `RegisterError`; silence
