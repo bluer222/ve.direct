@@ -69,6 +69,66 @@ Fields vary by device, firmware, and block. BMV devices can alternate
 between blocks with different fields, so check for a label before using it.
 See the [Text field reference](docs/TEXT_FRAMES.md) for labels and units.
 
+## Local web GUI
+
+Run the GUI against your device, or use `--sim --open` for an offline demo:
+
+```sh
+python tools/vedirect_gui.py --port /dev/ttyUSB0 --flavor MPPT --open
+```
+
+Click **Dump available values** to download a JSON snapshot of the latest
+text frame and cached successful HEX register results, with register metadata,
+source, device flavor, and a UTC export timestamp. Values use the same string
+representations shown in the GUI. The dump includes cached registers regardless
+of the current table filter. To collect more register values first, click
+**Get all visible** and wait for the reads to finish. Unread registers are omitted.
+
+## Import descriptions
+
+Two dictionaries map protocol keys to readable descriptions:
+
+```python
+from ve_direct.descriptions import STREAM_DESCRIPTIONS, HEX_DESCRIPTIONS
+
+print(STREAM_DESCRIPTIONS["V"])                  # Main / channel 1 (battery) voltage
+print(HEX_DESCRIPTIONS["MPPT"]["PANEL_VOLTAGE"])  # Panel voltage
+print(HEX_DESCRIPTIONS["BMV"]["SOC"])             # State of charge
+
+async for frame in dev.frames():
+    for key, value in frame.to_si().items():
+        print(STREAM_DESCRIPTIONS.get(key, key), value)
+```
+
+`STREAM_DESCRIPTIONS` covers all known text labels across device families;
+each frame contains only the labels sent by that device. `HEX_DESCRIPTIONS`
+contains separate dictionaries for `ANY`, `BMV`, `BMV71`, `CHG`, `INV`, `MPPT`,
+`MPPT_SMALL`, `MPPT_RS`, `MULTI_RS`, and `ORION`. Each flavor includes all
+registers returned by `for_flavor()`, including shared and inherited registers,
+aliases, and all history/timer entries. Shared names appear in every applicable
+flavor dictionary. `ANY` contains the common registers shared by all flavors.
+HEX descriptions expand symbolic names into readable labels. Unknown and
+experimental Multi RS registers are marked. Names keep device-specific meanings
+separate when numeric register IDs overlap.
+
+Regenerate the bundled dictionaries after changing the protocol definitions:
+
+```sh
+python tools/generate_descriptions.py
+python tools/generate_descriptions.py --check
+```
+
+To use them in a project without installing this library, generate a standalone
+Python module and import its dictionaries:
+
+```sh
+python tools/generate_descriptions.py -o /path/to/project/vedirect_descriptions.py
+```
+
+```python
+from vedirect_descriptions import STREAM_DESCRIPTIONS, HEX_DESCRIPTIONS
+```
+
 ## Select a device family
 
 Set `flavor` when opening a connection. Some register IDs have different

@@ -25,6 +25,7 @@ import sys
 import threading
 import webbrowser
 from collections import deque
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -77,6 +78,8 @@ td.last { font-family: ui-monospace, monospace; max-width: 16rem;
 input.setval { width: 10rem; font-size: .85rem; padding: .15rem .3rem; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .4; }
+a.download { border: 1px solid GrayText; border-radius: .3rem;
+  padding: .2rem .5rem; font-size: .9rem; color: CanvasText; text-decoration: none; }
 code { font-size: .85em; }
 .counts { font-size: .8rem; opacity: .75; }
 </style>
@@ -86,6 +89,10 @@ code { font-size: .85em; }
 <h1>ve.direct localhost GUI</h1>
 <div class="meta">source <b>{{PORT_LABEL}}</b> &middot; flavor <b>{{FLAVOR_LABEL}}</b>
 &middot; frames <b id="fcount">0</b></div>
+<div class="controls">
+<a class="download" href="api/dump" download>Dump available values</a>
+<span class="counts">JSON: latest text frame and cached register values</span>
+</div>
 <div id="msg" aria-live="polite">connecting&hellip;</div>
 </header>
 
@@ -359,11 +366,15 @@ def _pump(shared: Shared, state: GuiState, stop: threading.Event) -> None:
             pass
 
 
-def _send_json(handler: BaseHTTPRequestHandler, obj, status: int = 200) -> None:
-    body = json.dumps(obj).encode("utf-8")
+def _send_json(handler: BaseHTTPRequestHandler, obj, status: int = 200,
+               filename: str | None = None) -> None:
+    body = json.dumps(obj, indent=2 if filename else None).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
+    if filename:
+        handler.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -392,6 +403,20 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/registers":
             _send_json(self, srv.gui_regs)
+        elif path == "/api/dump":
+            state: GuiState = srv.gui_state
+            now = datetime.now(timezone.utc)
+            with state.lock:
+                dump = {
+                    "exported_at": now.isoformat(),
+                    "source": srv.gui_port_label,
+                    "flavor": srv.gui_flavor_label,
+                    "frame": state.frame,
+                    "registers": [dict(reg, value=state.values[reg["name"]])
+                                  for reg in srv.gui_regs if reg["name"] in state.values],
+                }
+            _send_json(self, dump,
+                       filename=f"ve-direct-values-{now:%Y%m%dT%H%M%S%fZ}.json")
         elif path == "/api/state":
             try:
                 since = int(parse_qs(urlparse(self.path).query)
