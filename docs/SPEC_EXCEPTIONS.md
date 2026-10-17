@@ -40,6 +40,25 @@ Superset and strictness are applied case by case, not uniformly. BAT_VOLTAGE kee
 
 ## Catalog
 
+### SmartSolar unavailable network inputs and intermediate display speeds
+
+The two firmware 1.64 snapshots reviewed in [MPPT dump audit](MPPT_DUMP_AUDIT.md)
+contain maximum wire values for five unused network inputs while both chargers
+report standalone operation. The inferred markers are `0xFFFF` for `0x2001`,
+`0x200B`, and `0x2015`, and `0x7FFFFFFF` for `0x200A` and `0x2013`. They decode
+as `None` and encode back to the same marker. BlueSolar Rev 18 describes these
+registers but does not document these special values. This is an inference
+from the captures, pinned separately from documented sentinels in the spec
+comparison test. A raw capture, a controlled network test, or a later official
+spec assigning different semantics would require revisiting it. The shared
+register-ID sentinel table applies this interpretation to other families
+exposing these IDs too; those families were not tested on hardware.
+
+BlueSolar defines display scroll speed `0x0402` with endpoints 1 slow and 5
+fast. The 250/60 snapshot reports 3. Intermediate values now retain their
+numbers as `speed_2`, `speed_3`, and `speed_4`. No timing or descriptive speed
+is assumed, and values outside 1 through 5 still decode as unknown.
+
 ### Text firmware release candidate suffix
 
 The Text snapshot says the value C208 means release candidate C for version 2.08 (tests/specs/VE.Direct-Protocol-3.34.txt:361). The code renders FW C208 as v2.08-RCC, which reads as RC acronym plus revision C (src/ve_direct/text.py:57-71). The HEX AppVersion decoder uses the same convention with -RC plus letter (src/ve_direct/hex.py:117-142). This side was trusted because the doubled C is intentional alignment between Text and HEX, not a duplicated character. This would change if Victron publishes a different Text rendering for release candidates.

@@ -4815,12 +4815,11 @@ class TestSpecParsers(unittest.TestCase):
         unrelated 0xEC41 pin existed) — a dropped annotation stayed green
         (reproduced synthetically before the fix). The compared structure is
         the loud axis now: a dropped annotation mismatches DB loudly.
-        Zero-diff: current sentinel sets match (glued ``0xHEX=`` unit cells
+        Documented sentinel sets match (glued ``0xHEX=`` unit cells
         are exactly BlueSolar/Orion 0xEDEC/0xEDE6; the spaced ``0xFF = user``
         enum-value rows on 0xEDF1 stay out by the glued-``=`` shape). DB-only
-        entries are allowlisted ONLY as prose-only mentions (no glued
-        annotation in any unit/desc cell — extractor-verified empty), each
-        justified below."""
+        entries distinguish prose-only mentions from snapshot-derived
+        exceptions, each justified below."""
         from spec_parser import BMV7xxHEXParser
 
         # DB-only sentinels documented in prose/values tables only (never a
@@ -4847,6 +4846,14 @@ class TestSpecParsers(unittest.TestCase):
             0x032A, 0x032B, 0x032C, 0x032D,
             0x035A, 0x035B, 0x035C, 0x035D,
         })
+        # Both standalone firmware 1.64 dumps contain these maximum-value
+        # markers. They are inferred from hardware, absent from the pinned
+        # specs, and pinned exactly here rather than excused as prose-only.
+        # Evidence and limits: docs/MPPT_DUMP_AUDIT.md.
+        hardware_only = {
+            0x2001: {0xFFFF}, 0x200A: {0x7FFFFFFF}, 0x200B: {0xFFFF},
+            0x2013: {0x7FFFFFFF}, 0x2015: {0xFFFF},
+        }
         parsed = {}
         for regs in (self.bs_regs, self.or_regs, self.bmv_regs, self.ph_regs):
             for rid, reg in regs.items():
@@ -4854,6 +4861,10 @@ class TestSpecParsers(unittest.TestCase):
         mismatches = []
         for rid in sorted(set(parsed) | set(R._NONE_SENTINELS)):
             doc, db = parsed.get(rid, set()), R._NONE_SENTINELS.get(rid, set())
+            if rid in hardware_only:
+                self.assertEqual(doc, set(), f"0x{rid:04X}: review newly documented sentinel")
+                self.assertEqual(db, hardware_only[rid])
+                continue
             if doc != db and rid not in _SENTINEL_PROSE_ONLY_ALLOW:
                 mismatches.append(f"0x{rid:04X}: doc {sorted(doc)} vs DB {sorted(db)}")
         self.assertEqual(mismatches, [])

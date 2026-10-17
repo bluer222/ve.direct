@@ -23,6 +23,26 @@ class TestFullHex(unittest.TestCase):
         self.assertEqual(R.encode_value(R.lookup("LOW_TEMP_CHARGE_CURRENT"), None), bytes.fromhex("FFFF"))
         self.assertEqual(R.encode_value(R.lookup("TIME_OF_DAY"), None), bytes.fromhex("FFFF"))
 
+    def test_mppt_unavailable_network_values(self):
+        # Firmware 1.64 captures from a 150/35 and 250/60 rev2 in standalone mode.
+        cases = (
+            ("CHARGE_VOLTAGE_SETPOINT", "FFFF", 58.4),
+            ("BATTERY_IDLE_VOLTAGE", "FFFF", 53.14),
+            ("BATTERY_CHARGE_CURRENT", "FFFFFF7F", -1.25),
+            ("TOTAL_CHARGE_CURRENT", "FFFFFF7F", 35.0),
+            ("CHARGE_CURRENT_LIMIT", "FFFF", 35.0),
+        )
+        for name, wire_hex, normal in cases:
+            with self.subTest(name=name):
+                reg = R.lookup(name, flavor="MPPT")
+                raw = bytes.fromhex(wire_hex)
+                self.assertIsNone(R.decode_value(reg, raw))
+                self.assertEqual(R.encode_value(reg, None), raw)
+                self.assertAlmostEqual(R.decode_value(reg, R.encode_value(reg, normal)), normal)
+                self.assertEqual(R.decode_value(reg, bytes(len(raw))), 0)
+        # Maximum wire values on other registers must keep their own meaning.
+        self.assertEqual(R.decode_value(R.lookup("PANEL_VOLTAGE", flavor="MPPT"), b"\xff\xff"), 655.35)
+
     def test_timer_event_roundtrip(self):
         reg = R.lookup("TIMER_EVENT_0")
         d = R.decode_value(reg, bytes.fromhex("10000132"))

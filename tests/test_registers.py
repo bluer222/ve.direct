@@ -496,7 +496,7 @@ class TestRegisters(unittest.TestCase):
         # MPPT RS Internal display table for 0x0401/0x0402/0x0404).
         cases = {
             "DISPLAY_BACKLIGHT_INTENSITY": {0: "off", 1: "on"},
-            "DISPLAY_SCROLL_SPEED": {1: "slow", 5: "fast"},
+            "DISPLAY_SCROLL_SPEED": {1: "slow", 2: "speed_2", 3: "speed_3", 4: "speed_4", 5: "fast"},
             "DISPLAY_SETUP_LOCK": {0: "unlocked", 1: "locked"},
             "DISPLAY_TEMPERATURE_UNIT": {0: "celsius", 1: "fahrenheit"},
         }
@@ -511,9 +511,10 @@ class TestRegisters(unittest.TestCase):
                     self.assertEqual(R.encode_value(reg, label), bytes([raw]))
                     self.assertEqual(
                         R.decode_value(reg, R.encode_value(reg, label)), label)
-        # Only the documented endpoints are named on 0x0402.
+        # Intermediate speeds preserve their number without inventing timings.
         reg = R.lookup("DISPLAY_SCROLL_SPEED")
-        self.assertEqual(R.decode_value(reg, b"\x03"), "unknown(3)")
+        for raw in (0, 6, 255):
+            self.assertEqual(R.decode_value(reg, bytes([raw])), f"unknown({raw})")
         with self.assertRaises(ValueError):
             R.encode_value(reg, "medium")
         # Flavors unchanged (liberal ANY); MPPT flavor resolves by ID.

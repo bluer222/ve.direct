@@ -73,6 +73,9 @@ Sentinels decoded as None (encode None back to sentinel):
   (=disabled, valid 174..372 K), BAT_VOLTAGE 0xEDEF 0x00 (=Auto, shared
   Battery-voltage-setting values table with 0xEDEA), history/cycle 0xFF/
   0xFFFF/0xFFFFFFFF per-field.
+- Inferred from standalone SmartSolar firmware 1.64 snapshots: network voltage
+  0x2001/0x200B and current limit 0x2015 use 0xFFFF; network currents
+  0x200A/0x2013 use 0x7FFFFFFF. See docs/MPPT_DUMP_AUDIT.md.
 """
 from __future__ import annotations
 from ..tables import MON_MAP
@@ -322,7 +325,7 @@ for _reg in [
     # Pluggable-display discrete values (BlueSolar-HEX Pluggable display
     # settings; same values in the MPPT RS Internal display table for
     # 0x0401/0x0402/0x0404): 0x0401 0=always off/1=on, 0x0402 1=slow/5=fast
-    # (2..4 decode unknown), 0x0403 0=unlocked/1=locked, 0x0404 0=Celsius/
+    # (2..4 retain numeric speed labels), 0x0403 0=unlocked/1=locked, 0x0404 0=Celsius/
     # 1=Fahrenheit. ENUM like siblings 0x0400/0x0408; flavors stay ANY per
     # the liberal-flavoring policy (LCD-models-only provenance in SOURCES).
     _r("DISPLAY_BACKLIGHT_INTENSITY", 0x0401, "ENUM", "READ_WRITE", flavors=("ANY",), enum="DISPLAY_BACKLIGHT_INTENSITY"),
@@ -744,11 +747,12 @@ RX_PORT_MODE_MAP = {0: "remote_on_off", 1: "load_config", 2: "load_on_off_invert
 DISPLAY_BACKLIGHT_MODE_MAP = {0: "keypress", 1: "on", 2: "auto"}
 DISPLAY_BACKLIGHT_MODE_RS_MAP = {0: "off", 1: "on", 2: "auto"}
 # Pluggable-display discrete values (BlueSolar-HEX Pluggable display
-# settings): 0x0401 0 always off / 1 on; 0x0402 1 slow / 5 fast (only the
-# documented endpoints are named); 0x0403 0 unlocked / 1 locked; 0x0404
+# settings): 0x0401 0 always off / 1 on; 0x0402 1 slow / 5 fast;
+# 0x0403 0 unlocked / 1 locked; 0x0404
 # 0 Celsius / 1 Fahrenheit (same names as BMV_TEMPERATURE_UNIT).
 DISPLAY_BACKLIGHT_INTENSITY_MAP = {0: "off", 1: "on"}
-DISPLAY_SCROLL_SPEED_MAP = {1: "slow", 5: "fast"}
+# Firmware 1.64 reports speed 3; retain intermediate steps without inventing timings.
+DISPLAY_SCROLL_SPEED_MAP = {1: "slow", 2: "speed_2", 3: "speed_3", 4: "speed_4", 5: "fast"}
 DISPLAY_SETUP_LOCK_MAP = {0: "unlocked", 1: "locked"}
 DISPLAY_TEMPERATURE_UNIT_MAP = {0: "celsius", 1: "fahrenheit"}
 REMOTE_COMMAND_MAP = {1: "start_equalise", 2: "stop_equalise", 3: "sync_ui", 4: "sync_day"}
@@ -844,8 +848,15 @@ _NONE_SENTINELS: dict[int, set[int]] = {
     # non-physical there).
     0xEDEF: {0},
     0x2031: {0xFFFF},
+    # Unavailable network inputs inferred from hardware snapshots.
+    # BlueSolar Rev 18 omits these markers; see docs/MPPT_DUMP_AUDIT.md.
+    0x2001: {0xFFFF},
     0x2002: {0xFFFF},
     0x2003: {0x7FFF},
+    0x200A: {0x7FFFFFFF},
+    0x200B: {0xFFFF},
+    0x2013: {0x7FFFFFFF},
+    0x2015: {0xFFFF},
     0xD18D: {0x7FFFFFFF},
     0xEC41: {0xFFFFFFFF},
     # BMV Rev 7 Monitor/Relay tables: 0=disabled (valid 174..372 K).
