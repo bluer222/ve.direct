@@ -8,6 +8,33 @@ from ve_direct.transport import make_text_block
 
 
 class TestText(unittest.TestCase):
+    def test_si_units_match_converted_values_and_preserve_wire_units(self):
+        cases = [
+            ("V", "12340", 12.34, "mV", "V"),
+            ("AC_OUT_V", "23000", 230, "0.01V", "V"),
+            ("DC_IN_V", "1420", 14.2, "0.01V", "V"),
+            ("I", "-1500", -1.5, "mA", "A"),
+            ("AC_OUT_I", "13", 1.3, "0.1A", "A"),
+            ("DC_IN_I", "1700", 170, "0.1A", "A"),
+            ("CE", "-1719", -1.719, "mAh", "Ah"),
+            ("H19", "6741", 67.41, "0.01kWh", "kWh"),
+            ("SOC", "997", 99.7, "‰", "%"),
+            ("DM", "15", 1.5, "‰", "%"),
+            ("TTG", "120", 120, "min", "min"),
+            ("PPV", "125", 125, "W", "W"),
+            ("T", "25", 25, "°C", "°C"),
+            ("CS", "3", 3, None, None),
+            ("UNKNOWN", "raw", "raw", None, None),
+        ]
+        cases.extend((label, "12000", 12, "mV", "V") for label in ("H7", "H8", "H15", "H16"))
+        cases.extend(("V", raw, value, "mV", "V") for raw, value in (("---", None), ("invalid", "invalid")))
+        for label, raw, value, wire_unit, si_unit in cases:
+            with self.subTest(label=label, raw=raw):
+                frame = TextParser().feed(make_text_block({label: raw}))[0]
+                self.assertEqual(frame.to_si()[label], value)
+                self.assertEqual(frame[label].unit, wire_unit)
+                self.assertEqual(frame[label].si_unit, si_unit)
+
     def test_parse_mppt_block(self):
         blk = make_text_block({
             "PID": "0xA04A", "FW": "116", "SER#": "HQ1750YFN5R",

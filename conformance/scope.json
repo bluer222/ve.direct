@@ -129,7 +129,7 @@
       "notes": "Printed page number 16; not a protocol requirement."
     }
   ],
-  "requirement_inventory_sha256": "9b641adf827a1c93d86671e359372e2f022f190a96b8a44e87a5d10dbd5a1d1f",
+  "requirement_inventory_sha256": "4bb38c538f7d58a23f3da9dbe9fbeb2a4b8c62110d101bb162288546299da38f",
   "inventory_reviews": [
     {
       "date": "2026-09-27",
@@ -148,6 +148,12 @@
       "reason": "Second deep-audit repair cycle: relocate host contract citations and implementation anchors after exact checksum-field matching, structured numeric bounds, and HEX alphabet validation. Requirement IDs, statements, dispositions, test bindings, pinned specification references, and source sections are unchanged; no acceptance obligation was removed or waived.",
       "previous_sha256": "47bec66964f5987c58883f5d8ecc5c8b242156bed4f5ccee061e54f29b3d9133",
       "sha256": "9b641adf827a1c93d86671e359372e2f022f190a96b8a44e87a5d10dbd5a1d1f"
+    },
+    {
+      "date": "2026-10-18",
+      "reason": "Move README host-contract citations to matching sections in docs/USAGE.md after shortening the README; update implementation anchors for TypedValue.si_unit. Requirement IDs, statements, dispositions, test bindings, pinned specifications, and source sections are unchanged; no acceptance obligation was removed or waived.",
+      "previous_sha256": "9b641adf827a1c93d86671e359372e2f022f190a96b8a44e87a5d10dbd5a1d1f",
+      "sha256": "4bb38c538f7d58a23f3da9dbe9fbeb2a4b8c62110d101bb162288546299da38f"
     }
   ]
 }

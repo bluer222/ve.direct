@@ -102,6 +102,14 @@ class TypedValue:
     human: str | None = None
 
     @property
+    def si_unit(self) -> str | None:
+        """Unit of this measurement in Frame.to_si(); .unit keeps the wire unit."""
+        return {
+            "mV": "V", "0.01V": "V", "mA": "A", "0.1A": "A",
+            "mAh": "Ah", "0.01kWh": "kWh", "‰": "%",
+        }.get(self.unit, self.unit)
+
+    @property
     def volts(self) -> float | None:
         if isinstance(self.value, (int, float)) and self.unit in ("mV", "0.01V"):
             return self.value / 1000 if self.unit == "mV" else self.value / 100

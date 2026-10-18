@@ -514,9 +514,9 @@
           "end": 81
         },
         {
-          "file": "README.md",
-          "start": 175,
-          "end": 179
+          "file": "docs/USAGE.md",
+          "start": 238,
+          "end": 242
         }
       ],
       "implementation": [
@@ -774,14 +774,14 @@
           "end": 13
         },
         {
-          "file": "README.md",
-          "start": 141,
-          "end": 145
+          "file": "docs/USAGE.md",
+          "start": 202,
+          "end": 208
         },
         {
-          "file": "README.md",
-          "start": 175,
-          "end": 179
+          "file": "docs/USAGE.md",
+          "start": 238,
+          "end": 242
         }
       ],
       "implementation": [
@@ -927,7 +927,7 @@
       ],
       "implementation": [
         "src/ve_direct/device.py:279",
-        "src/ve_direct/text.py:302"
+        "src/ve_direct/text.py:310"
       ],
       "tests": [
         "test_hex_acceptance.HexLifecycleAcceptance.test_text_async_and_reply_survive_every_chunk_boundary",
@@ -1076,9 +1076,9 @@
           "end": 13
         },
         {
-          "file": "README.md",
-          "start": 141,
-          "end": 145
+          "file": "docs/USAGE.md",
+          "start": 202,
+          "end": 208
         }
       ],
       "implementation": [
@@ -1101,9 +1101,9 @@
           "end": 298
         },
         {
-          "file": "README.md",
-          "start": 147,
-          "end": 160
+          "file": "docs/USAGE.md",
+          "start": 217,
+          "end": 229
         }
       ],
       "implementation": [
@@ -1126,9 +1126,9 @@
           "end": 117
         },
         {
-          "file": "README.md",
-          "start": 147,
-          "end": 160
+          "file": "docs/USAGE.md",
+          "start": 217,
+          "end": 229
         }
       ],
       "implementation": [
@@ -1155,14 +1155,14 @@
           "end": 13
         },
         {
-          "file": "README.md",
-          "start": 141,
-          "end": 145
+          "file": "docs/USAGE.md",
+          "start": 202,
+          "end": 208
         },
         {
-          "file": "README.md",
-          "start": 147,
-          "end": 160
+          "file": "docs/USAGE.md",
+          "start": 217,
+          "end": 229
         }
       ],
       "implementation": [
@@ -1185,9 +1185,9 @@
           "end": 298
         },
         {
-          "file": "README.md",
-          "start": 147,
-          "end": 160
+          "file": "docs/USAGE.md",
+          "start": 217,
+          "end": 229
         }
       ],
       "implementation": [
@@ -1219,9 +1219,9 @@
           "end": 36
         },
         {
-          "file": "README.md",
-          "start": 147,
-          "end": 160
+          "file": "docs/USAGE.md",
+          "start": 217,
+          "end": 229
         }
       ],
       "implementation": [
@@ -1264,14 +1264,14 @@
           "end": 13
         },
         {
-          "file": "README.md",
-          "start": 141,
-          "end": 145
+          "file": "docs/USAGE.md",
+          "start": 202,
+          "end": 208
         },
         {
-          "file": "README.md",
-          "start": 147,
-          "end": 160
+          "file": "docs/USAGE.md",
+          "start": 217,
+          "end": 229
         }
       ],
       "implementation": [
@@ -1299,9 +1299,9 @@
           "end": 532
         },
         {
-          "file": "README.md",
-          "start": 141,
-          "end": 145
+          "file": "docs/USAGE.md",
+          "start": 202,
+          "end": 208
         }
       ],
       "implementation": [
@@ -1324,9 +1324,9 @@
           "end": 13
         },
         {
-          "file": "README.md",
-          "start": 141,
-          "end": 145
+          "file": "docs/USAGE.md",
+          "start": 202,
+          "end": 208
         }
       ],
       "implementation": [
@@ -1352,9 +1352,9 @@
           "end": 59
         },
         {
-          "file": "README.md",
-          "start": 125,
-          "end": 126
+          "file": "docs/USAGE.md",
+          "start": 186,
+          "end": 192
         }
       ],
       "implementation": [
@@ -1505,7 +1505,7 @@
           "end": 60
         },
         {
-          "file": "README.md",
+          "file": "docs/USAGE.md",
           "start": 7,
           "end": 9
         }

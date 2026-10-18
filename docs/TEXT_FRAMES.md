@@ -15,6 +15,10 @@ Nonnumeric measurement text stays in `.raw` and `.value`. `to_si()` preserves
 that string and converts the other numeric fields independently. Missing
 measurements retain `None`.
 
+`frame[label].si_unit` gives the unit used by `frame.to_si()`, including
+history voltages in V, charge in Ah, energy in kWh, and percentages.
+`.unit` keeps the original wire unit. Fields without a unit return `None`.
+
 The client queues up to 256 Text frames by default. Set a positive integer
 `text_queue_size` in its constructor, `from_streams()`, or `from_port()` to
 change the limit. Overflow discards the oldest queued frame and increments
