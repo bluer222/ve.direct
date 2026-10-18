@@ -315,7 +315,7 @@ four-byte register word, including the identifier byte and zero padding.
 | EQUALISATION_CURRENT_LEVEL | 0xEDE4 | NUMERIC | READ_WRITE | uint8_t | % | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | AUTO_EQUALISE_STOP_ON_VOLTAGE | 0xEDE5 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | LOW_TEMP_CHARGE_CURRENT | 0xEDE6 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
-| TAIL_CURRENT | 0xEDE7 | NUMERIC | READ_WRITE | uint16_t | — | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| TAIL_CURRENT | 0xEDE7 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BMS_PRESENT | 0xEDE8 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BAT_VOLTAGE_SETTING | 0xEDEA | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | BAT_VOLTAGE_SETTING |
 | BAT_TEMPERATURE | 0xEDEC | NUMERIC | READ_ONLY | uint16_t | K | 0.01 | All devices | — |
@@ -330,7 +330,7 @@ four-byte register word, including the identifier byte and zero padding.
 | BAT_ABSORPTION_VOLTAGE | 0xEDF7 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BAT_ABSORPTION_LIMIT | 0xEDFB | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BAT_BULK_LIMIT | 0xEDFC | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
-| AUTOMATIC_EQUALISATION_MODE | 0xEDFD | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| AUTOMATIC_EQUALISATION_MODE | 0xEDFD | NUMERIC | READ_WRITE | uint8_t | days | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | ADAPTIVE_MODE | 0xEDFE | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BATTERYSAFE_MODE | 0xEDFF | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | ESTIMATED_BATTERY_TEMPERATURE | 0xEE12 | NUMERIC | READ_ONLY | uint16_t | K | 0.01 | Orion XS | — |
@@ -497,7 +497,7 @@ four-byte register word, including the identifier byte and zero padding.
 | EQUALISATION_CURRENT_LEVEL | 0xEDE4 | NUMERIC | READ_WRITE | uint8_t | % | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | AUTO_EQUALISE_STOP_ON_VOLTAGE | 0xEDE5 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | LOW_TEMP_CHARGE_CURRENT | 0xEDE6 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
-| TAIL_CURRENT | 0xEDE7 | NUMERIC | READ_WRITE | uint16_t | — | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| TAIL_CURRENT | 0xEDE7 | NUMERIC | READ_WRITE | uint16_t | A | 0.1 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BMS_PRESENT | 0xEDE8 | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BAT_VOLTAGE_SETTING | 0xEDEA | ENUM | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | BAT_VOLTAGE_SETTING |
 | BAT_VOLTAGE | 0xEDEF | NUMERIC | READ_WRITE | uint8_t | V | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
@@ -510,7 +510,7 @@ four-byte register word, including the identifier byte and zero padding.
 | BAT_ABSORPTION_VOLTAGE | 0xEDF7 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BAT_ABSORPTION_LIMIT | 0xEDFB | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BAT_BULK_LIMIT | 0xEDFC | NUMERIC | READ_WRITE | uint16_t | h | 0.01 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
-| AUTOMATIC_EQUALISATION_MODE | 0xEDFD | NUMERIC | READ_WRITE | uint8_t | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
+| AUTOMATIC_EQUALISATION_MODE | 0xEDFD | NUMERIC | READ_WRITE | uint8_t | days | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | ADAPTIVE_MODE | 0xEDFE | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | BATTERYSAFE_MODE | 0xEDFF | BOOLEAN | READ_WRITE | — | — | 1.0 | Phoenix/Smart chargers, Orion XS, BuckBoost, BlueSolar/SmartSolar MPPT, MPPT RS | — |
 | SHUTDOWN_VOLTAGE | 0xEE36 | NUMERIC | READ_WRITE | uint16_t | V | 0.01 | Orion XS | — |

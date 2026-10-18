@@ -8,6 +8,21 @@ from ve_direct import registers as R
 
 
 class TestRegisters(unittest.TestCase):
+    def test_shared_charger_units_preserve_wire_values(self):
+        cases = [
+            ("TAIL_CURRENT", "A", [(0, b"\x00\x00"), (1.5, b"\x0f\x00"), (6553.5, b"\xff\xff")]),
+            ("AUTOMATIC_EQUALISATION_MODE", "days", [(0, b"\x00"), (2, b"\x02"), (250, b"\xfa")]),
+        ]
+        for flavor in ("CHG", "MPPT", "MPPT_SMALL", "MPPT_RS", "ORION"):
+            for name, unit, values in cases:
+                with self.subTest(flavor=flavor, name=name):
+                    reg = R.lookup(name, flavor=flavor)
+                    self.assertEqual(reg.unit, unit)
+                    for value, raw in values:
+                        self.assertEqual(R.encode_value(reg, value), raw)
+                        self.assertAlmostEqual(R.decode_value(reg, raw), value)
+        self.assertEqual(R.lookup("BMV_TAIL_CURRENT", flavor="BMV").unit, "%")
+
     def test_lookup_by_name_and_id(self):
         from ve_direct.exceptions import AmbiguousRegisterError
         self.assertEqual(R.lookup("PANEL_VOLTAGE").id, 0xEDBB)

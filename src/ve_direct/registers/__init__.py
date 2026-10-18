@@ -207,7 +207,7 @@ for _reg in [
     _r("EQUALISATION_CURRENT_LEVEL", 0xEDE4, "NUMERIC", "READ_WRITE", "uint8_t", "%", 1.0, ("CHG",)),
     _r("AUTO_EQUALISE_STOP_ON_VOLTAGE", 0xEDE5, "BOOLEAN", "READ_WRITE", flavors=("CHG",)),
     _r("LOW_TEMP_CHARGE_CURRENT", 0xEDE6, "NUMERIC", "READ_WRITE", "uint16_t", "A", 0.1, ("CHG",)),
-    _r("TAIL_CURRENT", 0xEDE7, "NUMERIC", "READ_WRITE", "uint16_t", "", 0.1, ("CHG",)),
+    _r("TAIL_CURRENT", 0xEDE7, "NUMERIC", "READ_WRITE", "uint16_t", "A", 0.1, ("CHG",)),
     _r("BMS_PRESENT", 0xEDE8, "BOOLEAN", "READ_WRITE", flavors=("CHG",)),
     _r("BAT_VOLTAGE_SETTING", 0xEDEA, "ENUM", "READ_WRITE", flavors=("CHG",), enum="BAT_VOLTAGE_SETTING"),
     _r("BAT_VOLTAGE", 0xEDEF, "NUMERIC", "READ_WRITE", "uint8_t", "V", 1.0, ("CHG",)),
@@ -227,7 +227,7 @@ for _reg in [
     _r("BAT_ABSORPTION_VOLTAGE", 0xEDF7, "NUMERIC", "READ_WRITE", "uint16_t", "V", 0.01, ("CHG",)),
     _r("BAT_ABSORPTION_LIMIT", 0xEDFB, "NUMERIC", "READ_WRITE", "uint16_t", "h", 0.01, ("CHG",)),
     _r("BAT_BULK_LIMIT", 0xEDFC, "NUMERIC", "READ_WRITE", "uint16_t", "h", 0.01, ("CHG",)),
-    _r("AUTOMATIC_EQUALISATION_MODE", 0xEDFD, "NUMERIC", "READ_WRITE", "uint8_t", "", 1.0, ("CHG",)),
+    _r("AUTOMATIC_EQUALISATION_MODE", 0xEDFD, "NUMERIC", "READ_WRITE", "uint8_t", "days", 1.0, ("CHG",)),
     _r("ADAPTIVE_MODE", 0xEDFE, "BOOLEAN", "READ_WRITE", flavors=("CHG",)),
     # --- MPPT (BlueSolar/SmartSolar; inherits CHG via for_flavor) ---
     _r("SOLAR_ACTIVITY", 0x2030, "BOOLEAN", "READ_ONLY", flavors=("MPPT",)),

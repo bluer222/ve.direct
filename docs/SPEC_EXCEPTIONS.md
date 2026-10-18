@@ -191,6 +191,20 @@ The freshness design compares each snapshot's own revision markers against onlin
 
 The comparison between parsed doc scales and database scales asserts equality except for entries in SCALE_VALUE_EXCEPTIONS, which currently holds exactly Phoenix 0xEB10 at 1.0 (tests/test_spec_parsers.py:357-367 for the mechanism, tests/test_spec_parsers.py:646-651 for the assertion). SCALE_NONE_ALLOW and DTYPE_UNKNOWN_ALLOW cover ids where the doc genuinely prints no factor or no single width, including history structs, write-only commands, and firmware-dependent widths (tests/test_spec_parsers.py:290-355, tests/test_spec_parsers.py:369-385). This mechanism was trusted because it fails loudly on drift from either side instead of silently skipping. It would change by adding a new entry only with per-entry justification, never by widening an allowlist silently.
 
+### Shared charger setting units omitted by table cells
+
+`TAIL_CURRENT`, register `0xEDE7`, uses A with scale 0.1. BlueSolar and Orion
+omit the unit from their table rows. The official [SmartSolar Control display
+manual, setup setting 21](https://www.victronenergy.com/media/pg/SmartSolar_Control_Display/en/operation.html)
+identifies the setting in A. This is separate from `BMV_TAIL_CURRENT`, which remains %.
+
+`AUTOMATIC_EQUALISATION_MODE`, register `0xEDFD`, uses days with scale 1.
+BlueSolar Note 2 defines 1 as daily and 2 as every other day, up to 250
+in `tests/specs/BlueSolar-HEX-protocol.txt:360-361`. Zero remains off.
+Both shared CHG definitions retain their original wire widths and numeric codecs.
+The schema comparison keeps explicit per-register unit exceptions for the
+BlueSolar and Orion equalisation table cells, which list encoded values instead of days.
+
 ## Open questions
 
 These are genuine ambiguities where the current choice is a guess. Each states what evidence would settle it.

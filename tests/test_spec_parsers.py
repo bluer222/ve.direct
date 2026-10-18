@@ -1347,6 +1347,11 @@ UNIT_VALUE_EXCEPTIONS = {
     # not normalized away.
     ("bluesolar", 0xEDEA): "",
     ("orion", 0xEDEA): "",
+    # 0xEDFD table cells print 0=off, 1..250; BlueSolar Note 2 defines
+    # the interval in days (snapshot:360-361). Shared CHG metadata uses
+    # days in both families; src/ve_direct/registers/__init__.py:230.
+    ("bluesolar", 0xEDFD): "days",
+    ("orion", 0xEDFD): "days",
     # Phoenix 0xEB10: doc prints Unit "s" with Scale "0.02/" but Note 4
     # defines the wire value as a COUNT of AC-out periods (50/60 Hz
     # dependent, no single seconds scale); the DB stores raw counts
